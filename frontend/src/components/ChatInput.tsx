@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Ban, CornerDownLeft, Mic, Volume2, VolumeX } from 'lucide-react';
+import { Ban, CornerDownLeft, Mic, Volume2, VolumeX, Sparkles } from 'lucide-react';
 import { useAppStore } from '../store';
 import { useAppApi } from '../contexts/appApi';
 import StatusBadge from './StatusBadge';
@@ -13,6 +13,7 @@ export default function ChatInput() {
   const status       = useAppStore((s) => s.status);
   const recordingMode = useAppStore((s) => s.recordingMode);
   const ttsEnabled   = useAppStore((s) => s.ttsEnabled);
+  const currentThinking = useAppStore((s) => s.currentThinking);
 
   const { sendText, startManual, stopManualAndSend, toggleVad } = useAppApi();
 
@@ -66,6 +67,22 @@ export default function ChatInput() {
       }}
     >
       <StatusBadge status={status} />
+
+      {/* v3-F: AI 内心独白。仅当本轮收到 thinking 时显示，下一轮发送清空 */}
+      {currentThinking && (
+        <div
+          className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs italic max-w-[280px] overflow-hidden text-ellipsis whitespace-nowrap"
+          style={{
+            background: 'color-mix(in srgb, var(--color-accent) 18%, transparent)',
+            color: 'var(--color-text-accent)',
+            border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
+          }}
+          title={currentThinking}
+        >
+          <Sparkles size={12} className="shrink-0" />
+          <span className="truncate">{currentThinking}</span>
+        </div>
+      )}
       {/* Interrupt — 占位，不在本模块实装 */}
       <button
         className="w-9 h-9 rounded-full flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed"

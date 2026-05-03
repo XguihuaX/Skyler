@@ -170,6 +170,13 @@ interface AppState {
   ttsEnabled: boolean;
   setTtsEnabled: (v: boolean) => void;
 
+  // v3-F: AI 内心独白（每轮最多一次，由后端 thinking 消息推送）
+  // null = 当前轮没有 thinking。由 WS 'thinking' 消息写入；新轮开始（用户发送）
+  // 时由调用方 clear。UI 在 StatusBadge 旁短暂显示。
+  currentThinking: string | null;
+  setCurrentThinking: (v: string | null) => void;
+  clearCurrentThinking: () => void;
+
   // 镜像 GET /api/config 的字段（启动时由 syncFromConfig 写入）
   defaultUserId: string;
   setDefaultUserId: (v: string) => void;
@@ -281,6 +288,10 @@ export const useAppStore = create<AppState>((set) => ({
 
   ttsEnabled: true,
   setTtsEnabled: (ttsEnabled) => set({ ttsEnabled }),
+
+  currentThinking: null,
+  setCurrentThinking: (currentThinking) => set({ currentThinking }),
+  clearCurrentThinking: () => set({ currentThinking: null }),
 
   defaultUserId: 'default',
   setDefaultUserId: (defaultUserId) => set({ defaultUserId }),

@@ -38,7 +38,7 @@ from typing import Optional, Tuple
 
 from sqlalchemy import select
 
-from backend.agents.chat import ChatAgent, _parse_emotion
+from backend.agents.chat import ChatAgent, _parse_emotion, _parse_thinking
 from backend.asr.whisper import whisper_asr
 from backend.config import config_yaml, get_planner_model, get_tts_enabled
 from backend.config.prompt_manager import prompt_manager
@@ -412,6 +412,8 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
         # 同一轮对话用同一情感（由第一句的 <emotion> 标签决定）
         turn_emotion = "默认"
         emotion_resolved = False
+        # v3-F：内心独白每轮最多推送一次（解析到 <thinking> 后锁定）
+        thinking_pushed = False
         logger.info(
             "[TTS] turn start user=%s char_id=%s voice_model=%s engine=%s",
             user_id, char_id,
@@ -453,7 +455,22 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
                             turn_emotion,
                         )
 
-                    # 剥标签后可能为空（极端情况：第一句只有标签），跳过本句
+                    # v3-F：剥离 <thinking>...</thinking> 内心独白；命中后单独 push
+                    # 一次。chat.py 的 _safe_boundary 保证 thinking 块不会被
+                    # sentence-stream 切开，所以同一句里看到完整闭合标签。
+                    thinking_value, sentence = _parse_thinking(sentence)
+                    if thinking_value and not thinking_pushed:
+                        thinking_pushed = True
+                        logger.info(
+                            "[thinking] pushed (len=%d) user=%s",
+                            len(thinking_value), user_id,
+                        )
+                        await ws.send_json({
+                            "type": "thinking",
+                            "value": thinking_value,
+                        })
+
+                    # 剥标签后可能为空（极端情况：句子只有标签），跳过本句
                     if not sentence.strip():
                         continue
 

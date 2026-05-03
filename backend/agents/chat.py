@@ -106,6 +106,56 @@ def _build_emotion_instruction() -> str:
 
 
 # ---------------------------------------------------------------------------
+# v3-F：内心独白 <thinking> 标签
+# ---------------------------------------------------------------------------
+
+# 多行匹配；非贪婪，跨行用 [\s\S]
+_THINKING_RE = re.compile(r"<thinking>([\s\S]*?)</thinking>", re.IGNORECASE)
+_THINKING_OPEN_RE = re.compile(r"<thinking>", re.IGNORECASE)
+_THINKING_CLOSE_RE = re.compile(r"</thinking>", re.IGNORECASE)
+
+
+def _parse_thinking(text: str) -> Tuple[Optional[str], str]:
+    """解析并剥离内心独白标签。
+
+    Args:
+        text: 原文本，可能含一个或多个 ``<thinking>X</thinking>`` 块。
+
+    Returns:
+        ``(first_thinking_content_or_none, text_with_all_blocks_removed)``。
+        - 命中至少一个完整块 → first 是第一个块的内容（已 strip），剩余文本
+          移除全部块后返回。
+        - 无完整块（含开标签未闭合的情况）→ ``(None, text)``，原文不动，
+          上游 ``_safe_boundary`` 已确保不会在未闭合时进入此函数。
+    """
+    if not text:
+        return None, text
+    m = _THINKING_RE.search(text)
+    if not m:
+        return None, text
+    first = (m.group(1) or "").strip()
+    stripped = _THINKING_RE.sub("", text).strip()
+    return (first or None), stripped
+
+
+def _build_thinking_instruction() -> str:
+    """生成注入 system prompt 的内心独白指令。
+
+    内心独白是可选的，鼓励但不强制。LLM 输出 ``<thinking>X</thinking>``
+    放在 ``<emotion>`` 之后、正文之前；前端单独显示，不会读出口。
+    """
+    return (
+        "你可以在回复正文之前，可选地用 <thinking>...</thinking> 标签写一段"
+        "简短的内心独白（思考过程、感受、要怎么回应的考量）。"
+        "标签内可以多行，但务必整段写在一对 <thinking>...</thinking> 内，"
+        "且整段保持闭合再继续输出正文。"
+        "示例：<emotion>happy</emotion><thinking>用户在打招呼，温柔回应一下</thinking>你好呀！"
+        "内心独白只显示给用户看，不会被朗读。"
+        "可以省略，不要每次都写；只在确实有想法值得展示时写。"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Sentence splitter
 # ---------------------------------------------------------------------------
 
@@ -123,15 +173,34 @@ def _find_boundary(text: str) -> int:
     return -1
 
 
+def _safe_boundary(buf: str) -> int:
+    """v3-F：thinking-aware sentence boundary。
+
+    若 ``buf`` 中有 ``<thinking>`` 但没有匹配的 ``</thinking>`` —— 当前正处
+    于一段未闭合的内心独白中，``。``/``！``/``？`` 等可能出现在 thinking 内
+    部，不能据此切句。返回 ``-1`` 让 ``_sentence_stream`` 继续累积，等下一个
+    token 把 ``</thinking>`` 带进来。
+    """
+    open_m = _THINKING_OPEN_RE.search(buf)
+    if open_m:
+        close_m = _THINKING_CLOSE_RE.search(buf, open_m.end())
+        if close_m is None:
+            return -1
+    return _find_boundary(buf)
+
+
 async def _sentence_stream(
     token_gen: AsyncGenerator[str, None],
 ) -> AsyncGenerator[str, None]:
-    """Buffer tokens from *token_gen* and yield complete sentences."""
+    """Buffer tokens from *token_gen* and yield complete sentences.
+
+    v3-F: thinking 标签内的标点不切句；用 ``_safe_boundary``。
+    """
     buf = ""
     async for token in token_gen:
         buf += token
         while True:
-            idx = _find_boundary(buf)
+            idx = _safe_boundary(buf)
             if idx == -1:
                 break
             sentence = buf[: idx + 1].strip()
@@ -520,7 +589,9 @@ async def _build_messages(
     persona_block = prompt_data["system_prompt"] + _TOOL_PROMPT_ADDENDUM
     base = get_base_instruction().strip()
     emotion_inst = _build_emotion_instruction()
-    head_parts = [emotion_inst]
+    thinking_inst = _build_thinking_instruction()
+    # v3-F：thinking 指令紧跟 emotion 指令（两者都是输出格式约束，归一处）
+    head_parts = [emotion_inst, thinking_inst]
     if base:
         head_parts.append(base)
     head_parts.append(persona_block)
@@ -700,7 +771,9 @@ class ChatAgent(IAgent):
                     assistant_text += content
                     sent_buf += content
                     while True:
-                        idx = _find_boundary(sent_buf)
+                        # v3-F：未闭合的 <thinking>...</thinking> 内不允许切句，
+                        # 否则 thinking 内部的 。！？ 会把内心独白拦腰切开。
+                        idx = _safe_boundary(sent_buf)
                         if idx == -1:
                             break
                         sentence = sent_buf[: idx + 1].strip()

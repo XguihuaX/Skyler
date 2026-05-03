@@ -15,6 +15,8 @@ interface WsMessage {
   message?: string;
   todo_id?: number;
   message_id?: number | null;
+  // v3-F: thinking 消息携带的内心独白文本
+  value?: string;
 }
 
 interface UseWebSocketReturn {
@@ -163,6 +165,13 @@ export function useWebSocket(): UseWebSocketReturn {
         }
         break;
 
+      case 'thinking': {
+        // v3-F：AI 内心独白，每轮最多一次。UI 显示在 StatusBadge 旁
+        const value = msg.value ?? '';
+        if (value) s.setCurrentThinking(value);
+        break;
+      }
+
       case 'notify':
         s.pushNotification({ type: 'notify', content: msg.content ?? '' });
         break;
@@ -245,6 +254,8 @@ export function useWebSocket(): UseWebSocketReturn {
     textChunkCountRef.current = 0;
     const s = store.getState();
     s.setLastSendTimestamp(performance.now());
+    // v3-F：新一轮开始，先清掉上一轮的内心独白
+    s.clearCurrentThinking();
     // 乐观更新：立刻显示 user 气泡
     s.appendChatMessage({
       id: newClientId('u'),
@@ -272,6 +283,8 @@ export function useWebSocket(): UseWebSocketReturn {
     textChunkCountRef.current = 0;
     const s = store.getState();
     s.setLastSendTimestamp(performance.now());
+    // v3-F：新一轮开始，先清掉上一轮的内心独白
+    s.clearCurrentThinking();
     console.log(`[FRONT] send voice b64_len=${audioBase64.length}`);
     // 语音的 user 气泡等 asr_result 携带 message_id 时一起插入，
     // 避免内容为空的占位气泡。
