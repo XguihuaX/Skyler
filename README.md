@@ -197,9 +197,17 @@ See [**ROADMAP.md**](ROADMAP.md) for the full prioritized roadmap.
 
 **TL;DR — the next moves:**
 
-- **v3 finish (Tier 1, 1–3 weeks)**: Live2D + emotion frontend wiring, voice interrupt, TTS preprocessor + concurrency, Live2D touch response
-- **v4 (Tier 2, 1–2 months)**: screen awareness (active + passive + VLM), AI inner monologue, natural-language cron, character status panel + growth system, GPT-SoVITS local
-- **v5+ (Tier 3, long-term)**: multi-device access (Windows client), autodl deployment, sub-agent isolation for long tasks, Hermes-style skill accumulation
+- **v3 finish (Tier 1, 1–3 weeks)**:
+  - **v3-E1**: Live2D integration with the official **Hiyori** sample model (proves the SDK + emotion + touch + lip-sync pipeline)
+  - **v3-E2**: swap to a target Cubism model (asset replacement, no code change)
+  - **v3-F**: voice interrupt, TTS multi-segment concurrency, TTS preprocessor (skip `*action*` etc.), `<thinking>` inner monologue
+  - **v3-G'**: TTS UI upgrade — replace raw JSON textbox with a per-character provider + voice two-level dropdown (only shows real available options)
+- **v3-G + v4 (Tier 2, 1–2 months)**: clipboard assistant, daily briefing, natural-language cron, character status panel + growth system; screen awareness (active + passive + VLM); AI inner browser
+- **v5 (Tier 3, long-term)**:
+  - **v5-D**: autodl deployment + sub-agent isolation
+  - **v5-T1**: GPT-SoVITS backend (real `SoVITSProvider` impl, multi-emotion ref-audio routing)
+  - **v5-T2**: train custom voices (CosyVoice fine-tune + GPT-SoVITS character-specific models)
+- **v6+**: multi-device access (Windows client), Hermes-style skill accumulation
 
 ---
 
@@ -242,9 +250,14 @@ The life & tools agent reference. Borrowed concepts:
 | v3-B: `character.voice_model` + CosyVoice | ✅ done |
 | v3-C: PlannerAgent simplification | ✅ done |
 | v3-D: emotion system (backend) | ✅ done (frontend wiring waits for Live2D) |
-| v3 remaining: Live2D + voice interrupt + TTS UX + life-tools layer | 🚧 in progress |
+| v3-E1: Live2D integration via Hiyori | 📋 next up |
+| v3-E2: target model swap | 📋 after E1 |
+| v3-F: voice UX (interrupt + concurrency + preprocessor + thinking) | 📋 planned |
+| v3-G: life & tools layer (clipboard / daily briefing / cron / growth) | 📋 planned |
+| v3-G': TTS config UI upgrade (per-character two-level dropdown) | 📋 planned |
 | v4: Screen awareness | 📋 planned |
-| v5+: Multi-device / cloud deployment | 📋 long-term |
+| v5-D / T1 / T2: autodl + GPT-SoVITS + custom voice training | 📋 long-term |
+| v6+: Multi-device / cloud deployment | 📋 long-term |
 
 ---
 

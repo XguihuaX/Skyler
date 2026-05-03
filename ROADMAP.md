@@ -15,14 +15,18 @@
 | v2.5-A 性能 / B Schema 迁移 / C ChatGPT 模式 / D 多角色 / E 启动模式 | ✅ 完成 | 100% |
 | v2.6 / v2.7（Settings 同步 + 记忆系统重构） | ✅ 完成 | 100% |
 | **v3-A：8 套主题 + lucide-react** | ✅ 完成 | 100%（超 DESIGN 范围 4→8 套） |
-| **v3-B：character.voice_model + CosyVoice** | ✅ 完成 | 100% |
+| **v3-B：character.voice_model + CosyVoice** | ✅ 完成（schema 已支持多 provider） | 100% |
 | **v3-C：PlannerAgent 简化** | ✅ 完成 | 100% |
 | **v3-D：emotion 后端解析 + TTS 联动** | ⚠️ 后端 100% / 前端 0% | 50%（前端等 Live2D） |
-| v3-E：Live2D + emotion 前端联动 | 📋 计划中 | 0% |
+| **v3-E1：Live2D 接入（用 Hiyori 走通流程）** | 📋 计划中 | 0% |
+| **v3-E2：换上目标模型（资产替换不动代码）** | 📋 依赖 E1 | 0% |
 | v3-F：语音体验飞跃（打断 / 并发 / 预处理 / 内心独白） | 📋 计划中 | 0% |
 | v3-G：生活 & 工具型能力（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 | 0% |
+| **v3-G'：TTS 配置 UI 升级（per-character 两级下拉）** | 📋 计划中 | 0% |
 | v4：屏幕感知 + 视觉能力 | 📋 远期 | 0% |
-| v5：autodl 部署 + GPT-SoVITS 本地 + 子 agent 隔离 | 📋 远期 | 0% |
+| **v5-D：autodl 部署 + 子 agent 隔离** | 📋 远期 | 0% |
+| **v5-T1：GPT-SoVITS 后端接通（依赖 v5-D）** | 📋 远期 | 0% |
+| **v5-T2：训练自定义 voice（CosyVoice fine-tune + SoVITS 模型）** | 📋 远期 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |
 
 ---
@@ -33,16 +37,18 @@
 
 | 任务 | 子阶段 | 价值 | 成本 | 依赖 |
 |---|---|---|---|---|
-| Live2D 接入 + idle + 口型同步 | v3-E | 极高（v3 灵魂） | 中-高 | 找 Cubism 模型 |
-| emotion → 前端 → Live2D 表情切换 | v3-E | 高 | 低（已 50%） | Live2D 接入 |
-| Live2D 触摸响应（OLV #6） | v3-E | 中 | 低 | Live2D 接入 |
-| motionMap（OLV #8，emotion 扩展） | v3-E | 中-高 | 中 | emotion 系统 |
+| **Live2D 集成（用 Hiyori 走通）** | v3-E1 | 极高（v3 灵魂） | 中-高 | 下载 Hiyori |
+| emotion → 前端 → Live2D 表情切换 | v3-E1 | 高 | 低（已 50%） | Live2D 接入 |
+| Live2D 触摸响应（OLV #6） | v3-E1 | 中 | 低 | Live2D 接入 |
+| motionMap（OLV #8，emotion 扩展） | v3-E1 | 中-高 | 中 | emotion 系统 |
+| **换上目标模型（资产替换不动代码）** | v3-E2 | 高 | 低-中 | E1 完成 + 找模型 |
 | 语音打断（OLV #1） | v3-F | 高（体验关键） | 中 | 无 |
 | TTS 多段并发（OLV #2） | v3-F | 高（首句延迟） | 中 | 无 |
 | TTS 预处理器（OLV #3） | v3-F | 中 | 极低 | 无 |
 | AI 内心独白 `<thinking>`（OLV #5） | v3-F | 中-高 | 低-中 | 无 |
+| **TTS 配置 UI 升级（per-character 两级下拉）** | v3-G' | 中（重要 UX 修） | 低 | 无 |
 
-第 1 梯队全部完成后 → v3 真正完整 + Live2D 真正活起来。
+第 1 梯队全部完成后 → v3 真正完整 + Live2D 真正活起来 + TTS UI 不再是裸 JSON。
 
 ### 🟡 第 2 梯队：v4 工具层 + 屏幕（1-2 个月）
 
@@ -62,9 +68,11 @@
 
 | 任务 | 子阶段 | 价值 | 成本 | 依赖 |
 |---|---|---|---|---|
-| autodl 部署 + SSH tunnel | v5 | 高 | 高 | 无 |
-| GPT-SoVITS 本地推理（autodl） | v5 | 中-高 | 高 | autodl 部署 |
-| 子 agent 隔离（Hermes #4） | v5 | 中 | 高 | 后端架构改造 |
+| **autodl 部署 + SSH tunnel** | v5-D | 高 | 高 | 无 |
+| 子 agent 隔离（Hermes #4） | v5-D | 中 | 高 | autodl 部署 |
+| **GPT-SoVITS 后端接通（SoVITSProvider 真实现）** | v5-T1 | 中-高 | 高 | v5-D autodl + GPU |
+| **训练 CosyVoice fine-tune voice** | v5-T2 | 高（角色独特音色） | 中-高 | DashScope 流程 |
+| **训练 GPT-SoVITS 专属 model** | v5-T2 | 高（深度定制） | 高（GPU 训练时间） | v5-T1 + 角色音频 |
 | **Windows 客户端** | v6 | 高（你明说要的） | **极高** | 见 §跨平台代价 |
 | 用户认证 + WS 鉴权 + TLS | v6 | 必要 | 中-高 | 多设备前置 |
 | Postgres 迁移 | v6 | 必要 | 中-高 | 多设备前置 |
@@ -75,33 +83,61 @@
 
 ## 详细执行清单
 
-### v3-E：Live2D 接入
+### v3-E1：Live2D 接入（用 Hiyori 走通流程）
 
-**前置：你需要找一个 Cubism 5 .moc3 / .model3.json 模型。** 选项：
-- Live2D Inc. 官方免费样本（Hiyori、Mark 等）—— 商用受限，开发期 OK
-- 付费购买（VTuber 模型站）
-- 自制（Cubism Editor 学习曲线陡）
+**核心思路**：用 Live2D 官方免费样本 **Hiyori** 当首发模型，不是因为它是最终目标，而是**先把整个 Live2D + 前后端管道打通**。一旦跑通，换模型只是资产替换（v3-E2）。
+
+**为什么用 Hiyori**：
+- Live2D Inc. 官方免费样本，无需购买
+- Cubism 5 标准模型，参数 ID 标准化（ParamMouthOpenY 等）
+- 各种 motion 和 expression 已就绪，直接能测
+- ⚠️ 许可：Live2D Free Material License Agreement，**开发期 OK，商用要看条款**
+
+**下载**：从 [Live2D Cubism 5 SDK 页面](https://www.live2d.com/en/sdk/about/)拿 Cubism Sample Data，里面有 Hiyori 的 .moc3 / .model3.json / motion / expression 全套。放到 `frontend/public/live2d/hiyori/`。
 
 **实施步骤**：
 
-1. **SDK 集成**：`npm install pixi-live2d-display pixi.js@7`，引入 Cubism 5 Web SDK 作为静态资源
+1. **SDK 集成**：`npm install pixi-live2d-display pixi.js@7`，引入 Cubism 5 Core 作为静态资源（放 `frontend/public/live2d/core/`）
 2. **CharacterView.tsx 改造**：
    - 从 `<img src={character.avatar} />` 换成 `<canvas>` + PIXI Application
    - 加载 `.model3.json` → `Live2DModel.from()`
    - 保持现有 Galgame 满铺布局不变（满铺 = stage size match canvas size）
-3. **idle 动画**：调用 `model.motion('Idle')` 自动循环
-4. **口型同步**：`useAudio.ts` 新增 `useAudioAmplitude()` hook 用 AnalyserNode 取样振幅；CharacterView 订阅 → 写入 `model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', value)`
-5. **emotion → 表情**：
+3. **idle 动画**：调用 `model.motion('Idle')` 自动循环（Hiyori 自带 idle group）
+4. **口型同步**：
+   - `useAudio.ts` 新增 `useAudioAmplitude()` hook 用 AnalyserNode 取样振幅
+   - CharacterView 订阅 → 写入 `model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', value)`
+5. **emotion → 表情切换**：
    - 后端 ws.py 当前 `_parse_emotion` 之后**新增 send_json `{"type": "emotion", "value": "happy"}`**
    - 前端 useWebSocket 加 case `'emotion'` → store `setCurrentEmotion`
    - CharacterView useEffect 订阅 `currentEmotion` → `model.expression(emotionMap[X])`
+   - emotionMap 配置：哪个情感对应 Hiyori 哪个 expression（后续换模型只改这个映射）
 6. **触摸响应**：
    - canvas onClick → 转 PIXI 局部坐标 → `model.hitTest(x, y)`
-   - hit area "Head" / "Body" / "Cheek" 各自触发不同 motion 和后端 special prompt
-7. **motionMap**（emotion 扩展）：system prompt 加 `<motion>X</motion>` 输出指令；ws.py 同样 push 给前端；前端触发 `model.motion(X)`
-8. **DB 字段**：迁移 `v3_e.py` 给 `characters` 加 `live2d_model TEXT`；CharacterPanel 加输入框
+   - hit area "Head" / "Body" / "Cheek" 触发不同 motion 和后端 special prompt
+7. **motionMap**（emotion 扩展）：system prompt 加 `<motion>X</motion>` 输出指令；ws.py push 给前端；前端触发 `model.motion(X)`
+8. **DB 字段**：迁移 `v3_e.py` 给 `characters` 加 `live2d_model TEXT`（存模型路径或 ID）；CharacterPanel 加输入框
 
-**估时**：核心 Live2D 接入 + idle + 口型同步 → 2-3 天；emotion + 触摸 + motion 联动 → 1-2 天；找模型和调试 → 不可估。
+**估时**：核心接入 + idle + 口型同步 → 2-3 天；emotion + 触摸 + motion 联动 → 1-2 天。Hiyori 现成模型省了找资产时间。
+
+---
+
+### v3-E2：换上目标模型
+
+E1 跑通后，换模型纯粹是**资产替换 + 微调映射**，不动代码逻辑。
+
+**步骤**：
+
+1. **找 / 买 / 自制目标 Cubism 5 模型** —— 可选项：
+   - VRoid / nizima / BOOTH 等 VTuber 模型站购买
+   - Twitter / Pixiv 上找艺术家委托制作
+   - 自己用 Cubism Editor 制作（学习曲线陡）
+2. **把模型资产放到约定路径** `frontend/public/live2d/<name>/`
+3. **CharacterPanel 里改 character 的 `live2d_model` 字段** → 立刻生效
+4. **校准 emotionMap** —— 不同模型的 expression 命名不同，需要在 config / 模型注册时配映射
+5. **校准 hit area** —— 不同模型的 hit area 命名 / 区域不同，触摸逻辑可能要调
+6. **校准 motion 集合** —— motionMap 也要按新模型的 motion list 重映射
+
+**估时**：1-2 天调试 + 模型本身的获取时间。
 
 ---
 
@@ -179,6 +215,47 @@
 
 ---
 
+### v3-G'：TTS 配置 UI 升级
+
+**目标**：把 CharacterPanel 当前的"裸 JSON 文本框"换成 provider + voice 两级下拉。**关键约束：UI 下拉只显示真实可用的选项**，不堆假选项。
+
+**当前阶段下 UI 实际形态**：
+
+```
+TTS Provider:  [CosyVoice ▼]   ← 只有这一个
+   └─ Voice:   [longyumi_v3 ▼] ← 只有这一个
+```
+
+只有 1 个选项也要做下拉而不是固定显示，因为这套架构是为未来扩展准备的：v5-T1 接通 GPT-SoVITS 后，下拉自动多一个 provider；v5-T2 训练 fine-tune voice 后，voice 列表自动多几项。**前端代码不需要改。**
+
+**实施步骤**：
+
+1. **后端 `GET /api/tts/voices` 接口** ——  返回所有可用 provider + voices：
+   ```jsonc
+   {
+     "providers": [
+       {
+         "id": "cosyvoice",
+         "label": "CosyVoice",
+         "voices": [
+           {"id": "longyumi_v3", "label": "龙裕米 v3", "instruct_supported": false}
+         ]
+       }
+     ]
+   }
+   ```
+2. **`config.yaml` 加 `available_voices` 列表** —— 启动时后端读取，缓存
+3. **CharacterPanel TTS 表单升级**：
+   - 当前的 `voice_model` 文本框换成两级下拉
+   - 选 provider → 二级下拉显示对应 voices
+   - 用户选择后前端拼出 `voice_model` JSON 写回 character API
+4. **schema 兼容性**：写回的 JSON 严格按 DESIGN §6.2 schema，未来切 SoVITS 时不需要 DB 迁移
+5. **架构验证**：mock 一个 SoVITS provider 进 `/api/tts/voices` 返回，确认 UI 自动多 provider 选项 → 删掉 mock。这步证明架构经得起 v5-T1 的验收
+
+**估时**：1-2 天。
+
+---
+
 ### v4：屏幕感知
 
 DESIGN §13 已有完整设计。要点：
@@ -194,15 +271,66 @@ DESIGN §13 已有完整设计。要点：
 
 ---
 
-### v5：autodl 部署
+### v5-D：autodl 部署 + 子 agent 隔离
 
 详见 DESIGN §阶段七。要点：
 
 1. 后端打包 Docker 部署 autodl GPU 实例
 2. 前端通过 SSH tunnel 或 HTTPS 访问
-3. **GPT-SoVITS 推理服务器**：在 GPU 上起 SoVITS fast-inference fork（如 RVC-Project）
-4. SoVITSProvider 真正实现 HTTP 调用现有占位
-5. `voice_model` JSON 加 `model_path` + `ref_audio_path` 字段
+3. **子 agent 隔离**（Hermes #4）—— 长任务（屏幕分析 / 批量记忆压缩 / 自主信息收集）跑独立 context
+4. 数据库 / 模型权重存 autodl 持久卷
+
+**估时**：3-5 天（Docker + 部署调试）。
+
+---
+
+### v5-T1：GPT-SoVITS 后端接通
+
+依赖 v5-D（SoVITS 推理需要 GPU）。
+
+1. **autodl 上起 SoVITS 推理服务器** —— fast-inference fork（推荐 GPT-SoVITS-Inference 或 RVC-Project）；HTTP API 形式起服务
+2. **`SoVITSProvider` 真实现**：
+   - 当前是 `_LegacyProviderAdapter` 占位
+   - 改为读取 `voice_model` 的 `gpt_path` / `sovits_path` / `ref_audios` 字段
+   - 合成时按 `emotion` 在 `ref_audios` 里找对应文件，找不到用 `default_emotion` 兜底
+   - HTTP POST 到 SoVITS server，body 含 text + ref_audio_path + 模型路径
+   - 返回 WAV bytes 透传
+3. **`config.yaml` 加 `tts.sovits.available_voices` 列表** —— 列出 autodl 上已部署的 SoVITS 模型
+4. **路径管理**：autodl 上的 `/path/to/model.pth` 等绝对路径在 SoVITSProvider 内做翻译；前端只见显示标签
+5. **`/api/tts/voices` 自动包含 sovits provider**（v3-G' 架构 payoff —— 前端代码不动）
+
+**估时**：3-5 天（SoVITS 服务器配置占大头）。
+
+---
+
+### v5-T2：训练自定义 voice
+
+依赖 v5-T1（先有 provider 再训模型）。
+
+**两条并行训练路径**：
+
+#### A. CosyVoice fine-tune voice cloning（短路径，云端）
+
+1. 收集 5-10 段角色参考音频（每段 5-30 秒，安静环境，单一情感）
+2. 走 DashScope CosyVoice voice cloning API 或 Web 工作流
+3. 训练完成后拿到一个 `myvoice-xyz123` ID
+4. 加进 `config.yaml` `tts.cosyvoice.available_voices`
+5. CharacterPanel 下拉自动多一项
+
+**估时**：训练 1-2 小时；流程跑通 1 天。
+
+#### B. GPT-SoVITS 专属 model 训练（长路径，本地 / autodl）
+
+1. 收集更多角色音频（推荐 30 分钟+ 高质量样本，多情感）
+2. 数据清洗 / 切分 / 转写
+3. autodl GPU 训练 GPT 模型（数小时） + SoVITS 模型（数小时）
+4. 准备多情感参考音频文件 → 按 `ref_audios` schema 组织
+5. 模型 + 参考音频部署到 autodl 推理服务
+6. 加进 `config.yaml` `tts.sovits.available_voices`
+
+**估时**：数据准备 1-3 天；训练 1-2 天；调优 1-3 天。
+
+**角色绑定**：训练完成的 voice 默认绑定到对应 character（用户在 CharacterPanel 手动 confirm）。
 
 ---
 
@@ -242,19 +370,25 @@ DESIGN §13 已有完整设计。要点：
 做完这一组，v3-F 完成，体验上一个台阶。
 
 ### Step 3（接下来 2-3 周）：v3 灵魂
-- [ ] 找 Cubism 5 模型（你来）
-- [ ] **Live2D 核心接入**（v3-E #1-4）—— 3 天
-- [ ] **emotion → Live2D 表情切换**（v3-E #5）—— 1-2 天
-- [ ] **触摸响应**（v3-E #6）—— 1 天
-- [ ] **motionMap**（v3-E #7）—— 2 天
+- [ ] **下载 Hiyori 模型**（30 秒，从 Live2D Cubism 5 SDK 页面拉）
+- [ ] **v3-E1 Live2D 核心接入**（用 Hiyori，#1-4 步骤）—— 2-3 天
+- [ ] **emotion → Live2D 表情切换**（v3-E1 #5）—— 1-2 天
+- [ ] **触摸响应**（v3-E1 #6）—— 1 天
+- [ ] **motionMap**（v3-E1 #7）—— 2 天
+- [ ] **v3-G' TTS UI 升级**（穿插着做）—— 1-2 天
+- [ ] **v3-E2 换上目标模型**（找到模型之后再做）—— 1-2 天
 
-做完这一组，v3-E 完成，Skyler 真正"活"了。
+做完这一组，v3-E 完成，Skyler 真正"活"了，TTS UI 也不再是裸 JSON。
 
 ### Step 4（接下来 1-2 个月）：工具层
 v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），逐步加每日简报、智能提醒、cron、屏幕感知。
 
-### Step 5（远期）：autodl 部署
-等 GPU 推理需求真出现了再做。
+### Step 5（远期）：autodl 部署 + 自定义 voice
+- v5-D autodl 部署 + 子 agent 隔离
+- v5-T1 GPT-SoVITS 后端接通
+- v5-T2 训练 CosyVoice fine-tune voice + GPT-SoVITS 专属 model
+
+等 GPU 推理需求真出现了再做。CosyVoice fine-tune 可以更早做（不需要 autodl）。
 
 ---
 
@@ -268,7 +402,9 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
 - ❌ Telegram / Discord / WhatsApp gateway —— 桌面应用而非远程 agent
 - ❌ Linux Wayland 完整支持 —— 技术上几乎做不了
 - ❌ 系统操作 agent（鼠标键盘控制）—— DESIGN 里曾提过，但跨平台 + 安全代价太高
+- ❌ **Settings 全局 TTS 开关** —— TTS 配置只在 CharacterPanel 上 per-character 提供，避免双层配置带来的认知负担
+- ❌ TTS UI 提前堆假选项 —— 下拉只显示真实可用的 voices，新 provider 接通后自动出现
 
 ---
 
-*文档版本：1.0 | 最后更新：2026-05-04*
+*文档版本：1.1 | 最后更新：2026-05-04（TTS schema + Live2D 拆分版）*

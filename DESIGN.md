@@ -402,14 +402,134 @@ profile_summary（整体印象）— users 字段
 
 ## 六、TTS 分层设计
 
+### 6.1 当前调用链（v3-B 完成后）
+
 ```
-使用顺序：GPT-SoVITS → Edge-TTS（自动降级）
-分句流式：按句号/问号/感叹号切割，逐句生成逐句推送
-TTS 失败不影响文字输出，文字和音频独立推送
-全局开关：config.yaml tts.enabled=false 时，ChatAgent 跳过整个 TTS 调用链路，只推 text_chunk
+ws.py 主流程：
+  ChatAgent.stream() yields sentence
+    → _parse_emotion(sentence) 第一句锁定 turn_emotion
+    → engine = get_tts_engine(character.voice_model)
+    → engine.synthesize(sentence, emotion=turn_emotion)
+    → 失败返回 None，静默跳过该句（不影响后续文字推送）
+  全局开关：config.yaml tts.enabled=false → ws.py 跳过整个 TTS 链路
 ```
 
-v3 计划：character.voice_model 字段，每角色独立 TTS（SoVITS 模型路径或 Edge voice id），不设则用全局默认。
+`get_tts_engine()` 是工厂函数，按 `voice_model` JSON 的 `provider` 字段路由到对应 TTSBase 实现。
+
+### 6.2 voice_model JSON Schema（架构层 / 跨 provider）
+
+`character.voice_model` 字段是 TEXT，存任意 JSON。**不存等于沿用全局默认**（config.yaml 里的 cosyvoice longyumi_v3）。前端**不在 Settings 暴露全局 TTS 选项**（避免认知负担）—— **TTS 配置只在 CharacterPanel 上 per-character 提供**。
+
+#### CosyVoice（v3-B 默认 / 已接通）
+
+```jsonc
+// 标准音色
+{
+  "provider": "cosyvoice",
+  "voice": "longyumi_v3",
+  "instruct_supported": false
+}
+
+// fine-tune 音色（v5-T2 训练之后）
+{
+  "provider": "cosyvoice",
+  "voice": "myvoice-xyz123",      // DashScope 训练后返回的 voice ID
+  "instruct_supported": true       // fine-tune 通常支持 instruct
+}
+```
+
+#### Edge-TTS（fallback / 已接通）
+
+```jsonc
+{
+  "provider": "edge",
+  "voice": "zh-CN-XiaoxiaoNeural",
+  "instruct_supported": false
+}
+```
+
+#### GPT-SoVITS（v5-T1 接通 / 多情感参考音频）
+
+SoVITS 的核心特点：**一个角色 = 一对模型 + N 个情感参考音频**。合成时根据当前 turn 的 `emotion` 动态选择对应参考。
+
+```jsonc
+{
+  "provider": "sovits",
+  "name": "Skyler-v1",                                   // 显示标签
+
+  "gpt_path":    "/Users/me/.skyler/voices/skyler-v1.ckpt",
+  "sovits_path": "/Users/me/.skyler/voices/skyler-v1.pth",
+
+  "ref_audios": {                                         // 情感 → 参考音频
+    "neutral":   "/Users/me/.skyler/voices/refs/neutral.wav",
+    "happy":     "/Users/me/.skyler/voices/refs/happy.wav",
+    "sad":       "/Users/me/.skyler/voices/refs/sad.wav",
+    "angry":     "/Users/me/.skyler/voices/refs/angry.wav",
+    "surprised": "/Users/me/.skyler/voices/refs/surprised.wav"
+  },
+  "default_emotion": "neutral",                          // ref_audios 找不到当前 emotion 时兜底
+  "instruct_supported": true
+}
+```
+
+`SoVITSProvider.synthesize(text, emotion)` 实现：
+1. lookup `ref_audios[emotion]`，找不到用 `ref_audios[default_emotion]`
+2. 拼参数调本地 SoVITS 推理服务器（`settings.sovits_api_url`）
+3. 服务器返回 WAV bytes，原样返回
+
+### 6.3 路径管理
+
+- 绝对路径以 `/` 开头 → 直接用
+- 相对路径 → 相对 `~/.skyler/voices/`（v5 阶段定义）
+- DashScope voice ID（CosyVoice 系列）不是路径，存原 ID 字符串
+- 路径不存在 / 文件读取失败 → log 错误，TTS 返回 None，前端只见文字
+
+### 6.4 前端 CharacterPanel TTS 配置 UI（v3-G' 计划）
+
+**当前现状**：`voice_model` 字段是裸 JSON 文本框，对用户不友好。
+**目标设计**：根据 `provider` 下拉动态渲染表单。
+
+```
+TTS Provider:  [CosyVoice ▼]
+   └─ Voice:   [longyumi_v3 ▼]
+      ☐ instruct supported (fine-tune 才打开)
+```
+
+**关键约束：UI 下拉只显示真实可用的选项**。当前阶段：
+
+| Provider | 状态 | 当前可选 voices |
+|---|---|---|
+| CosyVoice | ✅ 后端已接通 | `longyumi_v3` （仅此一项） |
+| Edge | ✅ 后端可用，但默认不暴露给用户 | （省略，作为内部 fallback） |
+| GPT-SoVITS | 📋 v5-T1 接通后才出现 | （阶段未到） |
+
+也就是说当前 UI 形态：
+- Provider 下拉只有 `CosyVoice` 一个选项
+- Voice 下拉只有 `longyumi_v3` 一个选项
+- 仍然要做下拉而不是固定显示，因为这套架构是为未来扩展准备的 —— v5-T1 接通 SoVITS 后下拉自动多一个 provider，v5-T2 训练完 fine-tune 后 voice 列表自动多几项
+
+**实现要点**：
+
+1. 后端新增 `GET /api/tts/voices` 返回所有可用 voice 列表，按 provider 分组：
+   ```jsonc
+   {
+     "providers": [
+       {
+         "id": "cosyvoice",
+         "label": "CosyVoice",
+         "voices": [
+           {"id": "longyumi_v3", "label": "龙裕米 v3", "instruct_supported": false}
+         ]
+       }
+       // 未来：sovits provider + 多 voice 自动加进来
+     ]
+   }
+   ```
+2. 数据来源：config.yaml 列出每个 provider 的可用 voices；后端启动时扫描 + 缓存
+3. CharacterPanel 调这个接口拉真实数据，根据 provider 选择切换二级下拉
+4. 用户选择后写回 `character.voice_model` JSON（按 6.2 schema）
+
+这样**架构稳定，UI 自动跟随后端能力变化**，不需要前端硬编码 voice 列表。
 
 ---
 
@@ -878,22 +998,33 @@ mac 上需要请求 Accessibility 权限。技术栈：
 - [x] `config.yaml` `tts.emotions` 列表给 LLM 选择
 - [ ] **前端推送 emotion 给 Live2D 控制器** —— 等 Live2D 接入后补 `ws send_json({"type": "emotion", "value": X})` + 前端 store `currentEmotion` 状态
 
-#### v3-E：Live2D 接入 + 前端 emotion 联动 📋 计划中
+#### v3-E1：Live2D 接入（**用 Hiyori 官方样本模型走通流程**）📋 计划中
+
+**核心思路**：先用 Live2D 官方免费样本模型 **Hiyori** 把整个 SDK 集成 + 前后端管道打通。模型本身是不是最终目标不重要，重点是 SDK 接通后切换模型只是**资产替换、不动代码**。
+
 - [ ] **SDK 选型**：`pixi-live2d-display` + Cubism 5 Web SDK（开源）
-- [ ] **CharacterView.tsx** —— 从 `<img>` 换成 `<canvas>` + Live2D runtime；保持 Galgame 满铺布局不变
-- [ ] **idle 动画** —— Cubism 模型自带的 idle motion 自动循环
-- [ ] **口型同步** —— `useAudio.ts` 扩展 audio amplitude 取样钩子，驱动 ParamMouthOpenY
-- [ ] **emotion → 表情切换** —— store 加 `currentEmotion` 状态，CharacterView 订阅 → Live2D `setExpression(emotionMap[X])`
-- [ ] **触摸响应**（OLV #6 借鉴）—— Live2D `hitTest` 不同 hit area 触发不同 motion + AI 回应
-- [ ] **motionMap**（OLV #8 借鉴）—— 说话时同步 Live2D motion，`<motion>X</motion>` 标签注入 system prompt（emotion 系统的扩展）
-- [ ] **`characters.live2d_model` 字段** —— 复用 v3-B 模式加列，存模型路径
-- [ ] **资产**：你需要自己找一个 Cubism 5 .moc3 / .model3.json 模型（许可证另购或用免费样本）
+- [ ] **下载 Hiyori** —— Live2D 官方免费样本，注意 Live2D Free Material License Agreement 条款，开发期 OK，商用受限
+- [ ] **CharacterView.tsx 改造** —— 从 `<img src={...} />` 换成 `<canvas>` + PIXI Application；保持 Galgame 满铺布局不变
+- [ ] **idle 动画** —— 调用 Hiyori 自带 idle motion 自动循环
+- [ ] **口型同步** —— `useAudio.ts` 扩展 `useAudioAmplitude()` hook 用 AnalyserNode 取样振幅；CharacterView 订阅 → `model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', value)`
+- [ ] **emotion → 表情切换** —— ws.py 当前 `_parse_emotion` 之后**新增 send_json `{"type": "emotion", "value": "happy"}`**；前端 useWebSocket 加 case `'emotion'` → store `setCurrentEmotion`；CharacterView useEffect 订阅 → `model.expression(emotionMap[X])`
+- [ ] **触摸响应**（OLV #6）—— canvas onClick → 转 PIXI 局部坐标 → `model.hitTest(x, y)`；hit area "Head" / "Body" / "Cheek" 触发不同 motion + 后端 special prompt
+- [ ] **motionMap**（OLV #8）—— system prompt 加 `<motion>X</motion>` 输出指令；ws.py push 给前端；前端触发 `model.motion(X)`
+- [ ] **DB 字段**：迁移 `v3_e.py` 给 `characters` 加 `live2d_model TEXT`（存模型路径或模型 ID）；CharacterPanel 加输入框
+
+#### v3-E2：换上目标模型 📋 计划中（依赖 E1）
+
+E1 跑通之后，换模型纯粹是**资产替换**，不动代码：
+- [ ] 寻找 / 购买 / 自制目标 Cubism 5 模型
+- [ ] 把 .moc3 / .model3.json 等资源放到约定路径
+- [ ] CharacterPanel 里改 `live2d_model` 字段 → 立刻生效
+- [ ] 校准 emotionMap（不同模型的表情命名可能不同）
 
 #### v3-F：语音体验飞跃 📋 计划中（OLV 借鉴）
 - [ ] **语音打断**（OLV #1）—— ChatInput 🚫 按钮接通；用户开始说话 → 立即 cancel LLM stream → 立即 stop TTS playback → 已说出部分写入 chat_history 标「被打断」
   - DESIGN §7.6 红线第一条；`status: 'interrupted'` 状态 store 已就绪，差最后接通
 - [ ] **TTS 多段并发合成**（OLV #2）—— 当前是 sentence-by-sentence 串行，改为并发合成 + 顺序播放，砍首句到末句的等待时间
-- [ ] **TTS 预处理器**（OLV #3）—— 正则剥离 `*动作*` / `(注释)` / `[标记]` 不让 TTS 读出来；同时也要不读 `<emotion>` 残留（虽然 `_parse_emotion` 应该已剥离）
+- [ ] **TTS 预处理器**（OLV #3）—— 正则剥离 `*动作*` / `(注释)` / `[标记]` 不让 TTS 读出来；同时也要不读 `<emotion>` / `<motion>` / `<thinking>` 残留（双保险）
 - [ ] **AI 内心独白**（OLV #5）—— `<thinking>X</thinking>` 标签解析，不读出但前端显示在 status 区或独立 thoughts 抽屉
 
 #### v3-G：生活 & 工具型能力 📋 计划中（Hermes 借鉴 + DESIGN 原计划）
@@ -901,7 +1032,14 @@ mac 上需要请求 Accessibility 权限。技术栈：
 - [ ] **每日简报** —— 自然语言定时任务（"每天早上 9 点说今天日程"）通过 ConnectionManager.push() 主动播报
 - [ ] **智能提醒** —— 比 alarm 更软的提醒，结合 profile_summary 上下文
 - [ ] **自然语言 cron 调度**（Hermes #3 借鉴）—— 扩展现有 scheduler，支持自然语言定义任意定时任务（不只是 alarm）
-- [ ] **角色状态面板 / 成长系统**（OLV v1.4 + DESIGN 计划合并）—— 当前心情 / 亲密度 / 当前思绪 / 当前正在做什么；与 profile_summary 联动；详见 §十八
+- [ ] **角色状态面板 / 成长系统**（OLV v1.4 + DESIGN 计划合并）—— 当前心情 / 亲密度 / 当前思绪 / 当前正在做什么；与 profile_summary 联动；详见 §十九
+
+#### v3-G'：TTS 配置 UI 升级 📋 计划中（小但重要）
+- [ ] **`GET /api/tts/voices` 接口** —— 返回当前可用的 provider + voice 列表（按 §6.4 结构）
+- [ ] **CharacterPanel TTS 表单升级** —— 裸 JSON 文本框换成 provider + voice 两级下拉；**只显示真实可用选项**（当前阶段就 CosyVoice + 1 个 voice）
+- [ ] **config.yaml `tts.cosyvoice.available_voices` 列表** —— 当前阶段 `[longyumi_v3]`，加新音色直接 append；后端 startup 扫描 + 缓存
+- [ ] **写回逻辑** —— 用户选择后前端拼出 `voice_model` JSON 写回 character；与 §6.2 schema 兼容
+- [ ] **架构验证**：v5-T1 接通 SoVITS 后 UI 不需要改代码，自动多 provider 选项
 
 ### 📋 阶段六：v4 屏幕感知 + 视觉能力（OLV #4 借鉴）
 
@@ -914,14 +1052,31 @@ mac 上需要请求 Accessibility 权限。技术栈：
 7. **被动模式**：定时截图 + 像素差预过滤 → VLM 仅在画面真有变化时调用 → AI 主动评论
 8. **AI 用自己的浏览器**（OLV #4 后半，可选）—— 内嵌 webview 让 AI 能访问网页查信息（区别于 web_search 工具的纯文本结果）
 
-### 📋 阶段七：v5 部署到 autodl + 持久化执行
+### 📋 阶段七：v5 部署 + 自定义 TTS
+
+#### v5-D：autodl 部署 + 子 agent 隔离
 
 部署到国内云服务器（autodl / Modal / 自有 VPS）后：
 - 后端 → DashScope 国内直连，秒回
 - 前端 Mac → 后端通过 SSH tunnel 或 HTTPS
 - 用户本地 VPN 状态不再影响 LLM 调用
-- **GPT-SoVITS 本地推理服务器**（你长期 TTS 路线）—— 在 GPU 服务器上起 SoVITS 推理服务，桌面端通过 HTTP 调用，避开桌面端 GPU 跨平台问题
 - **子 agent 隔离**（Hermes #4 借鉴）—— 长任务（屏幕分析、批量记忆压缩、自主信息收集）跑在独立子 agent context，不阻塞主对话
+
+#### v5-T1：GPT-SoVITS 后端接通
+
+依赖 v5-D autodl 部署（SoVITS 推理需要 GPU）：
+- [ ] **autodl 起 SoVITS 推理服务器** —— fast inference fork（如 RVC-Project / GPT-SoVITS-Inference），HTTP API 形式
+- [ ] **`SoVITSProvider` 真实现** —— 当前 `_LegacyProviderAdapter` 是占位；改为按 §6.2 SoVITS schema 调用，`emotion → ref_audios[emotion]` lookup
+- [ ] **`config.yaml` `tts.sovits.available_voices` 列表** —— 列出 autodl 上已部署的 SoVITS 模型
+- [ ] **`GET /api/tts/voices` 自动包含 sovits provider** —— UI 下拉自然多一项（v3-G' 的架构 payoff）
+- [ ] **路径管理** —— autodl 上的模型路径在 SoVITSProvider 内做翻译；前端只见显示标签
+
+#### v5-T2：训练自己的 voice 模型
+
+依赖 v5-T1（先有 provider 再训模型）：
+- [ ] **CosyVoice fine-tune voice cloning** —— 收集 5-10 段角色参考音频 → DashScope voice cloning 工作流 → 拿到 `myvoice-xyz123` ID → 加进 `available_voices` 列表
+- [ ] **GPT-SoVITS 专属 model 训练** —— 收集更多角色音频 → autodl GPU 训练 SoVITS / GPT 模型对 → 准备多情感参考音频文件 → 加进 `available_voices` 列表
+- [ ] **角色自动绑定**：训练完成的 voice 默认绑定到对应 character（用户手动 confirm）
 
 ### 📋 阶段八：v6+ 多设备访问（高代价）
 
@@ -955,7 +1110,8 @@ v3-A: 8 套主题 + lucide-react ✅
 v3-B: character.voice_model + CosyVoice ✅
 v3-C: PlannerAgent 简化 ✅
 v3-D: emotion 后端 ✅（前端等 Live2D）
-下一阶段：v3-E（Live2D + emotion 联动）/ v3-F（语音体验）/ v3-G（生活工具层）。
+下一阶段：v3-E1（Live2D 接入用 Hiyori 走通）/ v3-E2（换目标模型）/ v3-F（语音体验）/ v3-G（生活工具层）/ v3-G'（TTS 配置 UI 升级）。
+v5 阶段拆为：v5-D autodl 部署 + 子 agent / v5-T1 GPT-SoVITS 接通 / v5-T2 训练自定义 voice。
 
 【UI 参考】
 Open-LLM-VTuber-Web（avatar UX）
@@ -1154,6 +1310,7 @@ DESIGN 原版只写了名字没展开。结合 OLV v1.4 的 Character Status Pan
 *文档版本：v3-WIP | 最后更新：2026-05-04*
 
 变更日志：
+- **v3-WIP+1（2026-05-04 晚，TTS schema + Live2D 拆分）**：§六 TTS 分层重写，加入完整 voice_model JSON schema（CosyVoice / Edge / GPT-SoVITS 三种 provider 的 schema 示例 + GPT-SoVITS 多情感参考音频结构）+ §6.4 前端 CharacterPanel 配置 UI 设计（per-character only，无全局开关，下拉只显示真实可用选项）；v3-E 拆分为 v3-E1（用 Hiyori 走通 Live2D 集成）+ v3-E2（换目标模型）；新增 v3-G'（TTS UI 升级）；v5 阶段拆分为 v5-D（autodl 部署）/ v5-T1（GPT-SoVITS 后端接通）/ v5-T2（自定义 voice 训练）
 - **v3-WIP（2026-05-04，Skyler 改名 + v3-A/B/C/D 完成）**：项目 MomoOS → Skyler；v3 拆 A-G 七个子阶段；A/B/C/D 完成（8 套主题 + lucide / character.voice_model + CosyVoice / PlannerAgent 简化 / emotion 后端）；E/F/G 计划写明（Live2D / 语音体验 / 生活工具层）；新增 §十九 OLV/Hermes 借鉴清单 + §二十 跨平台策略
 - **v2.7（2026-05）**：v2.5 全模块完成 — schema 加 conversations/characters/character_id/conversation_id 列；删 personality 表；4 个 memory tool（save/delete/list/compress）通过 LiteLLM tool calling；隐式 summarizer 替代每 20 轮显式总结；前端 ChatGPT 模式重构 — 三栏布局 + 折叠侧栏 + Galgame 风（Character 满铺 + 浮动气泡 + 历史抽屉）+ 多角色切换；Sidebar 简化 💬⚙；SettingsPanel 重构（含记忆/基础信息/角色三新区块）；profile_summary 增量重写 + 50 轮 / 删对话触发 + 数据门槛保护；启动模式 localStorage 持久化（默认 Panel）；config.yaml 改用 openai/qwen-plus + DashScope 兼容端点；后端 lifespan 预加载 + asyncio.to_thread + /api/health。
 - v2.6（2026-05）：补全 GET /api/config 白名单 JSON；修正 reload 函数为 reload_config_yaml() / get_*() 风格；新增 tts.enabled 全局开关；Tauri 2 write_config_field 命令实现。

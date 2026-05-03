@@ -198,9 +198,17 @@ npm run tauri dev
 
 **TL;DR —— 接下来要做的事：**
 
-- **v3 收尾（第 1 梯队，1–3 周）**：Live2D + emotion 前端联动、语音打断、TTS 预处理 + 并发、Live2D 触摸响应
-- **v4（第 2 梯队，1–2 个月）**：屏幕感知（主动 + 被动 + VLM）、AI 内心独白、自然语言 cron、角色状态面板 + 成长系统、GPT-SoVITS 本地接入
-- **v5+（第 3 梯队，长期）**：多设备访问（Windows 客户端）、autodl 部署、子 agent 隔离、Hermes 风格 skill 累积
+- **v3 收尾（第 1 梯队，1–3 周）**：
+  - **v3-E1**：用 Live2D 官方样本 **Hiyori** 走通整个 Live2D 集成（验证 SDK + emotion + 触摸 + 口型同步管道）
+  - **v3-E2**：换上目标 Cubism 模型（资产替换，不动代码）
+  - **v3-F**：语音打断、TTS 多段并发、TTS 预处理器（剥离 `*动作*` 等不读出）、`<thinking>` 内心独白
+  - **v3-G'**：TTS UI 升级 —— 裸 JSON 文本框换成 per-character provider + voice 两级下拉（**只显示真实可用选项**）
+- **v3-G + v4（第 2 梯队，1–2 个月）**：剪贴板助手、每日简报、自然语言 cron、角色状态面板 + 成长系统；屏幕感知（主动 + 被动 + VLM）；AI 用自己的浏览器
+- **v5（第 3 梯队，长期）**：
+  - **v5-D**：autodl 部署 + 子 agent 隔离
+  - **v5-T1**：GPT-SoVITS 后端接通（`SoVITSProvider` 真实现，多情感参考音频路由）
+  - **v5-T2**：训练自定义 voice（CosyVoice fine-tune + GPT-SoVITS 角色专属模型）
+- **v6+**：多设备访问（Windows 客户端）、Hermes 风格 skill 累积
 
 ---
 
@@ -243,9 +251,14 @@ Skyler 站在两个项目的肩膀上：
 | v3-B：`character.voice_model` + CosyVoice | ✅ 完成 |
 | v3-C：PlannerAgent 简化 | ✅ 完成 |
 | v3-D：emotion 系统（后端）| ✅ 完成（前端等 Live2D）|
-| v3 剩余：Live2D + 语音打断 + TTS 优化 + 生活工具层 | 🚧 进行中 |
+| v3-E1：Live2D 接入（用 Hiyori 走通） | 📋 下一步要做 |
+| v3-E2：换目标模型 | 📋 E1 之后 |
+| v3-F：语音体验飞跃（打断 + 并发 + 预处理 + 内心独白） | 📋 计划中 |
+| v3-G：生活 & 工具层（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 |
+| v3-G'：TTS 配置 UI 升级（per-character 两级下拉） | 📋 计划中 |
 | v4：屏幕感知 | 📋 计划中 |
-| v5+：多设备 / 云端部署 | 📋 长期 |
+| v5-D / T1 / T2：autodl + GPT-SoVITS + 自定义 voice 训练 | 📋 长期 |
+| v6+：多设备 / 云端部署 | 📋 长期 |
 
 ---
 
