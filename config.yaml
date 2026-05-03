@@ -1,0 +1,26 @@
+default_model: openai/qwen-plus
+planner_model: openai/qwen-turbo
+default_user_id: default
+base_instruction: 回复简短克制，通常不超过3句话，除非用户明确需要详细解释。不总结、不复述用户说的话。不用"当然"、"没问题"、"好的"等开场白。不在句尾加多余的关心语。像真实的人一样说话，不像客服或AI助手。
+memory:
+  long_term_enabled: true
+  profile_enabled: true
+search:
+  enable_search: true
+cache:
+  profile_ttl_seconds: 300
+tts:
+  enabled: true
+  provider: cosyvoice
+  cosyvoice:
+    model: cosyvoice-v3-flash
+    default_voice: longyumi_v3
+    instruct_supported: false
+  emotions:
+  - neutral
+  - happy
+  - sad
+  - angry
+  - surprised
+  - fearful
+  - disgusted

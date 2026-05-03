@@ -1,0 +1,195 @@
+/* ===================================================================
+ * v3-A 主题系统
+ * 所有组件颜色统一通过 var(--color-*) 引用，禁止硬编码 Tailwind 色板。
+ * 切换主题：document.documentElement.dataset.theme = 'morandi' 等
+ * 默认（无 data-theme）= dusk
+ * =================================================================== */
+
+/* ---------- 默认 = dusk ---------- */
+:root {
+  --color-bg-base:          #16102A;
+  --color-bg-surface:       #1E1535;
+  --color-bg-elevated:      #2A2045;
+  --color-bg-input:         #2A2045;
+  --color-text-primary:     #EDE8FF;
+  --color-text-secondary:   #A090C0;
+  --color-text-accent:      #C9B8F0;
+  --color-accent:           #6B5BAF;
+  --color-accent-hover:     #7D6CC0;
+  --color-border:           #3D3060;
+  --color-border-subtle:    #2A2045;
+  --color-bubble-ai:        #2A2045;
+  --color-bubble-ai-text:   #C9B8F0;
+  --color-bubble-user:      #6B5BAF;
+  --color-bubble-user-text: #EDE8FF;
+  --color-scrollbar:        #3D3060;
+}
+
+/* ---------- [A] morandi 莫兰迪奶油 ---------- */
+[data-theme="morandi"] {
+  --color-bg-base:          #F5F1EA;
+  --color-bg-surface:       #EDE8E0;
+  --color-bg-elevated:      #E5DED4;
+  --color-bg-input:         #DDD8CE;
+  --color-text-primary:     #3A3028;
+  --color-text-secondary:   #6B6055;
+  --color-text-accent:      #8A6A50;
+  --color-accent:           #9E9082;
+  --color-accent-hover:     #8A7D70;
+  --color-border:           #C4B8A8;
+  --color-border-subtle:    #D6CEBC;
+  --color-bubble-ai:        #DDD8CE;
+  --color-bubble-ai-text:   #4A4237;
+  --color-bubble-user:      #C4B8A8;
+  --color-bubble-user-text: #3A3028;
+  --color-scrollbar:        #C4B8A8;
+}
+
+/* ---------- [B] dusk 暮色梦幻（默认） ---------- */
+[data-theme="dusk"] {
+  --color-bg-base:          #16102A;
+  --color-bg-surface:       #1E1535;
+  --color-bg-elevated:      #2A2045;
+  --color-bg-input:         #2A2045;
+  --color-text-primary:     #EDE8FF;
+  --color-text-secondary:   #A090C0;
+  --color-text-accent:      #C9B8F0;
+  --color-accent:           #6B5BAF;
+  --color-accent-hover:     #7D6CC0;
+  --color-border:           #3D3060;
+  --color-border-subtle:    #2A2045;
+  --color-bubble-ai:        #2A2045;
+  --color-bubble-ai-text:   #C9B8F0;
+  --color-bubble-user:      #6B5BAF;
+  --color-bubble-user-text: #EDE8FF;
+  --color-scrollbar:        #3D3060;
+}
+
+/* ---------- [C] glass 玻璃拟态 ---------- */
+[data-theme="glass"] {
+  --color-bg-base:          #0F1820;
+  --color-bg-surface:       #1A2535;
+  --color-bg-elevated:      rgba(30,50,70,0.85);
+  --color-bg-input:         rgba(100,150,200,0.10);
+  --color-text-primary:     #E0EEF8;
+  --color-text-secondary:   #7AA0C0;
+  --color-text-accent:      #A8C4E0;
+  --color-accent:           rgba(80,180,160,0.35);
+  --color-accent-hover:     rgba(80,180,160,0.50);
+  --color-border:           rgba(100,150,200,0.25);
+  --color-border-subtle:    rgba(100,150,200,0.12);
+  --color-bubble-ai:        rgba(100,150,200,0.15);
+  --color-bubble-ai-text:   #A8C4E0;
+  --color-bubble-user:      rgba(80,180,160,0.22);
+  --color-bubble-user-text: #7ED8C8;
+  --color-scrollbar:        rgba(100,150,200,0.25);
+}
+
+/* ---------- [D] watercolor 水彩二次元 ---------- */
+[data-theme="watercolor"] {
+  --color-bg-base:          #FEF6FA;
+  --color-bg-surface:       #FDF0F5;
+  --color-bg-elevated:      #FAE8F0;
+  --color-bg-input:         #F5D8E8;
+  --color-text-primary:     #3A2030;
+  --color-text-secondary:   #8A5070;
+  --color-text-accent:      #C0607A;
+  --color-accent:           #C0607A;
+  --color-accent-hover:     #A84F68;
+  --color-border:           #F0B8CC;
+  --color-border-subtle:    #F8D8E8;
+  --color-bubble-ai:        #F5D8E8;
+  --color-bubble-ai-text:   #A04060;
+  --color-bubble-user:      #D8E8F8;
+  --color-bubble-user-text: #3060A0;
+  --color-scrollbar:        #F0B8CC;
+}
+
+/* ---------- [E] aurora 深海极光 ---------- */
+[data-theme="aurora"] {
+  --color-bg-base:          #0D1117;
+  --color-bg-surface:       #0E1A16;
+  --color-bg-elevated:      #0E2A25;
+  --color-bg-input:         #0E2A25;
+  --color-text-primary:     #E0FFF8;
+  --color-text-secondary:   #50A890;
+  --color-text-accent:      #00D4AA;
+  --color-accent:           #00D4AA;
+  --color-accent-hover:     #00FFCC;
+  --color-border:           #00D4AA30;
+  --color-border-subtle:    #00D4AA18;
+  --color-bubble-ai:        #0E2A25;
+  --color-bubble-ai-text:   #00D4AA;
+  --color-bubble-user:      #003D30;
+  --color-bubble-user-text: #00FFD0;
+  --color-scrollbar:        #00D4AA30;
+}
+
+/* ---------- [F] sakura 樱花夜 ---------- */
+[data-theme="sakura"] {
+  --color-bg-base:          #140B26;
+  --color-bg-surface:       #1A0F2E;
+  --color-bg-elevated:      #2A1040;
+  --color-bg-input:         #2A1040;
+  --color-text-primary:     #FFE8F0;
+  --color-text-secondary:   #C06080;
+  --color-text-accent:      #FF85A1;
+  --color-accent:           #8B2252;
+  --color-accent-hover:     #A03060;
+  --color-border:           #FF85A130;
+  --color-border-subtle:    #FF85A118;
+  --color-bubble-ai:        #2A1040;
+  --color-bubble-ai-text:   #FF85A1;
+  --color-bubble-user:      #8B2252;
+  --color-bubble-user-text: #FFD4E8;
+  --color-scrollbar:        #FF85A130;
+}
+
+/* ---------- [G] cyber 赛博和风 ---------- */
+[data-theme="cyber"] {
+  --color-bg-base:          #0A0A0A;
+  --color-bg-surface:       #111111;
+  --color-bg-elevated:      #1A1A1A;
+  --color-bg-input:         #1A1A1A;
+  --color-text-primary:     #EEEEEE;
+  --color-text-secondary:   #888888;
+  --color-text-accent:      #FF4545;
+  --color-accent:           #FF4545;
+  --color-accent-hover:     #FF6666;
+  --color-border:           #FF454530;
+  --color-border-subtle:    #333333;
+  --color-bubble-ai:        #1A1A1A;
+  --color-bubble-ai-text:   #EEEEEE;
+  --color-bubble-user:      #FF4545;
+  --color-bubble-user-text: #FFFFFF;
+  --color-scrollbar:        #333333;
+}
+
+/* ---------- [H] lavender 薰衣草雾 ---------- */
+[data-theme="lavender"] {
+  --color-bg-base:          #231D35;
+  --color-bg-surface:       #2D2640;
+  --color-bg-elevated:      #3A3050;
+  --color-bg-input:         #3A3050;
+  --color-text-primary:     #EAD8FF;
+  --color-text-secondary:   #9080B0;
+  --color-text-accent:      #C8B4E8;
+  --color-accent:           #5A4878;
+  --color-accent-hover:     #6A5888;
+  --color-border:           #C8B4E830;
+  --color-border-subtle:    #3A3050;
+  --color-bubble-ai:        #3A3050;
+  --color-bubble-ai-text:   #C8B4E8;
+  --color-bubble-user:      #5A4878;
+  --color-bubble-user-text: #EAD8FF;
+  --color-scrollbar:        #5A4878;
+}
+
+/* ---------- 全局滚动条样式（webkit） ---------- */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-scrollbar);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover { opacity: 0.8; }

@@ -1,0 +1,160 @@
+"""Config REST API.
+
+Mounted at /api in main.py.  Full URL map:
+  GET   /api/config
+  POST  /api/config/reload
+  GET   /api/config/base_instruction
+  POST  /api/config/base_instruction
+"""
+from pathlib import Path
+from typing import Any
+
+import yaml
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from backend.config import config_yaml, reload_config_yaml
+
+router = APIRouter()
+
+# config.yaml 与 backend/config/__init__.py 中的 load_config_yaml 保持一致
+_CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
+
+
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+class MemoryConfig(BaseModel):
+    long_term_enabled: bool = True
+    profile_enabled: bool = True
+
+
+class SearchConfig(BaseModel):
+    enable_search: bool = True
+
+
+class CacheConfig(BaseModel):
+    profile_ttl_seconds: int = 300
+
+
+class TtsConfig(BaseModel):
+    enabled: bool = True
+
+
+class ConfigResponse(BaseModel):
+    default_model: str = "deepseek/deepseek-chat"
+    default_user_id: str = "default"
+    memory: MemoryConfig = MemoryConfig()
+    search: SearchConfig = SearchConfig()
+    cache: CacheConfig = CacheConfig()
+    tts: TtsConfig = TtsConfig()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _build_config_response() -> ConfigResponse:
+    """Extract the whitelist fields from config_yaml into a ConfigResponse."""
+    memory_raw: dict = config_yaml.get("memory") or {}
+    search_raw: dict = config_yaml.get("search") or {}
+    cache_raw: dict = config_yaml.get("cache") or {}
+    tts_raw: dict = config_yaml.get("tts") or {}
+
+    return ConfigResponse(
+        default_model=config_yaml.get("default_model", "deepseek/deepseek-chat"),
+        default_user_id=config_yaml.get("default_user_id", "default"),
+        memory=MemoryConfig(
+            long_term_enabled=memory_raw.get("long_term_enabled", True),
+            profile_enabled=memory_raw.get("profile_enabled", True),
+        ),
+        search=SearchConfig(
+            enable_search=search_raw.get("enable_search", True),
+        ),
+        cache=CacheConfig(
+            profile_ttl_seconds=cache_raw.get("profile_ttl_seconds", 300),
+        ),
+        tts=TtsConfig(
+            enabled=tts_raw.get("enabled", True),
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/config", response_model=ConfigResponse)
+async def get_config() -> Any:
+    """Return the whitelisted subset of config.yaml for the Settings panel."""
+    return _build_config_response()
+
+
+@router.post("/config/reload")
+async def reload_config() -> dict:
+    """Reload config.yaml from disk into memory and return status."""
+    try:
+        reload_config_yaml()
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=500, detail=f"config.yaml syntax error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# v3-B 补丁：通用设定 (base_instruction)
+# ---------------------------------------------------------------------------
+
+class BaseInstructionResponse(BaseModel):
+    base_instruction: str = ""
+
+
+class BaseInstructionUpdateBody(BaseModel):
+    base_instruction: str
+
+
+@router.get("/config/base_instruction", response_model=BaseInstructionResponse)
+async def get_base_instruction_endpoint() -> Any:
+    """读取当前 config.yaml 中的通用设定。"""
+    return BaseInstructionResponse(
+        base_instruction=config_yaml.get("base_instruction", "") or "",
+    )
+
+
+@router.post("/config/base_instruction")
+async def set_base_instruction_endpoint(body: BaseInstructionUpdateBody) -> dict:
+    """更新通用设定并写回 config.yaml。
+
+    步骤：
+      1. 重新从磁盘读 yaml（避免覆盖其他进程刚刚写入的字段）
+      2. 只更新 base_instruction 一项
+      3. 用 yaml.safe_dump 写回（allow_unicode 保留中文原样）
+      4. 调 reload_config_yaml() 让进程内字典立即生效
+    """
+    try:
+        if _CONFIG_PATH.exists():
+            with open(_CONFIG_PATH, encoding="utf-8") as f:
+                current: dict = yaml.safe_load(f) or {}
+        else:
+            current = {}
+        current["base_instruction"] = body.base_instruction
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                current,
+                f,
+                allow_unicode=True,
+                sort_keys=False,
+                default_flow_style=False,
+            )
+        reload_config_yaml()
+    except yaml.YAMLError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"config.yaml syntax error: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"config.yaml write failed: {exc}"
+        ) from exc
+    return {"status": "ok"}

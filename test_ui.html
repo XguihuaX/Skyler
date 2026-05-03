@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>MomoOS 后端测试</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #f0f2f5; display: flex; justify-content: center; padding: 32px 16px; }
+  .container { width: 100%; max-width: 720px; display: flex; flex-direction: column; gap: 16px; }
+  h1 { font-size: 18px; font-weight: 600; color: #1a1a2e; }
+
+  .status-bar { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #555; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #ccc; flex-shrink: 0; }
+  .dot.connected { background: #22c55e; }
+  .dot.connecting { background: #f59e0b; animation: pulse 1s infinite; }
+  .dot.error { background: #ef4444; }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.4 } }
+
+  .chat-box {
+    background: #fff;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    padding: 16px;
+    min-height: 400px;
+    max-height: 560px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .message { display: flex; flex-direction: column; gap: 4px; max-width: 85%; }
+  .message.user { align-self: flex-end; align-items: flex-end; }
+  .message.assistant { align-self: flex-start; align-items: flex-start; }
+  .bubble {
+    padding: 10px 14px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.6;
+    word-break: break-word;
+  }
+  .message.user .bubble { background: #6366f1; color: #fff; border-bottom-right-radius: 4px; }
+  .message.assistant .bubble { background: #f3f4f6; color: #1a1a2e; border-bottom-left-radius: 4px; }
+  .message.assistant .bubble.streaming::after { content: "▋"; animation: blink .7s step-start infinite; }
+  @keyframes blink { 50% { opacity: 0 } }
+  .meta { font-size: 11px; color: #9ca3af; }
+  .audio-badge { font-size: 11px; color: #6366f1; margin-top: 2px; }
+
+  .input-row { display: flex; gap: 8px; }
+  textarea {
+    flex: 1;
+    resize: none;
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color .15s;
+    height: 48px;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  textarea:focus { border-color: #6366f1; }
+  button {
+    padding: 0 20px;
+    border-radius: 10px;
+    border: none;
+    background: #6366f1;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background .15s, opacity .15s;
+    white-space: nowrap;
+  }
+  button:hover { background: #4f46e5; }
+  button:disabled { opacity: .45; cursor: default; }
+
+  .config-row { display: flex; gap: 8px; align-items: center; font-size: 13px; color: #555; flex-wrap: wrap; }
+  .config-row input[type=text] {
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-size: 13px;
+    outline: none;
+    width: 220px;
+    transition: border-color .15s;
+  }
+  .config-row input[type=text]:focus { border-color: #6366f1; }
+  .config-row label { color: #374151; }
+  .btn-clear { background: #f3f4f6; color: #374151; font-size: 13px; padding: 5px 14px; }
+  .btn-clear:hover { background: #e5e7eb; }
+
+  .empty-hint { color: #9ca3af; font-size: 13px; margin: auto; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>MomoOS 后端测试</h1>
+
+  <div class="config-row">
+    <label>WebSocket 地址</label>
+    <input type="text" id="wsUrl" value="ws://localhost:8000/ws">
+    <button id="btnConnect" onclick="connect()">连接</button>
+    <button class="btn-clear" onclick="clearChat()">清空</button>
+  </div>
+
+  <div class="status-bar">
+    <div class="dot" id="dot"></div>
+    <span id="statusText">未连接</span>
+  </div>
+
+  <div class="chat-box" id="chatBox">
+    <div class="empty-hint" id="emptyHint">连接后发送消息开始测试</div>
+  </div>
+
+  <div class="input-row">
+    <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行" disabled></textarea>
+    <button id="btnSend" onclick="sendMessage()" disabled>发送</button>
+  </div>
+</div>
+
+<script>
+let ws = null;
+let currentBubble = null;
+let audioCount = 0;
+
+function setStatus(state, text) {
+  const dot = document.getElementById('dot');
+  dot.className = 'dot ' + state;
+  document.getElementById('statusText').textContent = text;
+}
+
+function connect() {
+  if (ws) { ws.close(); ws = null; }
+  const url = document.getElementById('wsUrl').value.trim();
+  setStatus('connecting', '连接中…');
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    setStatus('connected', '已连接 · ' + url);
+    document.getElementById('input').disabled = false;
+    document.getElementById('btnSend').disabled = false;
+    document.getElementById('input').focus();
+  };
+
+  ws.onclose = () => {
+    setStatus('error', '连接已断开');
+    document.getElementById('input').disabled = true;
+    document.getElementById('btnSend').disabled = true;
+    ws = null;
+    currentBubble = null;
+  };
+
+  ws.onerror = () => setStatus('error', '连接出错');
+
+  ws.onmessage = (e) => {
+    const frame = JSON.parse(e.data);
+    handleFrame(frame);
+  };
+}
+
+function handleFrame(frame) {
+  const { type, content, message } = frame;
+
+  if (type === 'text_chunk') {
+    if (!currentBubble) {
+      currentBubble = appendMessage('assistant');
+      audioCount = 0;
+    }
+    currentBubble.bubble.textContent += content;
+    scrollBottom();
+  } else if (type === 'audio_chunk') {
+    audioCount++;
+    if (currentBubble) {
+      currentBubble.audio.textContent = `🔊 ${audioCount} 段音频`;
+    }
+  } else if (type === 'done') {
+    if (currentBubble) {
+      currentBubble.bubble.classList.remove('streaming');
+    }
+    currentBubble = null;
+    document.getElementById('btnSend').disabled = false;
+  } else if (type === 'error') {
+    if (!currentBubble) currentBubble = appendMessage('assistant');
+    currentBubble.bubble.style.color = '#ef4444';
+    currentBubble.bubble.textContent = '⚠ ' + (message || '未知错误');
+    currentBubble.bubble.classList.remove('streaming');
+    currentBubble = null;
+    document.getElementById('btnSend').disabled = false;
+    scrollBottom();
+  }
+}
+
+function appendMessage(role, text = '') {
+  const box = document.getElementById('chatBox');
+  const hint = document.getElementById('emptyHint');
+  if (hint) hint.remove();
+
+  const wrap = document.createElement('div');
+  wrap.className = 'message ' + role;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble' + (role === 'assistant' ? ' streaming' : '');
+  bubble.textContent = text;
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = new Date().toLocaleTimeString('zh-CN');
+
+  const audio = document.createElement('div');
+  audio.className = 'audio-badge';
+
+  wrap.appendChild(bubble);
+  wrap.appendChild(meta);
+  if (role === 'assistant') wrap.appendChild(audio);
+  box.appendChild(wrap);
+  scrollBottom();
+
+  return { bubble, meta, audio };
+}
+
+function sendMessage() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+  appendMessage('user', text);
+  input.value = '';
+  input.style.height = '48px';
+  document.getElementById('btnSend').disabled = true;
+
+  ws.send(JSON.stringify({ type: 'text', content: text, user_id: 'default' }));
+}
+
+function clearChat() {
+  const box = document.getElementById('chatBox');
+  box.innerHTML = '<div class="empty-hint" id="emptyHint">连接后发送消息开始测试</div>';
+  currentBubble = null;
+}
+
+function scrollBottom() {
+  const box = document.getElementById('chatBox');
+  box.scrollTop = box.scrollHeight;
+}
+
+// Auto-resize textarea + Enter to send
+document.getElementById('input').addEventListener('input', function() {
+  this.style.height = '48px';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+document.getElementById('input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+// Auto-connect on load
+connect();
+</script>
+</body>
+</html>

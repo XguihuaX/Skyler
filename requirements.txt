@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+websockets
+sqlalchemy[asyncio]
+aiosqlite
+litellm
+httpx
+faster-whisper
+edge-tts
+dashscope>=1.25.2
+python-dotenv
+pydantic
+pydantic-settings
+sentence-transformers
+numpy
+pyyaml

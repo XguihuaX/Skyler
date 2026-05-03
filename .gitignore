@@ -1,0 +1,25 @@
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+target/
+frontend/src-tauri/target/
+frontend/dist/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.env
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# 防止 dump 和敏感数据进 git
+*_dump.txt
+*_dump.json
+*.dump
+*.sql
+.claude/

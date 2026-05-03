@@ -1,0 +1,63 @@
+import { memo, useEffect, useRef } from 'react';
+import { useAppStore, type ChatMessage } from '../store';
+
+const Bubble = memo(function Bubble({ m }: { m: ChatMessage }) {
+  const isUser = m.role === 'user';
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+      <div
+        className="max-w-[78%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap break-words shadow"
+        style={
+          isUser
+            ? {
+                background: 'var(--color-bubble-user)',
+                color: 'var(--color-bubble-user-text)',
+              }
+            : {
+                background: 'var(--color-bubble-ai)',
+                color: 'var(--color-bubble-ai-text)',
+                border: '1px solid var(--color-border-subtle)',
+              }
+        }
+      >
+        {m.content}
+        {m.streaming && (
+          <span
+            className="inline-block w-1.5 h-3 ml-1 align-baseline animate-pulse"
+            style={{ background: 'var(--color-text-secondary)' }}
+          />
+        )}
+      </div>
+    </div>
+  );
+});
+
+export default function ChatHistory() {
+  const messages = useAppStore((s) => s.chatMessages);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Auto-scroll to bottom when messages change.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="flex-1 overflow-y-auto px-6 py-4 space-y-3"
+    >
+      {messages.length === 0 ? (
+        <div
+          className="h-full flex items-center justify-center text-sm"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          开始一段对话吧
+        </div>
+      ) : (
+        messages.map((m) => <Bubble key={m.id} m={m} />)
+      )}
+    </div>
+  );
+}
