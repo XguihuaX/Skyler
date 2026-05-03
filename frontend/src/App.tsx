@@ -124,12 +124,17 @@ function App() {
     };
   }, []);
 
-  const { sendText, sendVoice } = useWebSocket();
-  const { startManual, stopManualAndSend, toggleVad } = useAudio({ sendVoice });
+  const { sendText, sendVoice, sendInterrupt } = useWebSocket();
+  const { startManual, stopManualAndSend, toggleVad } = useAudio({
+    sendVoice, sendInterrupt,
+  });
 
   const api: AppApi = useMemo(
-    () => ({ sendText, sendVoice, startManual, stopManualAndSend, toggleVad }),
-    [sendText, sendVoice, startManual, stopManualAndSend, toggleVad],
+    () => ({
+      sendText, sendVoice, sendInterrupt,
+      startManual, stopManualAndSend, toggleVad,
+    }),
+    [sendText, sendVoice, sendInterrupt, startManual, stopManualAndSend, toggleVad],
   );
 
   return (

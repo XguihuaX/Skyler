@@ -3,6 +3,8 @@ import { createContext, useContext } from 'react';
 export interface AppApi {
   sendText: (content: string) => void;
   sendVoice: (audioBase64: string) => void;
+  // v3-F #4：用户说话 / 点击 🚫 触发，停 LLM stream + TTS playback
+  sendInterrupt: () => void;
   startManual: () => Promise<void>;
   stopManualAndSend: () => Promise<void>;
   toggleVad: () => Promise<void>;

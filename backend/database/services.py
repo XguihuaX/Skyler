@@ -395,6 +395,7 @@ async def add_chat_history(
     content: str,
     conversation_id: Optional[int] = None,
     character_id: Optional[int] = None,
+    interrupted_at: Optional[datetime] = None,
 ) -> ChatHistory:
     """Append a message to the persistent chat history for the given user.
 
@@ -405,6 +406,9 @@ async def add_chat_history(
         content: Message text.
         conversation_id: V2.5-B optional fk to conversations.id.
         character_id:    V2.5-B optional fk to characters.id.
+        interrupted_at:  v3-F. Non-None marks this assistant row as a partial
+                         reply truncated by user interrupt. Only assistant
+                         rows should set this.
 
     Returns the persisted ChatHistory instance.
     """
@@ -414,6 +418,7 @@ async def add_chat_history(
         content=content,
         conversation_id=conversation_id,
         character_id=character_id,
+        interrupted_at=interrupted_at,
     )
     session.add(message)
     await session.commit()

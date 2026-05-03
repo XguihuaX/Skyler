@@ -3,7 +3,14 @@ import { useAppStore } from '../store';
 
 interface UseAudioParams {
   sendVoice: (audioBase64: string) => void;
+  // v3-F #4: VAD 在 AI 说话期间检测到持续语音 → 触发打断
+  sendInterrupt: () => void;
 }
+
+// VAD 触发打断的阈值：连续 N 帧（≈ N/60 秒）高于音量阈值才算"用户说话"，
+// 滤掉扬声器外溢 / 偶发噪声引发的假打断。
+const INTERRUPT_FRAMES = 6;
+const INTERRUPT_COOLDOWN_MS = 1500;
 
 interface UseAudioReturn {
   startManual: () => Promise<void>;
@@ -24,7 +31,7 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-export function useAudio({ sendVoice }: UseAudioParams): UseAudioReturn {
+export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudioReturn {
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -40,6 +47,12 @@ export function useAudio({ sendVoice }: UseAudioParams): UseAudioReturn {
   // 始终持有最新 sendVoice 引用（避免 useCallback 闭包过期）
   const sendVoiceRef = useRef(sendVoice);
   useEffect(() => { sendVoiceRef.current = sendVoice; });
+  // v3-F #4：VAD 打断 hook 同样要保新鲜引用
+  const sendInterruptRef = useRef(sendInterrupt);
+  useEffect(() => { sendInterruptRef.current = sendInterrupt; });
+  // 连续高于阈值的帧数 + 上次打断时间（debounce）
+  const interruptFramesAboveRef = useRef(0);
+  const lastInterruptAtRef = useRef(0);
 
   /** 申请麦克风权限并初始化 AudioContext + Analyser */
   const initStream = useCallback(async (): Promise<MediaStream> => {
@@ -131,10 +144,31 @@ export function useAudio({ sendVoice }: UseAudioParams): UseAudioReturn {
     const micMuted = store.getState().micMuted;
 
     if (micMuted) {
-      // Momo 说话期间跳过检测，但保持 stream 开启
+      // Momo 说话期间不录音，但 v3-F #4 在此监听打断：用户说话足够久（连续
+      // INTERRUPT_FRAMES 帧高于阈值）就 sendInterrupt。冷却 INTERRUPT_COOLDOWN_MS
+      // 防止打断后短时间内被状态切换 race 反复触发。
+      const status = store.getState().status;
+      const isAiSpeaking = status === 'speaking' || status === 'thinking';
+      const cooledDown =
+        Date.now() - lastInterruptAtRef.current > INTERRUPT_COOLDOWN_MS;
+      if (isAiSpeaking && cooledDown) {
+        if (max >= threshold) {
+          interruptFramesAboveRef.current += 1;
+          if (interruptFramesAboveRef.current >= INTERRUPT_FRAMES) {
+            console.log('[VAD] sustained speech during AI playback → interrupt');
+            sendInterruptRef.current();
+            lastInterruptAtRef.current = Date.now();
+            interruptFramesAboveRef.current = 0;
+          }
+        } else {
+          interruptFramesAboveRef.current = 0;
+        }
+      }
       rafIdRef.current = requestAnimationFrame(vadLoop);
       return;
     }
+    // 不在说话状态：重置打断计数
+    interruptFramesAboveRef.current = 0;
 
     if (vadState === 'active' && max >= threshold && !recording) {
       const stream = streamRef.current;

@@ -118,5 +118,7 @@ class ChatHistory(Base):
     conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=True)
     character_id = Column(Integer, ForeignKey("characters.id"), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
+    # v3-F：被语音 / UI 打断截断时记录时间戳。None = 正常完成。仅 assistant 行使用。
+    interrupted_at = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="chat_history")

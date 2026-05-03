@@ -420,10 +420,114 @@ async def _update_memory(
 
 
 # ---------------------------------------------------------------------------
+# v3-F #4：语音打断 —— per-connection turn state + 中断收尾
+# ---------------------------------------------------------------------------
+
+
+class _TurnState:
+    """Per-WebSocket-connection 的当前 turn 状态。
+
+    interrupt 收到时需要：
+      - 取消正在运行的 ``current_turn``（_handle_message_safe wrapping task）
+      - 取消所有 in-flight TTS task（``pending_tts``）
+      - 把已生成的 ``reply_parts`` 写入 chat_history with ``interrupted_at``
+
+    每收到一个新 user 消息时由 ``reset_for_new_turn`` 清零。``current_turn``
+    本身由端点循环管理。
+    """
+
+    def __init__(self) -> None:
+        self.current_turn: Optional[asyncio.Task] = None
+        self.pending_tts: List[asyncio.Task] = []
+        self.reply_parts: List[str] = []
+        self.user_text: str = ""
+        self.conv_id: Optional[int] = None
+        self.char_id: Optional[int] = None
+        self.user_history_already_written: bool = False
+        # Set True 当端点收到 interrupt → 让 _handle_message_safe 走 interrupted 收尾
+        self.interrupted: bool = False
+
+    def reset_for_new_turn(self) -> None:
+        # 不动 current_turn —— 由调用方（端点）保证已 cancel + await
+        self.pending_tts = []
+        self.reply_parts = []
+        self.user_text = ""
+        self.conv_id = None
+        self.char_id = None
+        self.user_history_already_written = False
+        self.interrupted = False
+
+
+async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
+    """打断收尾：partial reply 写 chat_history 并标 interrupted_at。
+
+    与 ``_update_memory`` 区别：
+      * assistant 行带 ``interrupted_at = utcnow()``
+      * 不调 ``_bump_turn_and_maybe_regenerate``（被打断的轮不代表用户画像）
+      * reply 为空 → 只保留 user 行（如未写过），不写空 assistant 行
+    """
+    if not state.user_text:
+        return  # nothing to record
+
+    full_reply = "".join(state.reply_parts).strip()
+    interrupted_at = datetime.utcnow()
+
+    try:
+        # short-term：被打断的也算一轮（让 LLM 下轮知道说到哪儿了）
+        await short_term_memory.add(user_id, "user", state.user_text)
+        if full_reply:
+            await short_term_memory.add(user_id, "assistant", full_reply)
+
+        async with AsyncSessionLocal() as session:
+            if not state.user_history_already_written:
+                await add_chat_history(
+                    session, user_id, "user", state.user_text,
+                    conversation_id=state.conv_id,
+                    character_id=state.char_id,
+                )
+            if full_reply:
+                await add_chat_history(
+                    session, user_id, "assistant", full_reply,
+                    conversation_id=state.conv_id,
+                    character_id=state.char_id,
+                    interrupted_at=interrupted_at,
+                )
+
+        if state.conv_id is not None:
+            await _bump_conversation_updated_at(state.conv_id)
+
+        logger.info(
+            "[interrupt] saved partial reply user=%s reply_len=%d at=%s",
+            user_id, len(full_reply), interrupted_at.isoformat(),
+        )
+    except Exception:
+        logger.exception(
+            "_save_interrupted_turn failed for user %s", user_id,
+        )
+
+
+def _request_interrupt(state: "_TurnState") -> None:
+    """同步触发打断：cancel current_turn + 全部 pending TTS。
+
+    不 await。``_handle_message_safe`` 的 CancelledError 兜底负责 DB 收尾 +
+    送 done 给前端。pending_tts 单独 cancel —— 它们是独立 task，不是
+    current_turn 的子，不会因 turn cancel 自动停。
+    """
+    state.interrupted = True
+    if state.current_turn is not None and not state.current_turn.done():
+        state.current_turn.cancel()
+    for t in list(state.pending_tts):
+        if not t.done():
+            t.cancel()
+
+
+# ---------------------------------------------------------------------------
 # Per-message pipeline
 # ---------------------------------------------------------------------------
 
-async def _handle_message(ws: WebSocket, data: dict) -> None:
+async def _handle_message(
+    ws: WebSocket, data: dict, state: "_TurnState",
+) -> None:
     user_id  = (data.get("user_id") or "").strip() or _default_user_id()
     msg_type = data.get("type", "text")
 
@@ -434,6 +538,10 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
     incoming_conv: Optional[int] = int(raw_conv) if raw_conv is not None else None
     incoming_char: Optional[int] = int(raw_char) if raw_char is not None else None
     conv_id, char_id = await _resolve_conv_char(user_id, incoming_conv, incoming_char)
+
+    # 把可见信息写入 state，让打断收尾能找到 conv / char / user_text
+    state.conv_id = conv_id
+    state.char_id = char_id
 
     user_history_already_written = False
 
@@ -466,6 +574,7 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
                         )
                         asr_message_id = row.id
                     user_history_already_written = True
+                    state.user_history_already_written = True
                 except Exception:
                     logger.exception("ASR chat_history persist failed for user %s", user_id)
             await ws.send_json({
@@ -479,6 +588,9 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
         if not text:
             await ws.send_json({"type": "error", "message": "Empty input"})
             return
+
+        # 让打断收尾能拿到这一轮的 user 文本
+        state.user_text = text
 
         # ── 2. ChatAgent stream + TTS ────────────────────────────────────────
         # v3-C：直接走 ChatAgent，意图识别 / 记忆 tool / 内置工具调度全部
@@ -523,7 +635,8 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
             },
         }
 
-        reply_parts: List[str] = []
+        # reply_parts 用 state 提供的 list —— 打断收尾从同一个 list 读已生成内容
+        reply_parts: List[str] = state.reply_parts
         chat_t0 = time.perf_counter()
         first_chunk_logged = False
         sentence_idx = 0
@@ -531,9 +644,10 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
 
         # v3-F #3：TTS 并发合成 + 顺序播放
         # producer 把每句的 synth task 放进 audio_queue；consumer 按入队顺序
-        # await 后 send audio_chunk。pending_tts 持引用便于异常时统一 cancel。
+        # await 后 send audio_chunk。pending_tts 也写到 state，让打断 handler
+        # 能从外部 cancel 它们。
         audio_queue: "asyncio.Queue[Optional[asyncio.Task[Optional[bytes]]]]" = asyncio.Queue()
-        pending_tts: List[asyncio.Task] = []
+        pending_tts: List[asyncio.Task] = state.pending_tts
 
         async def _send_audio(audio: bytes) -> None:
             audio_b64 = base64.b64encode(audio).decode()
@@ -622,19 +736,26 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
                 ws_send_count, len(pending_tts),
             )
 
+        except asyncio.CancelledError:
+            # v3-F #4：被打断 —— consumer 与 pending TTS 在 finally 统一 cancel；
+            # 重新抛出由 _handle_message_safe 捕获后做 DB 收尾 + send done。
+            raise
         except Exception as exc:
             logger.exception("ChatAgent stream error for user %s", user_id)
-            # 取消所有 pending TTS / consumer，避免悬挂任务
-            for t in pending_tts:
-                if not t.done():
-                    t.cancel()
-            if consumer_task is not None and not consumer_task.done():
-                consumer_task.cancel()
             try:
                 await ws.send_json({"type": "error", "message": str(exc)})
             except Exception:
                 pass
             return
+        finally:
+            # 无论正常完成 / 异常 / 打断，都把 consumer 与 pending TTS 收掉，
+            # 避免悬挂 task。正常完成时 consumer 已 await 过；done 后再 cancel
+            # idempotent。
+            if consumer_task is not None and not consumer_task.done():
+                consumer_task.cancel()
+            for t in pending_tts:
+                if not t.done():
+                    t.cancel()
 
         await ws.send_json({"type": "done"})
 
@@ -652,6 +773,52 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
 
+
+async def _handle_message_safe(
+    ws: WebSocket, data: dict, state: "_TurnState", user_id: str,
+) -> None:
+    """``_handle_message`` 的安全包装，专为被外部 cancel 设计。
+
+    打断路径：``_request_interrupt`` 调 ``state.current_turn.cancel()`` →
+    CancelledError 在 ``_handle_message`` 的下一个 await 抛出 → 经 finally
+    取消所有 TTS task 后传到这里 → 把 partial reply 写 DB 标
+    ``interrupted_at`` → 发 ``{"type":"done","interrupted":true}``。
+
+    成功路径：``_handle_message`` 自己发 ``done``。这里只负责异常分流。
+    """
+    try:
+        await _handle_message(ws, data, state)
+    except asyncio.CancelledError:
+        # 把当前 task 的 cancellation 状态清掉，让后面 cleanup 的 await 不被
+        # 二次 cancel（Python 3.11+ 才有 uncancel；3.10 及以下 task.cancel
+        # 本来就只触发一次 CancelledError，无需特殊处理）
+        try:
+            asyncio.current_task().uncancel()  # type: ignore[union-attr]
+        except (AttributeError, RuntimeError):
+            pass
+
+        try:
+            await _save_interrupted_turn(state, user_id)
+        except Exception:
+            logger.exception(
+                "save interrupted turn failed for user=%s", user_id,
+            )
+        try:
+            await ws.send_json({"type": "done", "interrupted": True})
+        except Exception:
+            pass
+        # 不再 re-raise —— turn 至此安全收尾
+    except WebSocketDisconnect:
+        # 端点循环会在下次 receive_json 时再触发
+        pass
+    except Exception as exc:
+        logger.exception("Unhandled error in _handle_message")
+        try:
+            await ws.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     """Stream-based conversation endpoint.
@@ -659,25 +826,51 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     Clients send one JSON message per turn; the server streams back
     text_chunk / audio_chunk frames and closes with a done frame.
     The connection stays open for multiple turns.
+
+    v3-F #4: turn 在独立 task 内运行，main loop 维持空闲以便随时接收
+    ``{"type":"interrupt"}``。收到 interrupt 时 cancel 当前 turn task +
+    所有 pending TTS task。``_handle_message_safe`` 兜底做 DB 收尾。
     """
     await websocket.accept()
     user_id = _default_user_id()
     connection_manager.register(user_id, websocket)
+    state = _TurnState()
     logger.info("WebSocket connection opened")
     try:
         while True:
             data: dict = await websocket.receive_json()
-            try:
-                await _handle_message(websocket, data)
-            except WebSocketDisconnect:
-                raise                        # propagate to outer handler
-            except Exception as exc:
-                logger.exception("Unhandled error in _handle_message")
+            msg_type = data.get("type")
+
+            # ── interrupt：异步触发，不 await turn 结束 ─────────────────────
+            if msg_type == "interrupt":
+                logger.info("[interrupt] received user=%s", user_id)
+                _request_interrupt(state)
+                continue
+
+            # ── 新一轮：若上一轮还没结束（比如客户端没等 done 直接发了下条）
+            #    保险起见先 cancel 上一轮，避免两个 turn 抢 ws 写入。
+            if state.current_turn is not None and not state.current_turn.done():
+                logger.warning(
+                    "[ws] new turn arrived while previous still running, cancelling"
+                )
+                state.current_turn.cancel()
                 try:
-                    await websocket.send_json({"type": "error", "message": str(exc)})
-                except Exception:
+                    await state.current_turn
+                except (asyncio.CancelledError, Exception):
                     pass
+
+            state.reset_for_new_turn()
+            state.current_turn = asyncio.create_task(
+                _handle_message_safe(websocket, data, state, user_id)
+            )
+            # 不 await —— 让 receive_json 继续监听 interrupt
     except WebSocketDisconnect:
         logger.info("WebSocket connection closed")
     finally:
+        # 连接关闭时把还在跑的 turn / TTS 收掉
+        if state.current_turn is not None and not state.current_turn.done():
+            state.current_turn.cancel()
+        for t in list(state.pending_tts):
+            if not t.done():
+                t.cancel()
         connection_manager.unregister(user_id)

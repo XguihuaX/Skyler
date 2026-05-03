@@ -15,7 +15,7 @@ export default function ChatInput() {
   const ttsEnabled   = useAppStore((s) => s.ttsEnabled);
   const currentThinking = useAppStore((s) => s.currentThinking);
 
-  const { sendText, startManual, stopManualAndSend, toggleVad } = useAppApi();
+  const { sendText, sendInterrupt, startManual, stopManualAndSend, toggleVad } = useAppApi();
 
   const handleTts = () => {
     const next = !ttsEnabled;
@@ -47,8 +47,8 @@ export default function ChatInput() {
   };
 
   const handleInterrupt = () => {
-    // 占位行为（模块 4 语义，真实打断在 v3/v4 实装）
-    useAppStore.getState().setStatus('interrupted');
+    // v3-F #4：真正打断 —— 后端取消 LLM stream + TTS，前端立即停播放
+    sendInterrupt();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -68,6 +68,20 @@ export default function ChatInput() {
     >
       <StatusBadge status={status} />
 
+      {/* v3-F #4: 打断按钮 —— thinking / speaking 时可按 */}
+      <button
+        className="w-9 h-9 rounded-full flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed"
+        style={{
+          background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
+          color: 'var(--color-text-secondary)',
+        }}
+        onClick={handleInterrupt}
+        disabled={status !== 'speaking' && status !== 'thinking'}
+        title="打断"
+      >
+        <Ban size={18} />
+      </button>
+
       {/* v3-F: AI 内心独白。仅当本轮收到 thinking 时显示，下一轮发送清空 */}
       {currentThinking && (
         <div
@@ -83,20 +97,6 @@ export default function ChatInput() {
           <span className="truncate">{currentThinking}</span>
         </div>
       )}
-      {/* Interrupt — 占位，不在本模块实装 */}
-      <button
-        className="w-9 h-9 rounded-full flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed"
-        style={{
-          background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
-          color: 'var(--color-text-secondary)',
-        }}
-        onClick={handleInterrupt}
-        disabled={status !== 'speaking'}
-        title="打断"
-      >
-        <Ban size={18} />
-      </button>
-
       {/* Text field */}
       <input
         type="text"

@@ -17,11 +17,15 @@ interface WsMessage {
   message_id?: number | null;
   // v3-F: thinking 消息携带的内心独白文本
   value?: string;
+  // v3-F #4: done 消息可能带 interrupted=true 表示这一轮被打断
+  interrupted?: boolean;
 }
 
 interface UseWebSocketReturn {
   sendText: (content: string) => void;
   sendVoice: (audioBase64: string) => void;
+  // v3-F #4：通知后端取消当前 LLM stream + TTS playback
+  sendInterrupt: () => void;
   isConnected: () => boolean;
 }
 
@@ -137,8 +141,9 @@ export function useWebSocket(): UseWebSocketReturn {
       case 'done': {
         const t0 = s.lastSendTimestamp;
         const elapsed = t0 > 0 ? performance.now() - t0 : 0;
+        const interruptedFlag = msg.interrupted === true;
         console.log(
-          `[FRONT] done at ${elapsed.toFixed(0)}ms total_text_chunks=${textChunkCountRef.current}`,
+          `[FRONT] done at ${elapsed.toFixed(0)}ms total_text_chunks=${textChunkCountRef.current} interrupted=${interruptedFlag}`,
         );
         textChunkCountRef.current = 0;
 
@@ -148,8 +153,20 @@ export function useWebSocket(): UseWebSocketReturn {
           s.setStreamingMessageId(null);
         }
 
-        // 若无 audio_chunk（纯文字回复），状态在 thinking 卡住，这里兜底
-        if (s.status === 'thinking') {
+        // v3-F #4：清空音频播放队列，立即停下当前正在播的句
+        audioQueueRef.current = [];
+        if (s.muteWhileSpeaking && s.micMuted) s.setMicMuted(false);
+
+        if (interruptedFlag) {
+          // 标 'interrupted' 视觉，1.5s 后回 idle（保留视觉反馈给用户）
+          s.setStatus('interrupted');
+          window.setTimeout(() => {
+            const cur = useAppStore.getState().status;
+            // 若期间用户又开了新一轮，不要把它从 thinking 拽回 idle
+            if (cur === 'interrupted') useAppStore.getState().setStatus('idle');
+          }, 1500);
+        } else if (s.status === 'thinking') {
+          // 纯文字回复（无 audio_chunk）会卡 thinking，这里兜底
           s.setStatus('idle');
         }
         break;
@@ -297,9 +314,36 @@ export function useWebSocket(): UseWebSocketReturn {
     }));
   }, [store]);
 
+  const sendInterrupt = useCallback(() => {
+    const ws = wsRef.current;
+    const s = store.getState();
+
+    // 本地立即生效：清音频播放队列，标 streaming 收尾，UI 切 interrupted。
+    // 后端那边 await receive_json 会拿到 {"type":"interrupt"}，我们不等
+    // 后端 done 才停播放——延迟太大体感差。
+    audioQueueRef.current = [];
+    if (s.streamingMessageId !== null) {
+      s.finishChatMessage(s.streamingMessageId);
+      s.setStreamingMessageId(null);
+    }
+    if (s.muteWhileSpeaking && s.micMuted) s.setMicMuted(false);
+    s.setStatus('interrupted');
+    window.setTimeout(() => {
+      const cur = useAppStore.getState().status;
+      if (cur === 'interrupted') useAppStore.getState().setStatus('idle');
+    }, 1500);
+
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('[WS] not connected, drop interrupt (local-only)');
+      return;
+    }
+    console.log('[FRONT] send interrupt');
+    ws.send(JSON.stringify({ type: 'interrupt' }));
+  }, [store]);
+
   const isConnected = useCallback(() => {
     return wsRef.current?.readyState === WebSocket.OPEN;
   }, []);
 
-  return { sendText, sendVoice, isConnected };
+  return { sendText, sendVoice, sendInterrupt, isConnected };
 }
