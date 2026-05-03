@@ -93,6 +93,99 @@ connection_manager = ConnectionManager()
 
 _chat_agent = ChatAgent()
 
+
+# ---------------------------------------------------------------------------
+# v3-F #3：TTS 多段并发合成
+#
+# - 句子从 ChatAgent.stream 出来，立即推 text_chunk 给前端，并 spawn 一个
+#   asyncio.Task 做 synthesize；task 进 ordered queue。
+# - 单独的 consumer task 顺序 await queue，保证音频按句序发送（前端按到达
+#   顺序入播放队列）。
+# - 信号量控制并发上限，避免被 cosyvoice 限流；超时返回 None 跳过。
+# - emotion 整轮锁定（first sentence 决定后所有 task 共用同一 turn_emotion）。
+# ---------------------------------------------------------------------------
+
+TTS_CONCURRENCY = 3
+TTS_TIMEOUT_S = 10.0
+_tts_semaphore = asyncio.Semaphore(TTS_CONCURRENCY)
+
+
+from typing import Awaitable, Callable
+
+# audio_sender 接口：consumer 把成功合成的 wav bytes 交给 sender，
+# 真实路径下封 base64 后 ws.send_json({"type":"audio_chunk",...})；
+# 测试可以塞个直接 append 到 list 的 sender。
+AudioSender = Callable[[bytes], Awaitable[None]]
+
+
+async def _tts_synth_with_timeout(
+    engine,  # backend.tts.base.TTSBase
+    text: str,
+    emotion: str,
+    *,
+    idx: int = 0,
+    sem: asyncio.Semaphore = _tts_semaphore,
+    timeout: float = TTS_TIMEOUT_S,
+) -> Optional[bytes]:
+    """节流 + 超时 + 异常兜底的单句合成。
+
+    返回 None 表示本句失败 / 超时，consumer 应跳过。CancelledError 透传，
+    便于打断（v3-F #4）外部 ``task.cancel()`` 立即生效。
+    """
+    t0 = time.perf_counter()
+    async with sem:
+        try:
+            audio = await asyncio.wait_for(
+                engine.synthesize(text, emotion=emotion),
+                timeout=timeout,
+            )
+            timing_logger.info(
+                "[TIME] TTS #%d: %.0fms len=%d",
+                idx, (time.perf_counter() - t0) * 1000, len(text),
+            )
+            return audio
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[TTS] timeout %.1fs idx=%d sentence=%r",
+                timeout, idx, text[:30],
+            )
+            return None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "[TTS] error idx=%d: %s sentence=%r",
+                idx, exc, text[:30],
+            )
+            return None
+
+
+async def _tts_audio_consumer(
+    queue: "asyncio.Queue[Optional[asyncio.Task[Optional[bytes]]]]",
+    sender: AudioSender,
+) -> None:
+    """按 FIFO 顺序 await 队列里的 task；非空 audio 交给 sender。
+
+    sender 异常 → 记录后继续（避免 producer 端阻塞）。``None`` 哨兵 → 退出。
+    CancelledError 透传，外部 cancel 立即生效。
+    """
+    while True:
+        item = await queue.get()
+        if item is None:
+            return
+        try:
+            audio = await item
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            audio = None
+        if not audio:
+            continue
+        try:
+            await sender(audio)
+        except Exception as send_exc:
+            logger.warning("[TTS] audio sender failed: %s", send_exc)
+
 # ---------------------------------------------------------------------------
 # profile_summary background regeneration (V2.5-D)
 #
@@ -435,8 +528,24 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
         first_chunk_logged = False
         sentence_idx = 0
         ws_send_count = 0
+
+        # v3-F #3：TTS 并发合成 + 顺序播放
+        # producer 把每句的 synth task 放进 audio_queue；consumer 按入队顺序
+        # await 后 send audio_chunk。pending_tts 持引用便于异常时统一 cancel。
+        audio_queue: "asyncio.Queue[Optional[asyncio.Task[Optional[bytes]]]]" = asyncio.Queue()
+        pending_tts: List[asyncio.Task] = []
+
+        async def _send_audio(audio: bytes) -> None:
+            audio_b64 = base64.b64encode(audio).decode()
+            await ws.send_json({"type": "audio_chunk", "content": audio_b64})
+
+        consumer_task: Optional[asyncio.Task] = None
         try:
             with timed("ChatAgent total"):
+                consumer_task = asyncio.create_task(
+                    _tts_audio_consumer(audio_queue, _send_audio)
+                )
+
                 async for sentence in _chat_agent.stream(chat_msg):
                     if not first_chunk_logged:
                         timing_logger.info(
@@ -455,7 +564,7 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
                             turn_emotion,
                         )
 
-                    # v3-F：剥离 <thinking>...</thinking> 内心独白；命中后单独 push
+                    # v3-F #2：剥离 <thinking>...</thinking> 内心独白；命中后单独 push
                     # 一次。chat.py 的 _safe_boundary 保证 thinking 块不会被
                     # sentence-stream 切开，所以同一句里看到完整闭合标签。
                     thinking_value, sentence = _parse_thinking(sentence)
@@ -477,39 +586,54 @@ async def _handle_message(ws: WebSocket, data: dict) -> None:
                     reply_parts.append(sentence)
                     sentence_idx += 1
 
-                    # Send text immediately — per-send timer to spot WS push backpressure.
+                    # 立即推送 text_chunk —— 不等 audio
                     payload = {"type": "text_chunk", "content": sentence}
                     payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                     ws_send_count += 1
                     with timed(f"WS send chunk #{sentence_idx} bytes={payload_bytes}"):
                         await ws.send_json(payload)
 
-                    # TTS — best-effort, never blocks text delivery.
-                    # engine.synthesize 内部已 try/except，失败返回 None。
+                    # v3-F #3：spawn TTS task 并入队；并发由 _tts_semaphore 节流，
+                    # consumer 按入队顺序 await，保证 audio_chunk 顺序播放。
+                    # turn_emotion 整轮一致；synthesize 内部 + _synth_one 双层
+                    # try/except，永远不会抛到 producer。
                     if get_tts_enabled():
-                        try:
-                            with timed(f"TTS sentence #{sentence_idx}"):
-                                audio_bytes = await tts_engine.synthesize(
-                                    sentence, emotion=turn_emotion,
-                                )
-                            if audio_bytes:
-                                audio_b64 = base64.b64encode(audio_bytes).decode()
-                                await ws.send_json({"type": "audio_chunk", "content": audio_b64})
-                        except Exception as tts_exc:
-                            logger.warning(
-                                "TTS skipped for sentence (%s): %s",
-                                sentence[:20], tts_exc,
+                        task = asyncio.create_task(
+                            _tts_synth_with_timeout(
+                                tts_engine, sentence, turn_emotion,
+                                idx=sentence_idx,
                             )
+                        )
+                        pending_tts.append(task)
+                        await audio_queue.put(task)
+
+                # producer 结束：投递 None 哨兵让 consumer 退出
+                await audio_queue.put(None)
+                # 等 consumer 把所有 audio_chunk 发完，再发 done
+                await consumer_task
+                consumer_task = None
 
             timing_logger.info(
                 "[TIME] Chat total: %.0fms",
                 (time.perf_counter() - chat_t0) * 1000,
             )
-            timing_logger.info("WS text_chunk sends: %d", ws_send_count)
+            timing_logger.info(
+                "WS text_chunk sends: %d, TTS tasks: %d",
+                ws_send_count, len(pending_tts),
+            )
 
         except Exception as exc:
             logger.exception("ChatAgent stream error for user %s", user_id)
-            await ws.send_json({"type": "error", "message": str(exc)})
+            # 取消所有 pending TTS / consumer，避免悬挂任务
+            for t in pending_tts:
+                if not t.done():
+                    t.cancel()
+            if consumer_task is not None and not consumer_task.done():
+                consumer_task.cancel()
+            try:
+                await ws.send_json({"type": "error", "message": str(exc)})
+            except Exception:
+                pass
             return
 
         await ws.send_json({"type": "done"})

@@ -561,6 +561,198 @@ async def test_manager_preprocess_skips_empty_sentence():
 
 
 # ---------------------------------------------------------------------------
+# 6.d v3-F #3: concurrent TTS pipeline (_tts_synth_with_timeout +
+#              _tts_audio_consumer)
+# ---------------------------------------------------------------------------
+
+import time as _time
+
+from backend.routes.ws import (
+    _tts_synth_with_timeout,
+    _tts_audio_consumer,
+)
+
+
+class _DelayEngine(TTSBase):
+    """每次 synthesize 延迟 *delay* 秒后返回 ``label`` 字节序列。
+
+    用于测试：并发执行（多个 in-flight）+ 顺序播放（FIFO consumer）。
+    label 唯一，便于按字节判断顺序。
+    """
+
+    def __init__(self, plan: list) -> None:
+        # plan: List[(label_byte, delay_seconds, mode)]; mode in {'ok','raise','sleep_long'}
+        self._plan = list(plan)
+        self.calls: list = []
+
+    async def synthesize(self, text, emotion="默认"):
+        idx = len(self.calls)
+        self.calls.append((text, emotion, _time.perf_counter()))
+        if idx >= len(self._plan):
+            return b"X"
+        label, delay, mode = self._plan[idx]
+        if mode == "sleep_long":
+            # 睡得比超时还久；调用方 wait_for 会先 cancel
+            await asyncio.sleep(delay)
+            return bytes([label])
+        if mode == "raise":
+            await asyncio.sleep(delay)
+            raise RuntimeError(f"synth {label} broken")
+        await asyncio.sleep(delay)
+        return bytes([label])
+
+
+async def _drive_pipeline(
+    engine: TTSBase,
+    sentences: list,         # List[(text, emotion)]
+    *,
+    timeout: float = 10.0,
+    sem_size: int = 3,
+) -> list:
+    """在测试里跑一遍 producer/consumer 模式，返回 sender 收到的音频列表。
+
+    producer 顺序 spawn _tts_synth_with_timeout task → put queue；末尾投 None。
+    consumer 顺序 await 后调 sender。
+    """
+    sem = asyncio.Semaphore(sem_size)
+    queue: "asyncio.Queue" = asyncio.Queue()
+    received: list = []
+
+    async def sender(audio: bytes) -> None:
+        received.append(audio)
+
+    consumer = asyncio.create_task(_tts_audio_consumer(queue, sender))
+
+    for idx, (text, emotion) in enumerate(sentences, start=1):
+        t = asyncio.create_task(
+            _tts_synth_with_timeout(
+                engine, text, emotion, idx=idx, sem=sem, timeout=timeout,
+            )
+        )
+        await queue.put(t)
+    await queue.put(None)
+    await consumer
+    return received
+
+
+async def test_concurrent_tts_preserves_order():
+    print("\n[TTS pipeline — order preserved despite concurrency]")
+    # 3 句，每句返回不同 label，第 1 句最慢；并发跑也要按 1,2,3 顺序送达
+    engine = _DelayEngine([
+        (1, 0.20, "ok"),
+        (2, 0.05, "ok"),
+        (3, 0.05, "ok"),
+    ])
+    t0 = _time.perf_counter()
+    received = await _drive_pipeline(engine, [
+        ("句一", "happy"),
+        ("句二", "happy"),
+        ("句三", "happy"),
+    ])
+    elapsed = _time.perf_counter() - t0
+
+    check("3 audios delivered", len(received) == 3)
+    check("order = 1,2,3 (FIFO)",
+          received == [b"\x01", b"\x02", b"\x03"])
+    # 并行：3 句串行需 ~0.30s，并发 3 应 < 0.30 (~0.20 主导)
+    check(f"runtime concurrent (~0.20s, got {elapsed:.2f}s)",
+          elapsed < 0.30)
+
+
+async def test_concurrent_tts_preserves_emotion_per_call():
+    print("\n[TTS pipeline — emotion forwarded per call]")
+    engine = _DelayEngine([(1, 0.01, "ok"), (2, 0.01, "ok")])
+    await _drive_pipeline(engine, [
+        ("句一", "happy"),
+        ("句二", "happy"),  # 整轮一致
+    ])
+    emotions = [e for _, e, _ in engine.calls]
+    check("both calls got 'happy'", emotions == ["happy", "happy"])
+
+
+async def test_concurrent_tts_skips_failed_sentence():
+    print("\n[TTS pipeline — exception in synth → skipped]")
+    engine = _DelayEngine([
+        (1, 0.01, "ok"),
+        (2, 0.01, "raise"),
+        (3, 0.01, "ok"),
+    ])
+    received = await _drive_pipeline(engine, [
+        ("句一", "默认"),
+        ("句二", "默认"),
+        ("句三", "默认"),
+    ])
+    check("2 audios delivered (failed one skipped)",
+          received == [b"\x01", b"\x03"])
+
+
+async def test_concurrent_tts_timeout_skips():
+    print("\n[TTS pipeline — timeout → None → skipped]")
+    engine = _DelayEngine([
+        (1, 0.01, "ok"),
+        (2, 0.50, "sleep_long"),  # 睡 0.5s，超时设 0.1s
+        (3, 0.01, "ok"),
+    ])
+    received = await _drive_pipeline(
+        engine,
+        [("句一", "默认"), ("句二", "默认"), ("句三", "默认")],
+        timeout=0.10,
+    )
+    check("timed-out sentence dropped, others kept",
+          received == [b"\x01", b"\x03"])
+
+
+async def test_concurrent_tts_semaphore_limits_inflight():
+    print("\n[TTS pipeline — semaphore limits concurrency]")
+    # 5 句各睡 0.20s，sem=2 → 串行批次 ≈ 3 批 → ~0.60s；sem=5 应 ~0.20s
+    sentences = [(f"s{i}", "默认") for i in range(5)]
+
+    engine_sem2 = _DelayEngine([(i + 1, 0.20, "ok") for i in range(5)])
+    t0 = _time.perf_counter()
+    await _drive_pipeline(engine_sem2, sentences, sem_size=2)
+    elapsed_sem2 = _time.perf_counter() - t0
+
+    engine_sem5 = _DelayEngine([(i + 1, 0.20, "ok") for i in range(5)])
+    t0 = _time.perf_counter()
+    await _drive_pipeline(engine_sem5, sentences, sem_size=5)
+    elapsed_sem5 = _time.perf_counter() - t0
+
+    check(f"sem=5 faster than sem=2 ({elapsed_sem5:.2f}s < {elapsed_sem2:.2f}s)",
+          elapsed_sem5 < elapsed_sem2 - 0.10)
+    check(f"sem=2 ≥ ~0.55s (3 batches @ 0.20s, got {elapsed_sem2:.2f}s)",
+          elapsed_sem2 > 0.55)
+
+
+async def test_consumer_handles_sender_failure():
+    print("\n[TTS pipeline — sender exception logged, doesn't break others]")
+    engine = _DelayEngine([(1, 0.01, "ok"), (2, 0.01, "ok"), (3, 0.01, "ok")])
+    sem = asyncio.Semaphore(3)
+    queue: "asyncio.Queue" = asyncio.Queue()
+    delivered: list = []
+    fail_call = {"count": 0}
+
+    async def flaky_sender(audio: bytes) -> None:
+        fail_call["count"] += 1
+        if fail_call["count"] == 2:
+            raise IOError("ws closed")
+        delivered.append(audio)
+
+    consumer = asyncio.create_task(_tts_audio_consumer(queue, flaky_sender))
+    for idx, (text, emotion) in enumerate(
+        [("a", "默认"), ("b", "默认"), ("c", "默认")], start=1,
+    ):
+        t = asyncio.create_task(
+            _tts_synth_with_timeout(engine, text, emotion, idx=idx, sem=sem)
+        )
+        await queue.put(t)
+    await queue.put(None)
+    await consumer
+
+    check("sender failure on #2 doesn't kill consumer",
+          delivered == [b"\x01", b"\x03"])
+
+
+# ---------------------------------------------------------------------------
 # 7. Module singleton
 # ---------------------------------------------------------------------------
 
@@ -608,6 +800,13 @@ async def main():
     await test_preprocessing_engine_passthrough_clean_text()
     await test_manager_preprocess_strips_action()
     await test_manager_preprocess_skips_empty_sentence()
+    # v3-F #3 concurrent TTS pipeline
+    await test_concurrent_tts_preserves_order()
+    await test_concurrent_tts_preserves_emotion_per_call()
+    await test_concurrent_tts_skips_failed_sentence()
+    await test_concurrent_tts_timeout_skips()
+    await test_concurrent_tts_semaphore_limits_inflight()
+    await test_consumer_handles_sender_failure()
     await test_singleton()
 
     total  = len(results)
