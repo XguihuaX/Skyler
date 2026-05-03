@@ -8,6 +8,8 @@
 >
 > *Project formerly known as MomoOS — rebranded to Skyler in 2026-05.*
 
+🌐 **Languages**: **English** · [简体中文](README.zh-CN.md)
+
 ---
 
 ## What is Skyler?
