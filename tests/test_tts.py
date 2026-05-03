@@ -9,10 +9,15 @@ import backend.tts.edge   as _edge_mod
 import backend.tts.sovits as _sovits_mod
 import backend.tts        as _tts_mod
 
-from backend.tts.base   import split_sentences, TTSProvider
+from backend.tts.base   import split_sentences, TTSProvider, TTSBase
 from backend.tts.edge   import EdgeTTSProvider, _VOICE_MAP
 from backend.tts.sovits import SoVITSProvider, _VOICE_PRESETS, _build_payload
-from backend.tts        import TTSManager, tts_manager
+from backend.tts        import (
+    TTSManager,
+    tts_manager,
+    preprocess_tts_text,
+    _PreprocessingEngine,
+)
 
 PASS = "\033[92m[PASS]\033[0m"
 FAIL = "\033[91m[FAIL]\033[0m"
@@ -378,7 +383,185 @@ def test_voice_presets_coverage():
 
 
 # ---------------------------------------------------------------------------
-# 6. Module singleton
+# 6. v3-F preprocess_tts_text
+# ---------------------------------------------------------------------------
+
+def test_preprocess_passthrough():
+    print("\n[preprocess_tts_text — passthrough]")
+    check("plain Chinese unchanged",
+          preprocess_tts_text("你好世界") == "你好世界")
+    check("Chinese with punct unchanged",
+          preprocess_tts_text("你好！世界？") == "你好！世界？")
+    check("plain English unchanged",
+          preprocess_tts_text("Hello world") == "Hello world")
+
+
+def test_preprocess_strips_action():
+    print("\n[preprocess_tts_text — *action* 动作描述]")
+    check("strips *笑*",
+          preprocess_tts_text("*笑* 你好") == "你好")
+    check("strips multiple actions",
+          preprocess_tts_text("*抬头* 嗨 *微笑*") == "嗨")
+    check("strips embedded action",
+          preprocess_tts_text("早上好*伸了个懒腰*再见") == "早上好再见")
+    check("preserves * in middle when unpaired",
+          preprocess_tts_text("a*b") == "a*b")
+
+
+def test_preprocess_strips_parens():
+    print("\n[preprocess_tts_text — (注释) 括号]")
+    check("strips ASCII parens",
+          preprocess_tts_text("你好(悄声)再见") == "你好再见")
+    check("strips Chinese parens",
+          preprocess_tts_text("你好（轻声）再见") == "你好再见")
+    check("strips ASCII brackets",
+          preprocess_tts_text("[标记]你好") == "你好")
+    check("strips Chinese brackets",
+          preprocess_tts_text("【提示】你好") == "你好")
+    check("multiple kinds combined",
+          preprocess_tts_text("(注释)你好（备注）[mark]【标签】结束")
+          == "你好结束")
+
+
+def test_preprocess_strips_emotion_motion():
+    print("\n[preprocess_tts_text — emotion / motion 标签]")
+    check("strips <emotion>X</emotion>",
+          preprocess_tts_text("<emotion>开心</emotion>今天天气真好")
+          == "今天天气真好")
+    check("strips <motion>X</motion>",
+          preprocess_tts_text("<motion>wave</motion>你好") == "你好")
+    check("case insensitive emotion",
+          preprocess_tts_text("<EMOTION>happy</EMOTION>hi") == "hi")
+    check("strips both in one line",
+          preprocess_tts_text("<emotion>happy</emotion><motion>nod</motion>嗨")
+          == "嗨")
+
+
+def test_preprocess_strips_thinking():
+    print("\n[preprocess_tts_text — <thinking> 多行]")
+    check("strips single-line thinking",
+          preprocess_tts_text("<thinking>该说什么呢</thinking>你好")
+          == "你好")
+    check("strips multi-line thinking",
+          preprocess_tts_text(
+              "<thinking>该\n说\n什么</thinking>你好"
+          ) == "你好")
+    check("strips thinking with inner *action*",
+          preprocess_tts_text(
+              "<thinking>*想想* 该说什么</thinking>你好"
+          ) == "你好")
+    check("non-greedy across two thinking blocks",
+          preprocess_tts_text(
+              "<thinking>A</thinking>正文<thinking>B</thinking>结尾"
+          ) == "正文结尾")
+
+
+def test_preprocess_returns_empty_when_unspeakable():
+    print("\n[preprocess_tts_text — 空 / 仅标点 / 仅标记]")
+    check("empty string → ''",
+          preprocess_tts_text("") == "")
+    check("whitespace → ''",
+          preprocess_tts_text("   \n  ") == "")
+    check("only punctuation → ''",
+          preprocess_tts_text("。。！？") == "")
+    check("only action → ''",
+          preprocess_tts_text("*笑了笑*") == "")
+    check("only thinking → ''",
+          preprocess_tts_text("<thinking>内心活动</thinking>") == "")
+    check("action + punct → ''",
+          preprocess_tts_text("*笑*。。。") == "")
+    check("emotion tag only → ''",
+          preprocess_tts_text("<emotion>happy</emotion>") == "")
+
+
+def test_preprocess_mixed_realistic():
+    print("\n[preprocess_tts_text — 真实 LLM 输出形态]")
+    raw = (
+        "<emotion>开心</emotion>"
+        "<thinking>用户在打招呼，回应一下</thinking>"
+        "*微笑* 你好呀！(轻声)今天过得怎么样？"
+    )
+    check("strips all tags + actions, keeps prose",
+          preprocess_tts_text(raw) == "你好呀！今天过得怎么样？")
+
+
+# ---------------------------------------------------------------------------
+# 6.b _PreprocessingEngine integration
+# ---------------------------------------------------------------------------
+
+class _CapturingEngine(TTSBase):
+    """记录 synthesize 收到了什么，固定返回一段假音频。"""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    async def synthesize(self, text, emotion="默认"):
+        self.calls.append((text, emotion))
+        return b"AUDIO" if text else None
+
+
+async def test_preprocessing_engine_strips_before_synth():
+    print("\n[_PreprocessingEngine — 剥离后再调下游]")
+    inner = _CapturingEngine()
+    eng = _PreprocessingEngine(inner)
+    result = await eng.synthesize("*笑*你好(悄声)！", emotion="开心")
+    check("returned audio", result == b"AUDIO")
+    check("inner saw cleaned text",
+          inner.calls and inner.calls[0][0] == "你好！")
+    check("emotion preserved",
+          inner.calls and inner.calls[0][1] == "开心")
+
+
+async def test_preprocessing_engine_skips_when_empty():
+    print("\n[_PreprocessingEngine — 空文本跳过下游]")
+    inner = _CapturingEngine()
+    eng = _PreprocessingEngine(inner)
+    result = await eng.synthesize("*只有动作*", emotion="默认")
+    check("returned None", result is None)
+    check("inner not called", inner.calls == [])
+
+    result2 = await eng.synthesize("<thinking>X</thinking>", emotion="默认")
+    check("thinking-only → None", result2 is None)
+    check("inner still not called", inner.calls == [])
+
+
+async def test_preprocessing_engine_passthrough_clean_text():
+    print("\n[_PreprocessingEngine — 干净文本直通]")
+    inner = _CapturingEngine()
+    eng = _PreprocessingEngine(inner)
+    await eng.synthesize("你好世界！", emotion="默认")
+    check("inner saw exact text",
+          inner.calls and inner.calls[0][0] == "你好世界！")
+
+
+# ---------------------------------------------------------------------------
+# 6.c TTSManager integrates preprocess in legacy path
+# ---------------------------------------------------------------------------
+
+async def test_manager_preprocess_strips_action():
+    print("\n[TTSManager — 旧路径剥离 *动作*]")
+    mgr = _make_manager(sovits_ok=False, edge_audio=b"OK")
+    await mgr.synthesize("*笑*你好。", "默认")
+    check("edge saw cleaned text",
+          mgr._edge.calls and mgr._edge.calls[0][0] == "你好。")
+
+
+async def test_manager_preprocess_skips_empty_sentence():
+    print("\n[TTSManager — 仅动作的句子被跳过]")
+    mgr = _make_manager(sovits_ok=False, edge_audio=b"X")
+    # split_sentences 切成 ["*笑*。", "你好。"]，第一句被预处理掉
+    result = await mgr.synthesize("*笑*。你好。", "默认")
+    # 只调用一次，第一句剥后为空跳过
+    check("only one synth call",
+          len(mgr._edge.calls) == 1)
+    check("the call was the speakable sentence",
+          mgr._edge.calls[0][0] == "你好。")
+    check("audio for one sentence",
+          result == b"X")
+
+
+# ---------------------------------------------------------------------------
+# 7. Module singleton
 # ---------------------------------------------------------------------------
 
 async def test_singleton():
@@ -412,6 +595,19 @@ async def main():
     await test_manager_stream()
     await test_manager_stream_empty()
     test_voice_presets_coverage()
+    # v3-F preprocess
+    test_preprocess_passthrough()
+    test_preprocess_strips_action()
+    test_preprocess_strips_parens()
+    test_preprocess_strips_emotion_motion()
+    test_preprocess_strips_thinking()
+    test_preprocess_returns_empty_when_unspeakable()
+    test_preprocess_mixed_realistic()
+    await test_preprocessing_engine_strips_before_synth()
+    await test_preprocessing_engine_skips_when_empty()
+    await test_preprocessing_engine_passthrough_clean_text()
+    await test_manager_preprocess_strips_action()
+    await test_manager_preprocess_skips_empty_sentence()
     await test_singleton()
 
     total  = len(results)

@@ -9,6 +9,9 @@
   JSON 选择 provider；返回符合 ``TTSBase`` 的实例（``synthesize(text,
   emotion)``）。当前 ws.py 的主路径走这个工厂。
 
+v3-F：所有 ``synthesize`` 调用前会经 ``preprocess_tts_text`` 剥离不读出口
+的标记（``*动作*`` / ``(注释)`` / ``<emotion>`` / ``<thinking>`` 等）。
+
 Usage::
 
     from backend.tts import get_tts_engine
@@ -16,7 +19,8 @@ Usage::
     audio = await engine.synthesize(sentence, emotion="开心")
 """
 import logging
-from typing import AsyncGenerator, Optional
+import re
+from typing import AsyncGenerator, List, Optional, Pattern
 
 from backend.config import get_default_voice_config, settings
 from backend.tts.base import TTSBase, TTSProvider, split_sentences
@@ -25,6 +29,57 @@ from backend.tts.sovits import SoVITSProvider
 from backend.tts.voice_config import VoiceConfig, parse_voice_config
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# v3-F：TTS 文本预处理器
+#
+# LLM 输出常带不应读出的标记：动作描述 *笑了笑*、注释 (悄声)、情感 / 内心独白
+# 标签等。在 synthesize 调用前用一组正则统一剥离，剥后空 / 仅标点 → 跳过合成。
+#
+# 顺序约束：``<thinking>`` 必须先剥（多行，可能包住其他模式），其余顺序无关。
+# ---------------------------------------------------------------------------
+
+# (regex, flags) — 顺序敏感：thinking 跨行最先剥，其余顺序无关。
+_PREPROCESS_PATTERNS: List[Pattern[str]] = [
+    re.compile(r"<thinking>[\s\S]*?</thinking>", re.IGNORECASE),
+    re.compile(r"<emotion>[^<]*</emotion>", re.IGNORECASE),
+    re.compile(r"<motion>[^<]*</motion>", re.IGNORECASE),
+    re.compile(r"\*[^*]+\*"),
+    re.compile(r"\([^)]+\)"),
+    re.compile(r"（[^）]+）"),
+    re.compile(r"\[[^\]]+\]"),
+    re.compile(r"【[^】]+】"),
+]
+
+# Python3 的 \w（str 模式默认 unicode）已覆盖汉字 / 字母 / 数字
+_PRONOUNCEABLE_RE = re.compile(r"\w", re.UNICODE)
+
+# 多余空白合并
+_WS_RE = re.compile(r"[ \t]{2,}")
+
+
+def preprocess_tts_text(text: str) -> str:
+    """剥离不应读出口的标记，返回交给 TTS 合成的纯文本。
+
+    Args:
+        text: LLM 原文，可能含 ``*动作*`` / ``(注释)`` / ``<emotion>`` /
+              ``<thinking>`` 等标记。
+
+    Returns:
+        清理后的文本；如果剥离后为空或仅余标点 / 空白 → 返回 ``""``，
+        调用方应跳过 ``synthesize``。
+    """
+    if not text:
+        return ""
+    out = text
+    for pat in _PREPROCESS_PATTERNS:
+        out = pat.sub("", out)
+    # 行内多空格合并；保留换行（CosyVoice 不在意，且 split_sentences 上游已切句）
+    out = _WS_RE.sub(" ", out).strip()
+    if not out or not _PRONOUNCEABLE_RE.search(out):
+        return ""
+    return out
 
 
 class TTSManager:
@@ -44,15 +99,19 @@ class TTSManager:
 
     async def _synthesize_one(self, sentence: str, character: str) -> bytes:
         """Try SoVITS; fall back to EdgeTTS on any error."""
+        # v3-F：剥离动作 / 注释 / 标签后再合成；空 → 跳过该句返回 b""
+        cleaned = preprocess_tts_text(sentence)
+        if not cleaned:
+            return b""
         if self._sovits_enabled():
             try:
-                return await self._sovits.synthesize(sentence, character)
+                return await self._sovits.synthesize(cleaned, character)
             except Exception as exc:
                 logger.warning(
                     "SoVITS failed (%s), falling back to EdgeTTS for: %r",
-                    exc, sentence,
+                    exc, cleaned,
                 )
-        return await self._edge.synthesize(sentence, character)
+        return await self._edge.synthesize(cleaned, character)
 
     # ------------------------------------------------------------------
     # Public API
@@ -139,17 +198,27 @@ class _LegacyProviderAdapter(TTSBase):
             return None
 
 
-def get_tts_engine(voice_model: Optional[str] = None) -> TTSBase:
-    """根据 character.voice_model JSON 返回对应 TTS 引擎。
+class _PreprocessingEngine(TTSBase):
+    """v3-F：在转交给真实 engine 之前跑 ``preprocess_tts_text``。
 
-    Args:
-        voice_model: characters.voice_model 字段。None / 空串 / 非法 JSON
-                     时退化到 config.yaml 全局默认。
-
-    Returns:
-        实现 ``TTSBase`` 的实例；调用方只需 ``await engine.synthesize(text,
-        emotion=...)``，永远不会抛 (失败返回 None)。
+    剥离后空文本 → 直接返回 None，跳过下游网络调用。所有 ``get_tts_engine``
+    返回的实例都被这一层包住，调用方无需感知。
     """
+
+    def __init__(self, inner: TTSBase) -> None:
+        self._inner = inner
+
+    async def synthesize(
+        self, text: str, emotion: str = "默认",
+    ) -> Optional[bytes]:
+        cleaned = preprocess_tts_text(text)
+        if not cleaned:
+            return None
+        return await self._inner.synthesize(cleaned, emotion=emotion)
+
+
+def _build_engine(voice_model: Optional[str] = None) -> TTSBase:
+    """按 voice_model 构造未包装的真实 engine。"""
     default = VoiceConfig(**get_default_voice_config())
     cfg = parse_voice_config(voice_model, default)
 
@@ -174,3 +243,19 @@ def get_tts_engine(voice_model: Optional[str] = None) -> TTSBase:
         voice=default.voice,
         instruct_supported=default.instruct_supported,
     )
+
+
+def get_tts_engine(voice_model: Optional[str] = None) -> TTSBase:
+    """根据 character.voice_model JSON 返回对应 TTS 引擎。
+
+    Args:
+        voice_model: characters.voice_model 字段。None / 空串 / 非法 JSON
+                     时退化到 config.yaml 全局默认。
+
+    Returns:
+        实现 ``TTSBase`` 的实例；调用方只需 ``await engine.synthesize(text,
+        emotion=...)``，永远不会抛 (失败返回 None)。返回的 engine 自动跑
+        v3-F 文本预处理（剥离 ``*动作*`` / ``(注释)`` / 各种标签），剥后
+        空文本会跳过实际合成直接返回 None。
+    """
+    return _PreprocessingEngine(_build_engine(voice_model))
