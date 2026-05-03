@@ -407,4 +407,24 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
 
 ---
 
-*文档版本：1.1 | 最后更新：2026-05-04（TTS schema + Live2D 拆分版）*
+## 遗留技术债（pre-existing test debt）
+
+下列测试文件在 v3-F 接手前已经断开，import 早已删除 / 改名的符号；与 v3-F 无关，
+未来想跑全套 pytest 之前需要单独修一次。**v3-F 阶段不动**，避免 scope creep。
+
+| 文件 | 失败原因 | 引入版本 |
+|---|---|---|
+| `tests/test_chat_agent.py` | `from backend.database.services import upsert_personality` —— 函数已删 | v2.5-B |
+| `tests/test_database.py` | `from backend.database.services import upsert_personality` —— 同上 | v2.5-B |
+| `tests/test_llm_client.py` | `from backend.config import DEFAULT_MODEL` —— 常量已改名 | v2.5-B |
+| `tests/test_memory_agent.py` | `from backend.agents.memory import _personality_to_dict` —— 已删 | v2.5-B |
+| `tests/test_ws_helpers.py` | `from backend.routes.ws import _run_plan` —— PlannerAgent 简化时移除 | v3-C |
+| `tests/test_memory.py` | 单条断言 `SHORT_TERM_MAX is 20`，当前实际值不同 | v2.5-B |
+| `tests/test_integration.py` | 集成 fixture 期望 `r.json()[0]["tag"]`，路由返回 schema 已变 | v2.5-B |
+
+修复策略（未来）：要么按现有代码补回 / 改名对应符号，要么删掉 / 重写这些测试。
+一次性单 PR：`chore(tests): repair pre-existing test debt from v2.5-B / v3-C`。
+
+---
+
+*文档版本：1.2 | 最后更新：2026-05-04（v3-F 子项 1-3 完成；记录遗留测试债）*
