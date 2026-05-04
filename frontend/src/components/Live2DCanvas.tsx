@@ -1,10 +1,20 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import * as PIXI from 'pixi.js';
-import { Live2DModel } from 'pixi-live2d-display/cubism4';
+import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
+import { useAppApi } from '../contexts/appApi';
 
 // pixi-live2d-display 内部用 window.PIXI 取 Ticker 等共享实例。必须在创建任何
 // Live2DModel 之前完成挂载，否则模型的自动 ticker 不会跑（黑屏 / 不眨眼）。
 (window as unknown as { PIXI: typeof PIXI }).PIXI = PIXI;
+
+// v3-E1 step3：点击防抖窗口（毫秒）
+const TOUCH_DEBOUNCE_MS = 1000;
+
+// v3-E1 step3：点击触发的 motion group。Hiyori 的 Tap 组下有两条 motion
+// （m07 / m08），index 0/1 随机播一个。换模型时只要保留 "Tap" group 就能
+// 沿用，否则在这里改 group 名。
+const TAP_MOTION_GROUP = 'Tap';
+const TAP_MOTION_COUNT = 2;
 
 interface Live2DCanvasProps {
   modelUrl: string;
@@ -26,6 +36,30 @@ interface Live2DCanvasProps {
  */
 export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // 当前活跃的 model 引用，供 onClick 调 model.motion 用。
+  // 用 ref 而非 state：模型变更不应触发 React re-render。
+  const modelRef = useRef<Live2DModel | null>(null);
+  // 上一次成功触发触摸的时间戳，做 1 秒防抖
+  const lastTouchAtRef = useRef<number>(0);
+
+  const { sendTouch } = useAppApi();
+
+  const handleTouch = useCallback(() => {
+    const now = Date.now();
+    if (now - lastTouchAtRef.current < TOUCH_DEBOUNCE_MS) return;
+    lastTouchAtRef.current = now;
+
+    // 1. 立即播放 Tap motion（不等后端），让用户感知点击立刻生效
+    const model = modelRef.current;
+    if (model) {
+      const idx = Math.floor(Math.random() * TAP_MOTION_COUNT);
+      // motion() 返回 Promise<boolean>；忽略返回值，失败时 pixi 会在 console 自报
+      void model.motion(TAP_MOTION_GROUP, idx, MotionPriority.NORMAL);
+    }
+
+    // 2. 通知后端：本轮按 touch 事件路由（注入 system 指令 + 入对话历史）
+    sendTouch();
+  }, [sendTouch]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -87,6 +121,7 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
           return;
         }
         model = loaded;
+        modelRef.current = loaded;
         nativeW = loaded.width || 1;
         nativeH = loaded.height || 1;
         app.stage.addChild(loaded);
@@ -115,6 +150,7 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
         try { model.destroy(); } catch (err) { console.warn('[Live2DCanvas] model destroy', err); }
         model = null;
       }
+      modelRef.current = null;
       if (app) {
         try {
           app.destroy(true, { children: true, texture: true, baseTexture: true });
@@ -129,7 +165,8 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0 w-full h-full"
+      onClick={handleTouch}
+      className="absolute inset-0 w-full h-full cursor-pointer"
     />
   );
 }

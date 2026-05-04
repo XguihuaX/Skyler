@@ -15,14 +15,23 @@ PlannerAgent / MemoryAgent / ToolAgent 仍保留在 backend/agents/ 下作为
 Wire format
 -----------
 Client → server:
-  {"type": "text",  "content": "...", "user_id": "xxx"}
-  {"type": "voice", "audio":   "<b64>", "user_id": "xxx"}
+  {"type": "text",      "content": "...", "user_id": "xxx"}
+  {"type": "voice",     "audio":   "<b64>", "user_id": "xxx"}
+  {"type": "interrupt"}                                        # v3-F #4
+  {"type": "touch",     "user_id": "xxx",                       # v3-E1 step3
+                        "conversation_id": int|None,
+                        "character_id":    int|None}
+    # 用户点 Live2D canvas → 注入 system 指令走正常 chat 流程，
+    # user 占位符 "[touch]" 入 chat_history。
 
 Server → client (streaming):
+  {"type": "asr_result",  "content": "...", "message_id": int|None}
   {"type": "text_chunk",  "content": "..."}
   {"type": "audio_chunk", "content": "<b64>"}
-  {"type": "done"}
-  {"type": "error", "message": "..."}
+  {"type": "thinking",    "value":   "..."}                    # v3-F
+  {"type": "done",        "interrupted": bool}                 # v3-F #4
+  {"type": "notify" / "alarm", ...}                            # 来自后台任务
+  {"type": "error",       "message": "..."}
 """
 import asyncio
 import base64
@@ -204,6 +213,17 @@ PROFILE_SUMMARY_HISTORY_LIMIT = 100   # pull last 100 chat_history rows = ~50 ro
 PROFILE_SUMMARY_MIN_ROWS = 20         # below this, skip — not enough signal
 PROFILE_SUMMARY_MIN_OUTPUT_LEN = 50   # reject obviously-truncated LLM output
 turn_count_per_user: dict[str, int] = {}
+
+
+# v3-E1 step3：触摸事件占位 + 临时 system 指令
+# user content 存 [touch] 而不是空串，方便在 chat_history viewer 里识别这一轮
+# 是怎么开始的；指令文本通过 chat_msg.payload.context.extra_system 注入到
+# system prompt（_build_messages 第 5 段）。
+TOUCH_USER_CONTENT = "[touch]"
+TOUCH_INSTRUCTION = (
+    "用户刚刚轻轻碰了一下你。请用一两句话自然反应一下，"
+    "符合你当前的人设和情绪。"
+)
 
 
 def _format_chat_history(rows: list) -> str:
@@ -582,6 +602,11 @@ async def _handle_message(
                 "content": text,
                 "message_id": asr_message_id,
             })
+        elif msg_type == "touch":
+            # v3-E1 step3：用户点 Live2D canvas 触发主动对话
+            # user content 用占位符存进 chat_history，instruction 通过
+            # context.extra_system 进 system prompt，让 LLM 自然回应一句。
+            text = TOUCH_USER_CONTENT
         else:
             text = (data.get("content") or "").strip()
 
@@ -634,6 +659,12 @@ async def _handle_message(
                 "character_id": char_id,
             },
         }
+
+        # v3-E1 step3：touch 事件注入临时 system 指令
+        if msg_type == "touch":
+            chat_msg["payload"]["context"] = {
+                "extra_system": TOUCH_INSTRUCTION,
+            }
 
         # reply_parts 用 state 提供的 list —— 打断收尾从同一个 list 读已生成内容
         reply_parts: List[str] = state.reply_parts

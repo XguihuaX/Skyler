@@ -26,6 +26,8 @@ interface UseWebSocketReturn {
   sendVoice: (audioBase64: string) => void;
   // v3-F #4：通知后端取消当前 LLM stream + TTS playback
   sendInterrupt: () => void;
+  // v3-E1 step3：用户点 Live2D canvas，触发后端主动对话
+  sendTouch: () => void;
   isConnected: () => boolean;
 }
 
@@ -341,9 +343,40 @@ export function useWebSocket(): UseWebSocketReturn {
     ws.send(JSON.stringify({ type: 'interrupt' }));
   }, [store]);
 
+  const sendTouch = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('[WS] not connected, drop touch');
+      return;
+    }
+    const s = store.getState();
+
+    // 局部立即生效：上一轮如果还在播音 / 还有 streaming 气泡，先收掉，
+    // 避免与新一轮的 audio_chunk / text_chunk 混在一起。后端那边
+    // _handle_message 主循环也会自动 cancel 上一轮 turn task。
+    audioQueueRef.current = [];
+    if (s.streamingMessageId !== null) {
+      s.finishChatMessage(s.streamingMessageId);
+      s.setStreamingMessageId(null);
+    }
+    if (s.muteWhileSpeaking && s.micMuted) s.setMicMuted(false);
+
+    textChunkCountRef.current = 0;
+    s.setLastSendTimestamp(performance.now());
+    s.clearCurrentThinking();
+
+    console.log('[FRONT] send touch');
+    ws.send(JSON.stringify({
+      type: 'touch',
+      user_id: s.defaultUserId,
+      conversation_id: s.currentConversationId,
+      character_id: s.currentCharacterId,
+    }));
+  }, [store]);
+
   const isConnected = useCallback(() => {
     return wsRef.current?.readyState === WebSocket.OPEN;
   }, []);
 
-  return { sendText, sendVoice, sendInterrupt, isConnected };
+  return { sendText, sendVoice, sendInterrupt, sendTouch, isConnected };
 }

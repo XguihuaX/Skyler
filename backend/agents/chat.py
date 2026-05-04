@@ -566,6 +566,7 @@ async def _build_messages(
     text: str,
     tool_result: str | None = None,
     character_id: Optional[int] = None,
+    extra_system: str | None = None,
 ) -> List[dict]:
     """Assemble the full message list to send to the LLM.
 
@@ -620,6 +621,10 @@ async def _build_messages(
     if tool_result:
         system_parts.append(f"【工具调用结果】\n{tool_result}")
 
+    # ---- 5. Per-turn ad-hoc instruction (e.g. v3-E1 step3 touch event) ----
+    if extra_system:
+        system_parts.append(f"【临时指令】\n{extra_system}")
+
     system_prompt = "\n\n".join(system_parts)
 
     # ---- Short-term history as conversation turns ----
@@ -647,7 +652,9 @@ class ChatAgent(IAgent):
         payload = message.get("payload", {})
         user_id: str = payload.get("user_id", "")
         text: str = payload.get("text", "")
-        tool_result: str | None = (payload.get("context") or {}).get("tool_result")
+        context = payload.get("context") or {}
+        tool_result: str | None = context.get("tool_result")
+        extra_system: str | None = context.get("extra_system")
         raw_char = payload.get("character_id")
         character_id: Optional[int] = (
             int(raw_char) if isinstance(raw_char, (int, str)) and str(raw_char).strip() else None
@@ -661,7 +668,11 @@ class ChatAgent(IAgent):
             }
 
         try:
-            messages = await _build_messages(user_id, text, tool_result, character_id=character_id)
+            messages = await _build_messages(
+                user_id, text, tool_result,
+                character_id=character_id,
+                extra_system=extra_system,
+            )
 
             reply_parts: List[str] = []
             async for chunk in stream_llm(messages):
@@ -704,7 +715,9 @@ class ChatAgent(IAgent):
         payload = message.get("payload", {})
         user_id: str = payload.get("user_id", "")
         text: str = payload.get("text", "")
-        tool_result: str | None = (payload.get("context") or {}).get("tool_result")
+        context = payload.get("context") or {}
+        tool_result: str | None = context.get("tool_result")
+        extra_system: str | None = context.get("extra_system")
         raw_char = payload.get("character_id")
         character_id: Optional[int] = (
             int(raw_char) if isinstance(raw_char, (int, str)) and str(raw_char).strip() else None
@@ -714,7 +727,11 @@ class ChatAgent(IAgent):
             raise ValueError("payload must contain non-empty user_id and text")
 
         with timed("_build_messages"):
-            messages = await _build_messages(user_id, text, tool_result, character_id=character_id)
+            messages = await _build_messages(
+                user_id, text, tool_result,
+                character_id=character_id,
+                extra_system=extra_system,
+            )
 
         prompt_str = json.dumps(messages, ensure_ascii=False)
         timing_logger.info(

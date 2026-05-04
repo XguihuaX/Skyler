@@ -121,6 +121,11 @@
 
 **估时**：核心接入 + idle + 口型同步 → 2-3 天；emotion + 触摸 + motion 联动 → 1-2 天。Hiyori 现成模型省了找资产时间。
 
+#### v3-E1 Step Z cleanup（v3-E1 全部做完后统一处理）
+
+- **`[touch]` 污染 profile_summary**：触摸触发的 user message content="[touch]"，profile_summary 重写时会被 LLM 误算为用户语料。修法：chat_history 加 `kind` 字段（'normal' | 'touch' | 'proactive'），profile rewrite 过滤 `kind != 'normal'`，对话历史抽屉 special turn 渲染成"（碰了一下）"灰字。同时为 v3-G 主动提醒铺路。
+- **`<thinking>` 标签持久化/渲染漏剥离**：v3-F 引入 `<thinking>...</thinking>` 内心独白，TTS 已剥离不读出来，但 DB 持久化和前端渲染没剥。修法：(a) 后端 `chat.py` 在写 chat_history 之前剥 thinking；(b) 前端消息渲染兜底正则替换。
+
 ---
 
 ### v3-E2：换上目标模型

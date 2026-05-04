@@ -5,6 +5,8 @@ export interface AppApi {
   sendVoice: (audioBase64: string) => void;
   // v3-F #4：用户说话 / 点击 🚫 触发，停 LLM stream + TTS playback
   sendInterrupt: () => void;
+  // v3-E1 step3：点 Live2D canvas 触发主动对话
+  sendTouch: () => void;
   startManual: () => Promise<void>;
   stopManualAndSend: () => Promise<void>;
   toggleVad: () => Promise<void>;
