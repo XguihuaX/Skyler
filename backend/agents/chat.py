@@ -48,8 +48,9 @@ from backend.config import (
     get_tts_emotions,
 )
 from backend.config.prompt_manager import prompt_manager
+from backend.config.prompts import BASE_INSTRUCTION
 from backend.database import AsyncSessionLocal
-from backend.database.models import Memory
+from backend.database.models import Character, Memory
 from backend.database.services import (
     add_memory as db_add_memory,
     delete_memory as db_delete_memory,
@@ -571,7 +572,7 @@ async def _build_messages(
     """Assemble the full message list to send to the LLM.
 
     System prompt order:
-      1. Character persona (from prompt_manager, per-user character)
+      1. Character persona (DB by character_id, fallback to prompt_manager YAML)
       2. Memory-tool usage instructions
       3. User profile summary (from users table)
       4. Long-term memory Top-5 (vector search)
@@ -580,14 +581,39 @@ async def _build_messages(
     Short-term conversation history follows as real turns, then the current
     user message as the final entry.
     """
-    # ---- 1. Persona (per-user, from characters.yaml) ----
+    # ---- 1. Persona ----
     # v3-B 补丁：把 config.yaml 里的 base_instruction (通用设定) 拼到
     # persona 之前，作为所有角色共享的输出风格约束。空串则跳过。
     # v3-D 补丁：再前置一段情感标签指令，要求 LLM 在每次回复最开头打
     # <emotion>...</emotion>，供下游 TTS 路由使用；ws.py 会剥掉标签
     # 再下发 text_chunk，前端不会看到。
-    prompt_data = prompt_manager.get_prompt(user_id)
-    persona_block = prompt_data["system_prompt"] + _TOOL_PROMPT_ADDENDUM
+    #
+    # Persona 来源选择（v3-cleanup：DB persona 主源 + YAML fallback）：
+    # 早期 prompt_manager 只读 characters.yaml，UI 切角色不影响 system prompt
+    # —— 切到任何角色都拿 yaml '默认' 那条 ChatAgent fallback。修法：优先按
+    # incoming character_id 从 DB characters.persona 拿，DB miss / 空 / 没 id
+    # 才退到 prompt_manager.get_prompt（保留 LLM tool 的 switch_character
+    # 路径 + 完全没角色信息时的兜底）。yaml 现在仅服务于这两种 fallback。
+    db_persona: Optional[str] = None
+    if character_id is not None:
+        try:
+            async with AsyncSessionLocal() as session:
+                row = (await session.execute(
+                    select(Character.persona).where(Character.id == character_id)
+                )).scalar_one_or_none()
+                if isinstance(row, str) and row.strip():
+                    db_persona = row.strip()
+        except Exception:
+            logger.exception(
+                "_build_messages: DB persona lookup failed for character_id=%s",
+                character_id,
+            )
+
+    if db_persona is not None:
+        persona_block = f"{db_persona}\n\n{BASE_INSTRUCTION}" + _TOOL_PROMPT_ADDENDUM
+    else:
+        prompt_data = prompt_manager.get_prompt(user_id)
+        persona_block = prompt_data["system_prompt"] + _TOOL_PROMPT_ADDENDUM
     base = get_base_instruction().strip()
     emotion_inst = _build_emotion_instruction()
     thinking_inst = _build_thinking_instruction()
