@@ -124,7 +124,23 @@
 #### v3-E1 Step Z cleanup（v3-E1 全部做完后统一处理）
 
 - **`[touch]` 污染 profile_summary**：触摸触发的 user message content="[touch]"，profile_summary 重写时会被 LLM 误算为用户语料。修法：chat_history 加 `kind` 字段（'normal' | 'touch' | 'proactive'），profile rewrite 过滤 `kind != 'normal'`，对话历史抽屉 special turn 渲染成"（碰了一下）"灰字。同时为 v3-G 主动提醒铺路。
-- **`<thinking>` 标签持久化/渲染漏剥离**：v3-F 引入 `<thinking>...</thinking>` 内心独白，TTS 已剥离不读出来，但 DB 持久化和前端渲染没剥。修法：(a) 后端 `chat.py` 在写 chat_history 之前剥 thinking；(b) 前端消息渲染兜底正则替换。
+- **`<thinking>` 标签持久化/渲染漏剥离**：v3-F 引入 `<thinking>...</thinking>` 内心独白，TTS 已剥离不读出来，但 DB 持久化和前端渲染没剥。修法：(a) 后端 `chat.py` 在写 chat_history 之前剥 thinking；(b) 前端消息渲染兜底正则替换。**已在 commit be0c6f4 修复**。
+- **历史 chat_history 行 `<thinking>` 数据清洗**：v3-F 修复部署前已经入库的脏数据（id=4 / id=8 等），前端渲染层已兜底剥除不显示，但 DB 里仍是脏的。修法：一次性 SQL `UPDATE chat_history SET content = ... WHERE content LIKE '<thinking>%'`（用 `re.sub` python 脚本跑一遍更稳）。
+- **cosyvoice EMOTION_MAP 注释 / 行为不一致**：注释说 "miss → neutral"，代码实际透传未知值（可能让 cosyvoice 收到不识别的英文枚举返 400）。修法：注释改成 "透传，下游按需返回错误"，或代码改成"miss → neutral"。任一方向，注释和行为对齐就行。
+- **Hiyori idle motion m01/m05 fetch Aborted**：浏览器 console 偶发 `[MotionManager(hiyori)] Failed to load motion: motion/hiyori_m01.motion3.json - Error: Aborted`（m05 同症）。两条都是 idle group 成员，怀疑 React 18 StrictMode 双 mount 时第一遍的 fetch 被第二遍 mount 的 cleanup AbortController 中断；m02 / 其他 motion 没事可能因为 AbortController 触发时 m01/m05 正好在 in-flight 窗口里。需 audit：(a) Step 2 的 cancelled flag + model.destroy() 路径有没有触发 fetch abort；(b) 是无害日志噪声还是真的导致 idle 行为受损（少一条 idle 候选）；(c) 修法选项：抑制日志 / 显式预加载 motion 资源 / 切到 ResourceManager 复用。
+
+#### v3-E2 / v3-E3 待办（emotion 视觉表达层）
+
+v3-E1 Step 5 仅铺了 emotion 数据流（WS push → store → Live2DCanvas 监听点），没做 Hiyori 上的视觉绑定。原因：Hiyori 的 `model3.json` 没有 `FileReferences.Expressions` 字段，没有 `.exp3.json` 文件；用 `setParameterValueById` 自制表情可行但只对 Hiyori 临时模型有意义，v3-E2 换上目标模型后会失效。
+
+v3-E2 换上目标模型后实现：
+
+- **选项 a**：模型自带 `.exp3.json` → `emotionMap[key] = { type: 'expression', name: 'F01' }`，`Live2DCanvas` 调 `model.expression()`
+- **选项 b**：模型无 expression → `emotionMap[key] = { type: 'params', params: [{ id: 'ParamMouthForm', value: 1.0 }, ...] }`，`Live2DCanvas` 遍历 `setParameterValueById`
+- **配套**：每个角色独立 emotionMap（per-character live2d config 扩展），不同模型走不同绑定方式
+- **验收标准**：跟角色说不同情感的话（"我今天好开心" / "我有点难过"），面部有可见变化
+
+代码侧改动只在 `frontend/src/config/live2d.ts` 的 `emotionMap` + `Live2DCanvas` 监听点 useEffect 内部 —— 数据流（后端 push、store、监听点本身）完全不动。
 
 ---
 

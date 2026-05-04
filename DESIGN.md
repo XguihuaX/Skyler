@@ -918,6 +918,21 @@ mac 上需要请求 Accessibility 权限。技术栈：
 
 **Live2D 联动**：前端收到 `<emotion>` 标签后触发对应表情动作。
 
+**架构分离**（v3-E1 Step 5 决策）：
+
+emotion 数据流（解析 → push → store → 监听点）是**模型无关**的基础设施，本仓库已就位：
+- 后端 `_parse_emotion`（`backend/agents/chat.py`）解析 `<emotion>X</emotion>` 标签
+- 后端 ws.py 在每轮第一个 chunk 命中后 `send_json({"type":"emotion","value":<英文枚举>})`
+- 前端 `useWebSocket` 收到后写 `store.currentEmotion`
+- 前端 `Live2DCanvas` useEffect 订阅 `currentEmotion` 作为绑定 hook 入口
+
+emotion 视觉绑定（监听点 → Live2D 参数 / expression）是**模型相关**的配置层，由 `frontend/src/config/live2d.ts` 的 `emotionMap` 控制：
+
+- 自带 `.exp3.json` 的模型：`emotionMap[key] = { type: 'expression', name: 'F01' }`，监听点调 `model.expression()`
+- 无 expression 的模型（如 Hiyori）：`emotionMap[key] = { type: 'params', params: [{id, value}, ...] }`，监听点遍历调 `setParameterValueById`
+
+v3-E1 Step 5 emotionMap 留空，Live2DCanvas 监听点仅 `console.log` 占位。待 v3-E2 换上目标模型（Hiyori 是临时模型，没有 expression 文件，调参对临时模型无意义）后填充 emotionMap，监听点改成调用对应绑定 —— **代码改动只在 emotionMap 一个文件 + 监听点 useEffect 内部**，数据流不动。
+
 ---
 
 ## 十五、MCP 工具扩展

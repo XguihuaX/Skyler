@@ -177,6 +177,17 @@ interface AppState {
   setCurrentThinking: (v: string | null) => void;
   clearCurrentThinking: () => void;
 
+  // v3-E1 step5: AI 当轮情感（每轮最多一次，由后端 emotion 消息推送）
+  // null = 当前轮无 emotion 标签（中性消息）/ 还没收到。由 WS 'emotion' 消息
+  // 写入；新轮开始时由调用方 clear。
+  // 值为 LLM 原始输出，透传不归一化（happy / sad / angry / surprised /
+  // fearful / disgusted 等英文枚举，详见 config.yaml emotions）。
+  // 当前消费方：Live2DCanvas useEffect 监听点（v3-E1 step5 仅 console.log；
+  // v3-E2 换模型后接入 emotionMap → expression / param 调用）。
+  currentEmotion: string | null;
+  setCurrentEmotion: (v: string | null) => void;
+  clearCurrentEmotion: () => void;
+
   // 镜像 GET /api/config 的字段（启动时由 syncFromConfig 写入）
   defaultUserId: string;
   setDefaultUserId: (v: string) => void;
@@ -292,6 +303,10 @@ export const useAppStore = create<AppState>((set) => ({
   currentThinking: null,
   setCurrentThinking: (currentThinking) => set({ currentThinking }),
   clearCurrentThinking: () => set({ currentThinking: null }),
+
+  currentEmotion: null,
+  setCurrentEmotion: (currentEmotion) => set({ currentEmotion }),
+  clearCurrentEmotion: () => set({ currentEmotion: null }),
 
   defaultUserId: 'default',
   setDefaultUserId: (defaultUserId) => set({ defaultUserId }),

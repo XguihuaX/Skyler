@@ -715,6 +715,20 @@ async def _handle_message(
                             "[TTS] emotion=%s (parsed from first chunk)",
                             turn_emotion,
                         )
+                        # v3-E1 step5：把 emotion 推给前端，per-turn 一次性事件，
+                        # 风格跟 v3-F thinking push 平行。"默认" 是 _parse_emotion
+                        # 的 miss 兜底（LLM 没打 <emotion> 标签），此时不推 →
+                        # 前端 currentEmotion 保持 null，Live2DCanvas 监听点
+                        # 不触发（中性消息不应该改表情）。
+                        if parsed_emotion and parsed_emotion != "默认":
+                            logger.info(
+                                "[emotion] pushed value=%s user=%s",
+                                parsed_emotion, user_id,
+                            )
+                            await ws.send_json({
+                                "type": "emotion",
+                                "value": parsed_emotion,
+                            })
 
                     # v3-F #2：剥离 <thinking>...</thinking> 内心独白；命中后单独 push
                     # 一次。chat.py 的 _safe_boundary 保证 thinking 块不会被

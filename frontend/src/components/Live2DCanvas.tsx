@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef } from 'react';
 import * as PIXI from 'pixi.js';
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
 import { useAppApi } from '../contexts/appApi';
+import { useAppStore } from '../store';
 import { useAudioAmplitude } from '../hooks/useAudioAmplitude';
+import { emotionMap } from '../config/live2d';
 
 // pixi-live2d-display 内部用 window.PIXI 取 Ticker 等共享实例。必须在创建任何
 // Live2DModel 之前完成挂载，否则模型的自动 ticker 不会跑（黑屏 / 不眨眼）。
@@ -58,6 +60,9 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
   // v3-E1 step4：实时 TTS 振幅；驱动 ParamMouthOpenY。
   // 静默时 hook 返回 0，嘴自然闭合；v3-F 打断后 audio 队列清空，振幅也回 0。
   const amplitude = useAudioAmplitude();
+  // v3-E1 step5：当轮 emotion（由后端 WS 推送，透传 LLM 原始输出）。null 表示
+  // 当前没有 emotion（中性消息或新轮刚开始）。
+  const currentEmotion = useAppStore((s) => s.currentEmotion);
 
   useEffect(() => {
     const model = modelRef.current;
@@ -66,6 +71,22 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
       ?.coreModel as unknown as CubismCoreModelLipSync | undefined;
     coreModel?.setParameterValueById?.(LIPSYNC_PARAM_ID, amplitude);
   }, [amplitude]);
+
+  useEffect(() => {
+    if (!currentEmotion) return;
+    // v3-E1 step5: 仅铺数据流，不做视觉绑定（Hiyori 没有 .exp3.json，美术调参
+    // 对临时模型无意义）。v3-E2 换上目标模型后这里改成：
+    //   const binding = emotionMap[currentEmotion];
+    //   if (binding?.type === 'expression') model.expression(binding.name);
+    //   else if (binding?.type === 'params') binding.params.forEach(p =>
+    //     coreModel.setParameterValueById(p.id, p.value));
+    // 详见 frontend/src/config/live2d.ts emotionMap 注释。
+    console.log(
+      `[live2d] emotion=${currentEmotion} (no visual binding for Hiyori, awaits v3-E2)`,
+    );
+    // 防 unused 警告 / 让未来启用时编辑器能跳转过去
+    void emotionMap;
+  }, [currentEmotion]);
 
   const handleTouch = useCallback(() => {
     const now = Date.now();

@@ -249,6 +249,14 @@ export function useWebSocket(): UseWebSocketReturn {
         break;
       }
 
+      case 'emotion': {
+        // v3-E1 step5：AI 当轮情感，每轮最多一次。透传 LLM 原始字符串。
+        // Live2DCanvas useEffect 订阅 currentEmotion → 后续 v3-E2 接入视觉绑定。
+        const value = msg.value ?? '';
+        if (value) s.setCurrentEmotion(value);
+        break;
+      }
+
       case 'notify':
         s.pushNotification({ type: 'notify', content: msg.content ?? '' });
         break;
@@ -333,6 +341,8 @@ export function useWebSocket(): UseWebSocketReturn {
     s.setLastSendTimestamp(performance.now());
     // v3-F：新一轮开始，先清掉上一轮的内心独白
     s.clearCurrentThinking();
+    // v3-E1 step5：新一轮开始，清掉上一轮的 emotion
+    s.clearCurrentEmotion();
     // 乐观更新：立刻显示 user 气泡
     s.appendChatMessage({
       id: newClientId('u'),
@@ -362,6 +372,8 @@ export function useWebSocket(): UseWebSocketReturn {
     s.setLastSendTimestamp(performance.now());
     // v3-F：新一轮开始，先清掉上一轮的内心独白
     s.clearCurrentThinking();
+    // v3-E1 step5：新一轮开始，清掉上一轮的 emotion
+    s.clearCurrentEmotion();
     console.log(`[FRONT] send voice b64_len=${audioBase64.length}`);
     // 语音的 user 气泡等 asr_result 携带 message_id 时一起插入，
     // 避免内容为空的占位气泡。
@@ -432,6 +444,8 @@ export function useWebSocket(): UseWebSocketReturn {
     textChunkCountRef.current = 0;
     s.setLastSendTimestamp(performance.now());
     s.clearCurrentThinking();
+    // v3-E1 step5：新一轮开始，清掉上一轮的 emotion
+    s.clearCurrentEmotion();
 
     console.log('[FRONT] send touch');
     ws.send(JSON.stringify({
