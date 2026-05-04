@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import characterImg from '../assets/character.jpeg';
 import { useAppStore } from '../store';
+import { resolveLive2dModelUrl } from '../config/live2d';
+import Live2DCanvas from './Live2DCanvas';
 
 interface CharacterViewProps {
   modelUrl?: string;
@@ -16,7 +18,13 @@ export default function CharacterView({
   className,
 }: CharacterViewProps) {
   const [imgError, setImgError] = useState(false);
-  const mode = useAppStore((s) => s.mode);
+  const mode               = useAppStore((s) => s.mode);
+  const characters         = useAppStore((s) => s.characters);
+  const currentCharacterId = useAppStore((s) => s.currentCharacterId);
+
+  const currentCharacter =
+    characters.find((c) => c.id === currentCharacterId) ?? null;
+  const live2dUrl = resolveLive2dModelUrl(currentCharacter?.live2d_model);
 
   const isPanel = mode === 'panel';
   // panel 模式下加一层半透明背景叠加，使前景气泡更易读
@@ -25,6 +33,17 @@ export default function CharacterView({
     : undefined;
   const rootClass = className ?? 'absolute inset-0';
 
+  // 角色配了 live2d_model 且能解析出资源 URL → 走 Live2D 渲染管道
+  // key 用 live2dUrl，切换角色时强制 unmount 旧 canvas + mount 新的
+  if (live2dUrl) {
+    return (
+      <div className={rootClass} style={panelOverlayStyle}>
+        <Live2DCanvas key={live2dUrl} modelUrl={live2dUrl} />
+      </div>
+    );
+  }
+
+  // Fallback：保留 v3-E1 之前的静态图片显示（适用于尚未配置 live2d_model 的角色）
   return (
     <div className={rootClass} style={panelOverlayStyle}>
       {imgError ? (
