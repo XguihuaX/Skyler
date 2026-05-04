@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import * as PIXI from 'pixi.js';
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
 import { useAppApi } from '../contexts/appApi';
+import { useAudioAmplitude } from '../hooks/useAudioAmplitude';
 
 // pixi-live2d-display 内部用 window.PIXI 取 Ticker 等共享实例。必须在创建任何
 // Live2DModel 之前完成挂载，否则模型的自动 ticker 不会跑（黑屏 / 不眨眼）。
@@ -15,6 +16,17 @@ const TOUCH_DEBOUNCE_MS = 1000;
 // 沿用，否则在这里改 group 名。
 const TAP_MOTION_GROUP = 'Tap';
 const TAP_MOTION_COUNT = 2;
+
+// v3-E1 step4：口型同步参数。Hiyori model3.json 的 LipSync group 只有一个
+// 参数 ID，主仓 0.5.0-beta 走 setParameterValueById 直写。换模型时若参数
+// 名不同（比如 "PARAM_MOUTH_OPEN_Y"），改这里。
+const LIPSYNC_PARAM_ID = 'ParamMouthOpenY';
+
+// pixi-live2d-display 的 internalModel.coreModel 在类型层是 unknown 风格，
+// 这里只声明我们用到的子集，避免到处 as any。
+interface CubismCoreModelLipSync {
+  setParameterValueById?: (id: string, value: number) => void;
+}
 
 interface Live2DCanvasProps {
   modelUrl: string;
@@ -43,6 +55,17 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
   const lastTouchAtRef = useRef<number>(0);
 
   const { sendTouch } = useAppApi();
+  // v3-E1 step4：实时 TTS 振幅；驱动 ParamMouthOpenY。
+  // 静默时 hook 返回 0，嘴自然闭合；v3-F 打断后 audio 队列清空，振幅也回 0。
+  const amplitude = useAudioAmplitude();
+
+  useEffect(() => {
+    const model = modelRef.current;
+    if (!model) return;
+    const coreModel = model.internalModel
+      ?.coreModel as unknown as CubismCoreModelLipSync | undefined;
+    coreModel?.setParameterValueById?.(LIPSYNC_PARAM_ID, amplitude);
+  }, [amplitude]);
 
   const handleTouch = useCallback(() => {
     const now = Date.now();
