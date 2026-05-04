@@ -1,8 +1,12 @@
 import { memo, useEffect, useRef } from 'react';
 import { useAppStore, type ChatMessage } from '../store';
+import { stripThinking } from '../lib/textFilters';
 
 const Bubble = memo(function Bubble({ m }: { m: ChatMessage }) {
   const isUser = m.role === 'user';
+  // v3-F 回归修：渲染前剥 <thinking>...</thinking>。后端写库前已剥一道，
+  // 此处兜底处理老历史数据 + streaming 边界
+  const displayContent = stripThinking(m.content);
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
@@ -20,7 +24,7 @@ const Bubble = memo(function Bubble({ m }: { m: ChatMessage }) {
               }
         }
       >
-        {m.content}
+        {displayContent}
         {m.streaming && (
           <span
             className="inline-block w-1.5 h-3 ml-1 align-baseline animate-pulse"

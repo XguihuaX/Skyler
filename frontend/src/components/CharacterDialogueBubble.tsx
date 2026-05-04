@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useAppStore, type ChatMessage } from '../store';
+import { stripThinking } from '../lib/textFilters';
 
 /**
  * Floating Galgame-style bubble overlaid on the CharacterView background.
@@ -17,6 +18,10 @@ export default function CharacterDialogueBubble() {
 
   if (!last) return null;
 
+  // v3-F 回归修：渲染前剥 <thinking>...</thinking>。后端写库前已剥一道，
+  // 此处兜底处理老历史数据 + streaming 边界
+  const displayContent = stripThinking(last.content);
+
   return (
     <div
       className="absolute bottom-24 left-0 right-0 mx-auto z-20 max-w-[60%] min-w-[200px] w-fit
@@ -29,7 +34,7 @@ export default function CharacterDialogueBubble() {
         boxShadow: '0 10px 25px -5px color-mix(in srgb, var(--color-bg-base) 60%, transparent)',
       }}
     >
-      {last.content}
+      {displayContent}
       {last.streaming && (
         <span className="inline-flex gap-0.5 ml-1 align-middle">
           <span

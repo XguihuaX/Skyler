@@ -62,6 +62,7 @@ from backend.database.services import (
 from backend.llm.client import LLMError, call_llm
 from backend.memory.short_term import short_term_memory
 from backend.tts import get_tts_engine, tts_manager  # noqa: F401  (manager 保留作为旧路径)
+from backend.utils.text_filters import strip_thinking
 from backend.utils.timer import timed
 
 timing_logger = logging.getLogger("momoos.timing")
@@ -414,6 +415,9 @@ async def _update_memory(
     persisted earlier in the turn (e.g. ASR transcript was written before the
     pipeline started, so we only need the assistant row here).
     """
+    # v3-F 回归修：流式按句剥 thinking（chat.py _parse_thinking）有边界漏网，
+    # 写库前再剥一道，确保 short_term + chat_history 都不带 <thinking> 标签。
+    reply = strip_thinking(reply)
     try:
         await short_term_memory.add(user_id, "user",      user_text)
         await short_term_memory.add(user_id, "assistant", reply)
@@ -489,7 +493,10 @@ async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
     if not state.user_text:
         return  # nothing to record
 
-    full_reply = "".join(state.reply_parts).strip()
+    # v3-F 回归修：被打断时 reply_parts 可能在 thinking 块内部被 cancel，
+    # 残留半个标签 —— strip_thinking 只剥完整对，半截开标签会留下。
+    # 前端渲染层有兜底正则再扫一次，最差只是多保留一段没意义的字符串。
+    full_reply = strip_thinking("".join(state.reply_parts)).strip()
     interrupted_at = datetime.utcnow()
 
     try:
