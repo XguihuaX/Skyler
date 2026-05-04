@@ -39,6 +39,9 @@ class Character(Base):
     avatar_path = Column(Text, nullable=True)
     # v3-B: 角色专属 TTS 音色标识，留空表示沿用全局默认（仅存不用，等 SoVITS 接入）
     voice_model = Column(Text, nullable=True)
+    # v3-E1: Live2D 模型标识，对应 frontend/public/live2d/<name>/ 目录名。
+    # NULL = 不启用 Live2D，回退到 avatar_path 静态图片。
+    live2d_model = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     conversations = relationship("Conversation", back_populates="character")

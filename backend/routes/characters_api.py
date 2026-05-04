@@ -34,6 +34,7 @@ def _to_dict(c: Character) -> dict:
         "persona": c.persona,
         "avatar_path": c.avatar_path,
         "voice_model": c.voice_model,
+        "live2d_model": c.live2d_model,
         "created_at": _fmt_dt(c.created_at),
     }
 
@@ -43,6 +44,7 @@ class CharacterCreateBody(BaseModel):
     persona: str
     avatar_path: Optional[str] = None
     voice_model: Optional[str] = None
+    live2d_model: Optional[str] = None
 
 
 class CharacterPatchBody(BaseModel):
@@ -50,6 +52,7 @@ class CharacterPatchBody(BaseModel):
     persona: Optional[str] = None
     avatar_path: Optional[str] = None
     voice_model: Optional[str] = None
+    live2d_model: Optional[str] = None
 
 
 @router.get("/characters/list")
@@ -79,6 +82,7 @@ async def create_character(
         persona=body.persona,
         avatar_path=body.avatar_path,
         voice_model=body.voice_model,
+        live2d_model=body.live2d_model,
     )
     session.add(c)
     await session.commit()
@@ -106,6 +110,8 @@ async def patch_character(
         c.avatar_path = updates["avatar_path"]
     if "voice_model" in updates:
         c.voice_model = updates["voice_model"]
+    if "live2d_model" in updates:
+        c.live2d_model = updates["live2d_model"]
     await session.commit()
     await session.refresh(c)
     return _to_dict(c)

@@ -1002,7 +1002,7 @@ mac 上需要请求 Accessibility 权限。技术栈：
 
 **核心思路**：先用 Live2D 官方免费样本模型 **Hiyori** 把整个 SDK 集成 + 前后端管道打通。模型本身是不是最终目标不重要，重点是 SDK 接通后切换模型只是**资产替换、不动代码**。
 
-- [ ] **SDK 选型**：`pixi-live2d-display` + Cubism 5 Web SDK（开源）
+- [ ] **SDK 选型**：`pixi-live2d-display` + Cubism 4 Core（pixi-live2d-display 不支持 Cubism 5，详见下注）
 - [ ] **下载 Hiyori** —— Live2D 官方免费样本，注意 Live2D Free Material License Agreement 条款，开发期 OK，商用受限
 - [ ] **CharacterView.tsx 改造** —— 从 `<img src={...} />` 换成 `<canvas>` + PIXI Application；保持 Galgame 满铺布局不变
 - [ ] **idle 动画** —— 调用 Hiyori 自带 idle motion 自动循环
@@ -1012,10 +1012,20 @@ mac 上需要请求 Accessibility 权限。技术栈：
 - [ ] **motionMap**（OLV #8）—— system prompt 加 `<motion>X</motion>` 输出指令；ws.py push 给前端；前端触发 `model.motion(X)`
 - [ ] **DB 字段**：迁移 `v3_e.py` 给 `characters` 加 `live2d_model TEXT`（存模型路径或模型 ID）；CharacterPanel 加输入框
 
+**关键约束（pixi-live2d-display 限制）**：
+
+pixi-live2d-display 及其所有维护中的 fork（advanced / lipsyncpatch / mulmotion）只支持 Cubism 4 Core，**不支持 Cubism 5 Core**。GitHub issue #118 自 2023-10 开放至今未修复。
+
+→ Skyler 在 Live2D 渲染层锁死在 Cubism 4 时代的 moc3 ver ≤ 4 模型。Hiyori 是 Cubism 4 格式（moc3 ver 3），完美兼容。
+
+→ v3-E2 选购/委托模型时**必须**确认是 Cubism 4 兼容格式。Cubism 5 编辑器制作的模型可以接受，但需以"4.x 兼容"选项重新导出 .moc3。
+
+→ 看板娘场景（眨眼 + idle + 嘴动 + emotion + motion）完全不需要 Cubism 5 新特性（增强 blend shape / offscreen 绘制 / 新 blend mode）。这个限制对实际功能 0 影响。
+
 #### v3-E2：换上目标模型 📋 计划中（依赖 E1）
 
 E1 跑通之后，换模型纯粹是**资产替换**，不动代码：
-- [ ] 寻找 / 购买 / 自制目标 Cubism 5 模型
+- [ ] 寻找 / 购买 / 自制目标 Cubism 4 兼容模型（moc3 ver ≤ 4）
 - [ ] 把 .moc3 / .model3.json 等资源放到约定路径
 - [ ] CharacterPanel 里改 `live2d_model` 字段 → 立刻生效
 - [ ] 校准 emotionMap（不同模型的表情命名可能不同）

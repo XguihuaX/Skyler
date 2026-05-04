@@ -88,6 +88,7 @@ interface FormState {
   name: string;
   persona: string;
   voice_model: string;
+  live2d_model: string;
   avatar_path: string;
 }
 
@@ -98,6 +99,7 @@ const EMPTY_FORM: FormState = {
   name: '',
   persona: '',
   voice_model: '',
+  live2d_model: '',
   avatar_path: '',
 };
 
@@ -291,6 +293,7 @@ export default function CharacterPanel() {
       name: c.name,
       persona: c.persona,
       voice_model: c.voice_model ?? '',
+      live2d_model: c.live2d_model ?? '',
       avatar_path: c.avatar_path ?? '',
     });
   };
@@ -302,6 +305,7 @@ export default function CharacterPanel() {
     const name        = form.name.trim();
     const persona     = form.persona.trim();
     const voiceModel  = form.voice_model.trim();
+    const live2dModel = form.live2d_model.trim();
     const avatarPath  = form.avatar_path.trim();
     if (!name || !persona) {
       showToast('角色名和提示词都是必填项');
@@ -315,6 +319,7 @@ export default function CharacterPanel() {
           persona,
           avatar_path: avatarPath || null,
           voice_model: voiceModel || null,
+          live2d_model: live2dModel || null,
         });
       } else if (form.id !== null) {
         // Momo(id=1) 名字不可改 — 即使前端表单 disabled，这里也排除掉
@@ -323,6 +328,7 @@ export default function CharacterPanel() {
           persona,
           avatar_path: avatarPath || null,
           voice_model: voiceModel || null,
+          live2d_model: live2dModel || null,
         });
       }
       await refresh();
@@ -588,6 +594,29 @@ export default function CharacterPanel() {
                 className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
                 style={inputStyle}
               />
+            </div>
+
+            <div>
+              <label
+                className="block text-xs mb-1"
+                style={{ color: 'var(--color-text-primary)' }}
+              >
+                Live2D 模型
+              </label>
+              <input
+                type="text"
+                value={form.live2d_model}
+                onChange={(e) => setForm({ ...form, live2d_model: e.target.value })}
+                placeholder="hiyori"
+                className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
+                style={inputStyle}
+              />
+              <p
+                className="text-[10px] mt-1"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                对应 frontend/public/live2d/&lt;name&gt;/ 目录名。留空则使用静态图片。
+              </p>
             </div>
 
             <div>

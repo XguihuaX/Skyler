@@ -77,6 +77,9 @@ export interface CharacterRow {
   avatar_path: string | null;
   // v3-B: 角色专属 TTS 音色标识，留空表示沿用全局默认（仅存不用）
   voice_model: string | null;
+  // v3-E1: Live2D 模型目录名（对应 frontend/public/live2d/<name>/）。
+  // 留空表示该角色不启用 Live2D，渲染层回退到 avatar_path 静态图片。
+  live2d_model: string | null;
   created_at: string | null;
 }
 
@@ -110,6 +113,7 @@ export async function createCharacter(body: {
   persona: string;
   avatar_path?: string | null;
   voice_model?: string | null;
+  live2d_model?: string | null;
 }): Promise<CharacterRow> {
   const res = await fetch(`${BACKEND_BASE}/api/characters/create`, {
     method: 'POST',
@@ -134,6 +138,7 @@ export async function patchCharacter(
     persona?: string;
     avatar_path?: string | null;
     voice_model?: string | null;
+    live2d_model?: string | null;
   },
 ): Promise<CharacterRow> {
   const res = await fetch(`${BACKEND_BASE}/api/characters/${id}`, {

@@ -265,6 +265,12 @@ The life & tools agent reference. Borrowed concepts:
 
 Currently **All rights reserved** (no LICENSE file). Will switch to a permissive license (MIT or Apache 2.0) when the repo goes public — note: any Live2D models bundled later will carry their own Live2D Inc. licenses, which are *not* covered by Skyler's eventual project license.
 
+### Live2D model license
+
+During development Skyler ships with the official Live2D sample model **Hiyori** (under `frontend/public/live2d/hiyori/`), illustrated by Kani Biimu. The model is distributed under the **Live2D Free Material License Agreement** — development, learning and small-scale commercial use are permitted; medium-to-large enterprise commercial use requires a separate written license from Live2D Inc.
+
+v3-E2 will swap Hiyori out for an owned/commissioned model. At that point the bundled model is governed by its own original license, *not* Skyler's eventual project license.
+
 ---
 
 ## Contributing

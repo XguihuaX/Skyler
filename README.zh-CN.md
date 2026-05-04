@@ -266,6 +266,12 @@ Skyler 站在两个项目的肩膀上：
 
 目前 **All rights reserved**（无 LICENSE 文件）。仓库公开后会切换到宽松许可证（MIT 或 Apache 2.0）—— 注意：之后捆绑的 Live2D 模型有 Live2D Inc. 自己的许可证，**不在** Skyler 项目许可证覆盖范围内。
 
+### Live2D 模型许可
+
+Skyler 当前开发期使用 Live2D 官方样本模型 **Hiyori**（位于 `frontend/public/live2d/hiyori/`），由 illustrator Kani Biimu 创作。该模型遵循 **Live2D Free Material License Agreement**，开发/学习/小规模商用 OK；中大型企业商用需向 Live2D Inc. 申请书面授权。
+
+v3-E2 阶段会替换为自有/购买的模型，届时 Skyler 项目本身的 license 不覆盖该模型，模型遵循各自原始 license。
+
 ---
 
 ## 贡献
