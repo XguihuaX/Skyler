@@ -11,6 +11,24 @@
   ``format`` 用 ``AudioFormat`` 枚举（采样率随枚举值带入）。
 * ``instruct_supported=False`` 时不传 ``instruction``，避免 longyumi_v3
   这类不支持引导的音色返回 400。
+
+v3-G' chunk 1：emotion 真生效（走 SSML）
+----------------------------------------
+之前 ``emotion`` 字段被 SDK 静默忽略（不通过 instruction 也不通过 SSML
+的话 SDK 没渠道接收）。改造为：emotion 命中非 neutral 时把文本包成
+``<voice emotion="X">…</voice>`` 再调 ``call()``。
+
+DashScope SDK 在 ``speech_synthesizer.py:740-744``（venv 已 audit）每次
+``call()`` 内部强制 ``additional_params["enable_ssml"] = True``，所以**不
+需要**手动配 enable_ssml；只要文本是合法 SSML 片段，SDK 走 SSML 解析路径
+即生效。
+
+XML 转义用 ``xml.sax.saxutils.escape`` —— 正文里带 ``&`` / ``<`` / ``>``
+不转的话 SSML 解析器会炸，整段返回 400。
+
+适用音色：v3-flash 系列（longyumi_v3 / longfeifei_v3 / longanqin_v3 /
+longanhuan）已 audit 全支持 SSML。详见 config.yaml ``tts.available_voices``
++ ROADMAP v3-G' 章节音色目录。
 """
 from __future__ import annotations
 
@@ -18,6 +36,7 @@ import asyncio
 import logging
 import os
 from typing import Optional
+from xml.sax.saxutils import escape as xml_escape
 
 import dashscope
 from dashscope.audio.tts_v2 import AudioFormat, SpeechSynthesizer
@@ -76,6 +95,19 @@ class CosyVoiceTTS(TTSBase):
                 "DASHSCOPE_API_KEY 未设置，CosyVoice 调用将失败"
             )
 
+    def _wrap_ssml(self, text: str, emotion_en: str) -> str:
+        """把正文包成 ``<voice emotion="X">…</voice>``。
+
+        - emotion ∈ {"", "neutral"} → 直接返回原 text，避免无意义 SSML overhead
+        - 其他 → ``<voice emotion="happy">escaped text</voice>``
+
+        DashScope SDK 在 ``call()`` 内部已强制 enable_ssml；plain text 仍按
+        plain 处理，包含 ``<voice>`` 标签的就走 SSML 路径。
+        """
+        if not emotion_en or emotion_en == "neutral":
+            return text
+        return f'<voice emotion="{emotion_en}">{xml_escape(text)}</voice>'
+
     def _blocking_synthesize(
         self, text: str, emotion_en: str,
     ) -> Optional[bytes]:
@@ -86,11 +118,23 @@ class CosyVoiceTTS(TTSBase):
             # 24kHz mono 16bit WAV — 浏览器原生可播
             "format": AudioFormat.WAV_24000HZ_MONO_16BIT,
         }
+        # instruct-supported 音色（如 longanhuan）：SSML emotion + 自然语言
+        # instruction 双管齐下；instruct 不支持时 (longyumi_v3 / longfeifei_v3
+        # / longanqin_v3) 仅用 SSML，避免 SDK 返 400。
         if self.instruct_supported and emotion_en and emotion_en != "neutral":
             kwargs["instruction"] = f"你说话的情感是{emotion_en}。"
 
+        # v3-G' chunk 1：把文本包成 <voice emotion="X">…</voice>，
+        # SDK 内部 enable_ssml=true 让真情感生效。
+        wrapped = self._wrap_ssml(text, emotion_en)
+        if wrapped is not text:
+            logger.debug(
+                "[CosyVoice SSML] voice=%s emotion=%s wrapped=%r",
+                self.voice, emotion_en, wrapped[:120],
+            )
+
         synthesizer = SpeechSynthesizer(**kwargs)
-        audio = synthesizer.call(text)
+        audio = synthesizer.call(wrapped)
         # SDK 在失败时返回 None / 空 bytes
         if not audio:
             logger.error(

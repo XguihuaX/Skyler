@@ -24,3 +24,34 @@ tts:
   - surprised
   - fearful
   - disgusted
+  # v3-G' chunk 1：可用音色目录，GET /api/tts/voices 直接返回。
+  # 加新音色直接 append 此处，前端 CharacterPanel 下拉自动多一项；
+  # 不需要改前端 / router 代码。
+  # 字段说明：
+  #   id    音色标识，写入 character.voice_model JSON 的 voice 字段
+  #   label 中文显示名
+  #   ssml  是否支持 SSML（v3-flash 系列全 true → emotion 走 SSML 真生效）
+  #   instruct true=支持 instruct 引导 / false=不支持 / null=未确认
+  #   traits 人物气质 / 年龄段提示，CharacterPanel 下拉显示
+  available_voices:
+    cosyvoice:
+      - id: longyumi_v3
+        label: 龙裕米 v3
+        ssml: true
+        instruct: null
+        traits: 当前默认 / v3-flash
+      - id: longfeifei_v3
+        label: 龙菲菲 v3
+        ssml: true
+        instruct: false
+        traits: 甜美娇气女 / 20-25
+      - id: longanqin_v3
+        label: 龙安琴 v3
+        ssml: true
+        instruct: false
+        traits: 亲和活泼女 / 20-25
+      - id: longanhuan
+        label: 龙安欢
+        ssml: true
+        instruct: true
+        traits: 欢脱元气女 / 20-30

@@ -128,6 +128,23 @@ def get_cosyvoice_config() -> dict:
     return (config_yaml.get("tts") or {}).get("cosyvoice", {}) or {}
 
 
+def get_available_voices() -> dict:
+    """v3-G' chunk 1：返回 config.yaml 的 ``tts.available_voices`` 块。
+
+    GET /api/tts/voices 直接序列化此结构。Returns dict like::
+
+        {
+          "cosyvoice": [
+            {"id": "longyumi_v3", "label": "龙裕米 v3", "ssml": true, ...},
+            ...
+          ]
+        }
+
+    Provider 缺失 / 配置错误时返回 ``{}``，由 router 包成空 providers 列表。
+    """
+    return (config_yaml.get("tts") or {}).get("available_voices", {}) or {}
+
+
 def get_default_voice_config() -> dict:
     """全局默认 VoiceConfig 的原始字典。
 

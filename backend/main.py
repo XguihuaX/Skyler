@@ -53,6 +53,7 @@ from backend.routes.conversations_api import router as conversations_router
 from backend.routes.health_api import app_state, router as health_router
 from backend.routes.live2d_api import router as live2d_router
 from backend.routes.memory_api import router as memory_router
+from backend.routes.tts_api import router as tts_router
 from backend.routes.users_api import router as users_router
 from backend.routes.ws import router as ws_router
 from backend.scheduler.task import scheduler
@@ -208,4 +209,5 @@ app.include_router(conversations_router, prefix="/api", tags=["conversations"])
 app.include_router(characters_router,    prefix="/api", tags=["characters"])
 app.include_router(users_router,         prefix="/api", tags=["users"])
 app.include_router(live2d_router,        prefix="/api", tags=["live2d"])
+app.include_router(tts_router,           prefix="/api", tags=["tts"])
 app.include_router(ws_router,                            tags=["websocket"])
