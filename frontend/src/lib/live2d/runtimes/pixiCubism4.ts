@@ -45,6 +45,31 @@ interface CubismCoreModelLipSync {
   setParameterValueById?: (id: string, value: number) => void;
 }
 
+// pixi-live2d-display 的 ``model.focus(x, y)`` 与 ``focusController.focus(x, y)``
+// **不是同一个坐标系**（v3-E2 patch c3b6ae2 误判踩坑后查证，下次别再错）：
+//
+//   - ``Live2DModel.focus(x, y, instant?)``
+//     types/index.d.ts:1700-1706 docstring "Position in world space"。
+//     dist/cubism4.es.js:9918 实现把 world (x,y) 经 ``toModelPosition`` 投回
+//     模型本地像素，再 ``atan2 → cos,-sin`` 归一化为单位向量丢给 controller。
+//     **副作用**：magnitude 恒等于 1，传 (0,0) 会被 atan2 视为 (1,0) → 头像
+//     看右；传画布左上 (0,0) 会算出指向左上的单位向量。这条 API 适合"模型
+//     看着鼠标光标"这种 follow-pointer 场景，不适合"复位看正前方"。
+//
+//   - ``FocusController.focus(x, y, instant?)``
+//     types/index.d.ts:1126-1132 docstring "X position in range [-1, 1]"。
+//     dist/cubism4.es.js:8013 实现是 ``targetX = clamp(x, -1, 1)`` 直写。
+//     (0, 0) = 严格中央（无偏移）。这是 v3-E2 视线复位想要的语义。
+//
+// 复位通道用 ``model.internalModel.focusController.focus(0, 0)`` 直接走
+// FocusController，绕过 Live2DModel 的 atan2 包装。
+interface CubismFocusController {
+  focus?: (x: number, y: number, instant?: boolean) => void;
+}
+interface CubismInternalModelWithFocus {
+  focusController?: CubismFocusController;
+}
+
 // v3-E1 step4：Hiyori model3.json 的 LipSync group 单参数 ID。换模型时若
 // 参数名不同（"PARAM_MOUTH_OPEN_Y" 等），用 model3.json 的 Controllers.LipSync.Items[].Id。
 // 当前 Hiyori 与候选八重神子模型都是 ParamMouthOpenY，硬编码这一个值即可。
@@ -168,14 +193,15 @@ export class PixiCubism4Runtime implements Live2DRuntime {
     // bug / 切到 Electron / 项目嵌别的 host 时不返工。3/4 是 macOS Tauri 实测
     // 可靠的兜底。
     //
-    // model.focus(0, 0) 不带 instant 参数 → 平滑过渡（pixi-live2d-display
-    // 内置阻尼），视觉比硬切自然。重复调用 focus(0, 0) 是幂等的。
+    // 复位走 ``focusController.focus(0, 0)`` 不走 ``model.focus(0, 0)`` ——
+    // 文件头注释记录了两者坐标系差异。controller 的 (0, 0) 才是严格中央。
+    // 不传 instant → 平滑过渡（pixi-live2d-display 内部阻尼），视觉比硬切
+    // 自然。重复调用幂等。
     const handleGazeReset = (): void => {
       if (!ctx.model) return;  // _teardown 中可能已 null
-      const m = ctx.model as unknown as {
-        focus?: (x: number, y: number, instant?: boolean) => void;
-      };
-      m.focus?.(0, 0);
+      const internal = ctx.model.internalModel as unknown as
+        CubismInternalModelWithFocus | undefined;
+      internal?.focusController?.focus?.(0, 0);
     };
     const handleMouseOut = (e: MouseEvent): void => {
       // relatedTarget === null 是"鼠标离开整个 document"的可靠判断；
