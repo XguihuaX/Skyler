@@ -195,6 +195,42 @@ A transparent floating Widget appears. Click ⚙ to open the full Panel.
 
 ---
 
+## Live2D Asset Management
+
+Skyler ships with the Live2D official free sample model **Hiyori** as the
+default avatar. To add another character, follow these four steps:
+
+1. **Drop assets into `frontend/public/live2d/<slug>/`** — pick a lowercase
+   ASCII slug (`yae-miko`, `momo-v2`, etc.). The slug is what you'll later
+   write into `characters.live2d_model` from the CharacterPanel UI.
+2. **Make sure the directory has a `*.model3.json` entry file** plus a
+   `*.moc3`, `textures/`, and at least one motion. See
+   [`frontend/public/live2d/README.md`](frontend/public/live2d/README.md)
+   for the full integrity checklist.
+3. **Validate the moc3 version** before wiring it up:
+   ```bash
+   python -m tools.check_moc3_version frontend/public/live2d/<slug>/
+   ```
+   pixi-live2d-display does not support Cubism 5; the script exits non-zero
+   if any `.moc3` is too new or if a Cubism 2 `.moc` slips in.
+4. **Bind in CharacterPanel** — open the character editor, set the
+   `live2d_model` field to your slug. Reload the conversation and the new
+   model takes over.
+
+**IP / license isolation** — by default `.gitignore` excludes every
+subdirectory under `frontend/public/live2d/` except `hiyori/`. Third-party
+or commissioned models you drop in will not be tracked or pushed; this is
+intentional, since Skyler's project license cannot cover assets you don't
+own. To whitelist a self-made or properly-licensed model into git, append
+`!frontend/public/live2d/<slug>/` to `.gitignore`.
+
+**Disclaimer** — Skyler's own code is MIT-licensed, but it makes no
+guarantees about any Live2D model assets you add. Sourcing, licensing,
+and distribution rights for those assets are entirely the user's
+responsibility.
+
+---
+
 ## Roadmap
 
 See [**ROADMAP.md**](ROADMAP.md) for the full prioritized roadmap.

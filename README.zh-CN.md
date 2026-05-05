@@ -196,6 +196,37 @@ npm run tauri dev
 
 ---
 
+## Live2D 资产管理
+
+Skyler 默认带 Live2D 官方免费样品模型 **Hiyori**。想加新角色按这四步走：
+
+1. **资产放进 `frontend/public/live2d/<slug>/`** —— slug 用小写英文（例如
+   `yae-miko`、`momo-v2`），后面在 CharacterPanel 里 `live2d_model` 字段
+   填的就是这个名字。
+2. **目录里必须有一个 `*.model3.json` 入口文件**，还要有 `*.moc3`、
+   `textures/`，至少一个 motion。完整 checklist 看
+   [`frontend/public/live2d/README.md`](frontend/public/live2d/README.md)。
+3. **接通前先验 moc3 版本**：
+   ```bash
+   python -m tools.check_moc3_version frontend/public/live2d/<slug>/
+   ```
+   pixi-live2d-display 不支持 Cubism 5，version ≥ 5 或者塞进来一个 Cubism 2
+   的 `.moc` 都会让脚本退出码非零。
+4. **CharacterPanel 里绑定** —— 打开角色编辑器，把 `live2d_model` 字段填
+   成你的 slug，重进对话就生效。
+
+**IP / license 隔离** —— `.gitignore` 默认 ignore `frontend/public/live2d/`
+下除 `hiyori/` 以外所有子目录。你扔进去的第三方 / 委托资产不会被 track，
+更不会被 push 出去。这是有意的：Skyler 项目的 license 没法覆盖不属于你的
+资产。自制 / 已清理 license 的模型想入库时，在 `.gitignore` 末尾追加
+`!frontend/public/live2d/<slug>/`。
+
+**免责声明** —— Skyler 自己的代码是 MIT，但**不为用户添加的任何 Live2D
+资产 license 背书**。资产怎么来的、有没有授权、能不能传播，完全是用户
+自己的责任。
+
+---
+
 ## 路线图
 
 完整路线图见 [**ROADMAP.md**](ROADMAP.md)。

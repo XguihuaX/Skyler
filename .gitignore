@@ -23,3 +23,16 @@ frontend/dist/
 *.dump
 *.sql
 .claude/
+
+# ==============================
+# Live2D 角色资产 IP 风险隔离 (v3-E2)
+# ==============================
+# 默认排除 frontend/public/live2d/ 下所有子目录（角色资产），仅白名单：
+#   - core/   ← Cubism Core JS SDK runtime（不是角色资产，必须入库）
+#   - hiyori/ ← Live2D 官方免费样品（已确认 license OK）
+# 第三方 / 同人模型（八重神子 / 加藤惠 / 自购委托等）放进对应 slug 目录后
+# 会自动 ignore，避免 IP 资产意外进 git 历史。增加新白名单角色（自制 / 已
+# 完成 license 清理的）时在下面追加 `!frontend/public/live2d/<slug>/`。
+frontend/public/live2d/*/
+!frontend/public/live2d/core/
+!frontend/public/live2d/hiyori/
