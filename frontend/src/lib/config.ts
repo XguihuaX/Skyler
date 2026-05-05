@@ -93,6 +93,12 @@ export interface ConversationRow {
   message_count: number;
 }
 
+// v3-E1 Step Z.2：chat_history.kind —— 'normal' 默认；'touch' 是用户点击 Live2D
+// 触发的对话（user 占位 [touch] + AI 主动回应一句）；'proactive' 预留给 v3-F'
+// 后端定时调度器主动开启的对话。前端按 kind 做渲染区分（user 侧 [touch] 显示
+// 成"（碰了一下）"灰字而不是裸字符串）。
+export type ChatKind = 'normal' | 'touch' | 'proactive';
+
 export interface ChatMessageRow {
   id: number;
   role: 'user' | 'assistant';
@@ -100,6 +106,7 @@ export interface ChatMessageRow {
   conversation_id: number | null;
   character_id: number | null;
   created_at: string | null;
+  kind: ChatKind;
 }
 
 export async function fetchCharacters(): Promise<CharacterRow[]> {

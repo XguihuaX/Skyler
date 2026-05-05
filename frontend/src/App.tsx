@@ -78,6 +78,7 @@ function App() {
                   content: r.content,
                   streaming: false,
                   ts: 0,
+                  kind: r.kind ?? 'normal',
                 })),
               );
             } catch (e) {

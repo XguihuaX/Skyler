@@ -388,6 +388,9 @@ async def search_todo(
 # ---------------------------------------------------------------------------
 
 
+_VALID_CHAT_KINDS = frozenset({"normal", "touch", "proactive"})
+
+
 async def add_chat_history(
     session: AsyncSession,
     user_id: str,
@@ -396,6 +399,7 @@ async def add_chat_history(
     conversation_id: Optional[int] = None,
     character_id: Optional[int] = None,
     interrupted_at: Optional[datetime] = None,
+    kind: str = "normal",
 ) -> ChatHistory:
     """Append a message to the persistent chat history for the given user.
 
@@ -409,9 +413,14 @@ async def add_chat_history(
         interrupted_at:  v3-F. Non-None marks this assistant row as a partial
                          reply truncated by user interrupt. Only assistant
                          rows should set this.
+        kind:            v3-E1 Step Z.2. 'normal' (default) / 'touch' /
+                         'proactive'. Unknown values silently coerced to
+                         'normal' so a typo upstream never blocks persistence.
 
     Returns the persisted ChatHistory instance.
     """
+    if kind not in _VALID_CHAT_KINDS:
+        kind = "normal"
     message = ChatHistory(
         user_id=user_id,
         role=role,
@@ -419,6 +428,7 @@ async def add_chat_history(
         conversation_id=conversation_id,
         character_id=character_id,
         interrupted_at=interrupted_at,
+        kind=kind,
     )
     session.add(message)
     await session.commit()
@@ -427,19 +437,29 @@ async def add_chat_history(
 
 
 async def get_chat_history(
-    session: AsyncSession, user_id: str, limit: int = 50
+    session: AsyncSession,
+    user_id: str,
+    limit: int = 50,
+    kinds: Optional[List[str]] = None,
 ) -> List[ChatHistory]:
     """Return the most recent `limit` chat messages for the given user.
+
+    Args:
+        kinds: Optional whitelist of `kind` values to include. When None,
+               all kinds are returned (back-compat for short_term restore /
+               legacy callers). Pass e.g. `['normal']` to exclude touch /
+               proactive turns from profile_summary regen.
 
     Results are returned in chronological order (oldest → newest) so they
     can be fed directly into a messages list without further sorting.
     """
-    result = await session.execute(
-        select(ChatHistory)
-        .where(ChatHistory.user_id == user_id)
-        .order_by(ChatHistory.created_at.desc(), ChatHistory.id.desc())
-        .limit(limit)
-    )
+    query = select(ChatHistory).where(ChatHistory.user_id == user_id)
+    if kinds is not None:
+        query = query.where(ChatHistory.kind.in_(list(kinds)))
+    query = query.order_by(
+        ChatHistory.created_at.desc(), ChatHistory.id.desc()
+    ).limit(limit)
+    result = await session.execute(query)
     rows = list(result.scalars().all())
     rows.reverse()
     return rows

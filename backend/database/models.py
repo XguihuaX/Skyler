@@ -123,5 +123,14 @@ class ChatHistory(Base):
     created_at = Column(DateTime, server_default=func.now())
     # v3-F：被语音 / UI 打断截断时记录时间戳。None = 正常完成。仅 assistant 行使用。
     interrupted_at = Column(DateTime, nullable=True)
+    # v3-E1 Step Z.2：这一行是怎么产生的，决定下游 profile_summary 等是否纳入。
+    # 'normal' / 'touch' / 'proactive' —— application 层校验，不下放到 DB enum。
+    # touch / assistant 一对都标 'touch'；详见 migrations/v3_e1_z.py 注释。
+    kind = Column(
+        String(16),
+        nullable=False,
+        default="normal",
+        server_default="normal",
+    )
 
     user = relationship("User", back_populates="chat_history")

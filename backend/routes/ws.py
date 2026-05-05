@@ -266,8 +266,13 @@ async def _regenerate_profile_summary(user_id: str) -> None:
     """
     try:
         async with AsyncSessionLocal() as session:
+            # v3-E1 Step Z.2：白名单只取 'normal' 行 —— touch / proactive 触发的
+            # 对话 user 占位（[touch]）+ AI 主动回复一句不应作为画像样本。
+            # 用白名单而非黑名单：未来新增 kind 时默认排除，不会沉默污染画像。
             rows = await get_chat_history(
-                session, user_id, limit=PROFILE_SUMMARY_HISTORY_LIMIT,
+                session, user_id,
+                limit=PROFILE_SUMMARY_HISTORY_LIMIT,
+                kinds=["normal"],
             )
 
         # 1. Empty history → clear the summary outright.
@@ -404,6 +409,7 @@ async def _update_memory(
     conversation_id: Optional[int] = None,
     character_id: Optional[int] = None,
     skip_user_history: bool = False,
+    kind: str = "normal",
 ) -> None:
     """Persist the conversation turn to short-term buffer and chat_history.
 
@@ -414,6 +420,9 @@ async def _update_memory(
     V2.5-C2a: skip_user_history=True when the user-side row was already
     persisted earlier in the turn (e.g. ASR transcript was written before the
     pipeline started, so we only need the assistant row here).
+
+    v3-E1 Step Z.2: ``kind`` 同时打在 user 和 assistant 两行上 —— 一对
+    （[touch] + AI 回应）逻辑上是同源的，profile_summary 用整对过滤。
     """
     # v3-F 回归修：流式按句剥 thinking（chat.py _parse_thinking）有边界漏网，
     # 写库前再剥一道，确保 short_term + chat_history 都不带 <thinking> 标签。
@@ -428,11 +437,13 @@ async def _update_memory(
                     session, user_id, "user", user_text,
                     conversation_id=conversation_id,
                     character_id=character_id,
+                    kind=kind,
                 )
             await add_chat_history(
                 session, user_id, "assistant", reply,
                 conversation_id=conversation_id,
                 character_id=character_id,
+                kind=kind,
             )
 
         if conversation_id is not None:
@@ -470,6 +481,9 @@ class _TurnState:
         self.user_history_already_written: bool = False
         # Set True 当端点收到 interrupt → 让 _handle_message_safe 走 interrupted 收尾
         self.interrupted: bool = False
+        # v3-E1 Step Z.2：本轮 kind ('normal' / 'touch' / 'proactive')。
+        # 让 _save_interrupted_turn 也能给 partial reply 打上正确 kind。
+        self.kind: str = "normal"
 
     def reset_for_new_turn(self) -> None:
         # 不动 current_turn —— 由调用方（端点）保证已 cancel + await
@@ -480,6 +494,7 @@ class _TurnState:
         self.char_id = None
         self.user_history_already_written = False
         self.interrupted = False
+        self.kind = "normal"
 
 
 async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
@@ -511,6 +526,7 @@ async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
                     session, user_id, "user", state.user_text,
                     conversation_id=state.conv_id,
                     character_id=state.char_id,
+                    kind=state.kind,
                 )
             if full_reply:
                 await add_chat_history(
@@ -518,6 +534,7 @@ async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
                     conversation_id=state.conv_id,
                     character_id=state.char_id,
                     interrupted_at=interrupted_at,
+                    kind=state.kind,
                 )
 
         if state.conv_id is not None:
@@ -569,6 +586,11 @@ async def _handle_message(
     # 把可见信息写入 state，让打断收尾能找到 conv / char / user_text
     state.conv_id = conv_id
     state.char_id = char_id
+
+    # v3-E1 Step Z.2：本轮 kind。touch 事件 = 'touch'；其他全 'normal'。
+    # v3-F' 接通后 proactive 触发路径在那里设 'proactive'。
+    turn_kind = "touch" if msg_type == "touch" else "normal"
+    state.kind = turn_kind
 
     user_history_already_written = False
 
@@ -835,6 +857,7 @@ async def _handle_message(
             conversation_id=conv_id,
             character_id=char_id,
             skip_user_history=user_history_already_written,
+            kind=turn_kind,
         ))
 
 

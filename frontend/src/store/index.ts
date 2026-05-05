@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AppConfig, CharacterRow, ConversationRow } from '../lib/config';
+import type { AppConfig, CharacterRow, ChatKind, ConversationRow } from '../lib/config';
 
 export type AppMode = 'widget' | 'panel';
 export type AiStatus = 'idle' | 'listening' | 'thinking' | 'speaking' | 'interrupted';
@@ -23,6 +23,9 @@ export interface ChatMessage {
   content: string;
   streaming: boolean;    // true while text_chunks still arriving for an assistant msg
   ts: number;            // performance.now() at create-time, used as React key tie-breaker
+  // v3-E1 Step Z.2：与后端 chat_history.kind 同步。store 创建侧默认 'normal'，
+  // API 加载侧透传后端值。'touch' 行 user-side 渲染成"（碰了一下）"灰字。
+  kind: ChatKind;
 }
 
 // V2.5-C2 — ConversationList collapse persistence

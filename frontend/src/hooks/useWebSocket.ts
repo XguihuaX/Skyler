@@ -126,6 +126,8 @@ export function useWebSocket(): UseWebSocketReturn {
             content,
             streaming: false,
             ts: performance.now(),
+            // ASR 永远是用户主动语音输入，不是 touch / proactive
+            kind: 'normal',
           });
         }
         break;
@@ -159,6 +161,12 @@ export function useWebSocket(): UseWebSocketReturn {
             content: chunk,
             streaming: true,
             ts: performance.now(),
+            // streaming assistant 气泡 kind 跟随当轮 turn 决定（store
+            // 取不到，因为这里就是产生 turn 的入口）。简化处理：所有
+            // streaming 气泡标 'normal'，触摸触发的 assistant 行只在
+            // 后端 chat_history 持久化时打 'touch'，前端 live 渲染期间
+            // 不需要灰字处理（用户看着像 Momo 自然冒了一句话）。
+            kind: 'normal',
           });
           s.setStreamingMessageId(id);
         } else {
@@ -364,6 +372,8 @@ export function useWebSocket(): UseWebSocketReturn {
       content,
       streaming: false,
       ts: performance.now(),
+      // sendText 永远是用户主动文字输入
+      kind: 'normal',
     });
     console.log(`[FRONT] send text len=${content.length}`);
     ws.send(JSON.stringify({

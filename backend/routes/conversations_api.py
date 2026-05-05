@@ -159,6 +159,8 @@ async def list_conversation_messages(
             "conversation_id": m.conversation_id,
             "character_id": m.character_id,
             "created_at": _fmt_dt(m.created_at),
+            # v3-E1 Step Z.2：让前端区分 'touch' / 'proactive' 行做特殊渲染
+            "kind": m.kind or "normal",
         }
         for m in rows
     ]

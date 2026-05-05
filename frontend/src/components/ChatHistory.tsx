@@ -4,6 +4,24 @@ import { stripThinking } from '../lib/textFilters';
 
 const Bubble = memo(function Bubble({ m }: { m: ChatMessage }) {
   const isUser = m.role === 'user';
+
+  // v3-E1 Step Z.2：'touch' 行 user-side 显示成"（碰了一下）"灰字而不是
+  // 裸字符串 [touch]，让对话历史看起来像 Momo 自然回应了一下抚摸；
+  // assistant 行正常显示。'proactive'（v3-F'）user-side 同理 → "（提醒）"，
+  // 但本步先只渲染 touch，proactive 等 v3-F' 一起做。
+  if (isUser && m.kind === 'touch') {
+    return (
+      <div className="flex justify-end">
+        <span
+          className="text-xs italic"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          （碰了一下）
+        </span>
+      </div>
+    );
+  }
+
   // v3-F 回归修：渲染前剥 <thinking>...</thinking>。后端写库前已剥一道，
   // 此处兜底处理老历史数据 + streaming 边界
   const displayContent = stripThinking(m.content);

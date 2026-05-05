@@ -33,6 +33,7 @@ from backend.database import AsyncSessionLocal, init_db
 from backend.database.migrations.v2_5_b import migrate as migrate_v2_5_b
 from backend.database.migrations.v3_b import run_migration as migrate_v3_b
 from backend.database.migrations.v3_e1 import run_migration as migrate_v3_e1
+from backend.database.migrations.v3_e1_z import run_migration as migrate_v3_e1_z
 from backend.database.migrations.v3_f import run_migration as migrate_v3_f
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
@@ -75,6 +76,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 1b4. V3-E1 schema migration: characters.live2d_model (idempotent) ────
     await migrate_v3_e1()
+
+    # ── 1b5. V3-E1 Step Z.2 schema migration: chat_history.kind (idempotent) ─
+    await migrate_v3_e1_z()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

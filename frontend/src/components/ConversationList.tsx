@@ -61,6 +61,7 @@ export default function ConversationList() {
         content: r.content,
         streaming: false,
         ts: 0,
+        kind: r.kind ?? 'normal',
       })));
     } catch (e) {
       console.error('[ConversationList] fetchMessages failed:', e);
