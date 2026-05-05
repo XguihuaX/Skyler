@@ -736,10 +736,12 @@ export default function CharacterPanel() {
                     </div>
                   )}
 
-                  {/* 兼容性 badge：SSML / Instruct */}
-                  {selectedVoice && (
+                  {/* v3-G' patch：badge 只剩 Instruct（emotion 真生效与否）。
+                      true → 绿色"情感控制"；false → outline "纯音色"；null
+                      → 不显示（音色 instruct 支持未确认）。 */}
+                  {selectedVoice && selectedVoice.instruct !== null && (
                     <div className="flex items-center gap-1 mt-1 flex-wrap text-[10px]">
-                      {selectedVoice.ssml ? (
+                      {selectedVoice.instruct === true ? (
                         <span
                           className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
                           style={{
@@ -748,34 +750,9 @@ export default function CharacterPanel() {
                           }}
                         >
                           <CheckCircle2 size={10} />
-                          SSML 情感
+                          情感控制
                         </span>
                       ) : (
-                        <span
-                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
-                          style={{
-                            background: 'var(--color-bg-elevated)',
-                            color: 'var(--color-text-primary)',
-                            border: '1px solid var(--color-border)',
-                          }}
-                        >
-                          <AlertTriangle size={10} />
-                          无 SSML
-                        </span>
-                      )}
-                      {selectedVoice.instruct === true && (
-                        <span
-                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
-                          style={{
-                            background: 'var(--color-accent)',
-                            color: 'var(--color-bubble-ai-text)',
-                          }}
-                        >
-                          <CheckCircle2 size={10} />
-                          Instruct
-                        </span>
-                      )}
-                      {selectedVoice.instruct === false && (
                         <span
                           className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
                           style={{
@@ -784,7 +761,7 @@ export default function CharacterPanel() {
                             border: '1px solid var(--color-border)',
                           }}
                         >
-                          无 Instruct
+                          纯音色
                         </span>
                       )}
                     </div>
@@ -814,9 +791,10 @@ export default function CharacterPanel() {
                     className="text-[10px] mt-1"
                     style={{ color: 'var(--color-text-secondary)' }}
                   >
-                    选项来自 config.yaml ``tts.available_voices``。SSML 情感
-                    标识：跟你说不同情感的话时音色真有差异。留"未配置"则
-                    用全局默认音色。
+                    选项来自 config.yaml ``tts.available_voices``。"情感控制"
+                    标记：选中此音色时，跟你说不同情感的话 TTS 会按 emotion
+                    引导（happy / sad / angry / surprised）。留"未配置"则用
+                    全局默认音色。
                   </p>
                 </div>
               );

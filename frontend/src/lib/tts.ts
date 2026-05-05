@@ -7,10 +7,13 @@ const BACKEND_BASE = 'http://127.0.0.1:8000';
 
 // 与 backend/routes/tts_api.py 的 VoiceInfo / TtsProvider 对齐。
 // 后端是 single source of truth；schema drift 时 build 立即报错。
+//
+// v3-G' patch：删除 ssml 字段。chunk 1a 把 ssml=true 当 "emotion 真生效"
+// 标记是错的（DashScope SSML 没 emotion 属性，撤销）。emotion 控制全部走
+// instruct 字段路径。未来 SSML rate/pitch/effect/bgm 真用上时再加回。
 export interface VoiceInfo {
   id: string;
   label: string;
-  ssml: boolean;
   instruct: boolean | null;   // null = SDK 文档没确认，true/false 是已确认
   traits: string;
 }
