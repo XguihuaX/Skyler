@@ -80,6 +80,12 @@ export interface CharacterRow {
   // v3-E1: Live2D 模型目录名（对应 frontend/public/live2d/<name>/）。
   // 留空表示该角色不启用 Live2D，渲染层回退到 avatar_path 静态图片。
   live2d_model: string | null;
+  // v3-E2: per-character emotion / motion / hit-area map，JSON 字符串。
+  // null / 空 / parse 失败 → resolveCharacterMaps 回退到 config/live2d.ts
+  // 全局默认（v3-E1 已 ship 的 motionMap / emotionMap）。
+  emotion_map_json:  string | null;
+  motion_map_json:   string | null;
+  hit_area_map_json: string | null;
   created_at: string | null;
 }
 
@@ -121,6 +127,10 @@ export async function createCharacter(body: {
   avatar_path?: string | null;
   voice_model?: string | null;
   live2d_model?: string | null;
+  // v3-E2 可选 per-character maps
+  emotion_map_json?: string | null;
+  motion_map_json?: string | null;
+  hit_area_map_json?: string | null;
 }): Promise<CharacterRow> {
   const res = await fetch(`${BACKEND_BASE}/api/characters/create`, {
     method: 'POST',
@@ -146,6 +156,10 @@ export async function patchCharacter(
     avatar_path?: string | null;
     voice_model?: string | null;
     live2d_model?: string | null;
+    // v3-E2 可选 per-character maps
+    emotion_map_json?: string | null;
+    motion_map_json?: string | null;
+    hit_area_map_json?: string | null;
   },
 ): Promise<CharacterRow> {
   const res = await fetch(`${BACKEND_BASE}/api/characters/${id}`, {

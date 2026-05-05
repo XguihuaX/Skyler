@@ -35,6 +35,11 @@ def _to_dict(c: Character) -> dict:
         "avatar_path": c.avatar_path,
         "voice_model": c.voice_model,
         "live2d_model": c.live2d_model,
+        # v3-E2: per-character map JSON 字段。NULL → 前端 resolveCharacterMaps
+        # 回退到 config/live2d.ts 全局默认。
+        "emotion_map_json":  c.emotion_map_json,
+        "motion_map_json":   c.motion_map_json,
+        "hit_area_map_json": c.hit_area_map_json,
         "created_at": _fmt_dt(c.created_at),
     }
 
@@ -45,6 +50,11 @@ class CharacterCreateBody(BaseModel):
     avatar_path: Optional[str] = None
     voice_model: Optional[str] = None
     live2d_model: Optional[str] = None
+    # v3-E2: per-character maps（JSON 字符串），可选。Schema 不下放校验，
+    # 前端 parse 失败兜底回退默认 + console.warn。
+    emotion_map_json:  Optional[str] = None
+    motion_map_json:   Optional[str] = None
+    hit_area_map_json: Optional[str] = None
 
 
 class CharacterPatchBody(BaseModel):
@@ -53,6 +63,9 @@ class CharacterPatchBody(BaseModel):
     avatar_path: Optional[str] = None
     voice_model: Optional[str] = None
     live2d_model: Optional[str] = None
+    emotion_map_json:  Optional[str] = None
+    motion_map_json:   Optional[str] = None
+    hit_area_map_json: Optional[str] = None
 
 
 @router.get("/characters/list")
@@ -83,6 +96,9 @@ async def create_character(
         avatar_path=body.avatar_path,
         voice_model=body.voice_model,
         live2d_model=body.live2d_model,
+        emotion_map_json=body.emotion_map_json,
+        motion_map_json=body.motion_map_json,
+        hit_area_map_json=body.hit_area_map_json,
     )
     session.add(c)
     await session.commit()
@@ -112,6 +128,12 @@ async def patch_character(
         c.voice_model = updates["voice_model"]
     if "live2d_model" in updates:
         c.live2d_model = updates["live2d_model"]
+    if "emotion_map_json" in updates:
+        c.emotion_map_json = updates["emotion_map_json"]
+    if "motion_map_json" in updates:
+        c.motion_map_json = updates["motion_map_json"]
+    if "hit_area_map_json" in updates:
+        c.hit_area_map_json = updates["hit_area_map_json"]
     await session.commit()
     await session.refresh(c)
     return _to_dict(c)

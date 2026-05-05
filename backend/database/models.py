@@ -42,6 +42,13 @@ class Character(Base):
     # v3-E1: Live2D 模型标识，对应 frontend/public/live2d/<name>/ 目录名。
     # NULL = 不启用 Live2D，回退到 avatar_path 静态图片。
     live2d_model = Column(Text, nullable=True)
+    # v3-E2: per-character emotion / motion / hit-area map JSON 字段。
+    # 全部 TEXT NULL，前端 resolveCharacterMaps 在 NULL / 空 / parse 失败时
+    # 回退到 v3-E1 的全局默认（config/live2d.ts emotionMap / motionMap）。
+    # 详见 migrations/v3_e2_per_character_maps.py 字段语义。
+    emotion_map_json  = Column(Text, nullable=True)
+    motion_map_json   = Column(Text, nullable=True)
+    hit_area_map_json = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     conversations = relationship("Conversation", back_populates="character")
