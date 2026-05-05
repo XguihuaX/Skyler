@@ -26,7 +26,10 @@ router = APIRouter()
 class VoiceInfo(TypedDict):
     id: str
     label: str
-    ssml: bool
+    # v3-G' patch：emotion 控制现在走 instruct 自然语言指令，不走 SSML
+    # （DashScope SSML 没有 emotion 属性）。``ssml`` 字段在 chunk 1a 误用
+    # 后撤销；未来若启用 SSML rate/pitch/volume/effect/bgm 等真实属性，
+    # 重新加回此字段并落实到 cosyvoice.py 调用路径。
     instruct: Optional[bool]
     traits: str
 
@@ -59,7 +62,6 @@ def _coerce_voice(raw: dict) -> VoiceInfo:
     return VoiceInfo(
         id=str(raw.get("id", "")),
         label=str(raw.get("label", raw.get("id", ""))),
-        ssml=bool(raw.get("ssml", False)),
         instruct=instruct,
         traits=str(raw.get("traits", "")),
     )

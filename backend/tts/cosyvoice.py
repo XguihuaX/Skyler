@@ -12,23 +12,35 @@
 * ``instruct_supported=False`` 时不传 ``instruction``，避免 longyumi_v3
   这类不支持引导的音色返回 400。
 
-v3-G' chunk 1：emotion 真生效（走 SSML）
-----------------------------------------
-之前 ``emotion`` 字段被 SDK 静默忽略（不通过 instruction 也不通过 SSML
-的话 SDK 没渠道接收）。改造为：emotion 命中非 neutral 时把文本包成
-``<voice emotion="X">…</voice>`` 再调 ``call()``。
+v3-G' patch（撤销 chunk 1a SSML emotion 错误）—— emotion 走 instruct
+--------------------------------------------------------------------
+chunk 1a (de7ebe2) 误把 emotion 包成 ``<voice emotion="X">...</voice>``
+SSML，但 DashScope 官方 SSML 标签**没有 emotion 属性**（合法属性只有
+voice / rate / pitch / volume / effect / bgm），导致请求要么被静默忽略
+要么直接返 400。已撤销 SSML 包装，回到 v3-D 起就一直在用的 **instruct
+路径**——SDK 真接受的情感控制通道。
 
-DashScope SDK 在 ``speech_synthesizer.py:740-744``（venv 已 audit）每次
-``call()`` 内部强制 ``additional_params["enable_ssml"] = True``，所以**不
-需要**手动配 enable_ssml；只要文本是合法 SSML 片段，SDK 走 SSML 解析路径
-即生效。
+instruct 调用形态（venv 已 audit，不靠印象）：
 
-XML 转义用 ``xml.sax.saxutils.escape`` —— 正文里带 ``&`` / ``<`` / ``>``
-不转的话 SSML 解析器会炸，整段返回 400。
+  ``speech_synthesizer.py:140-167`` SpeechSynthesizer 构造接受
+      ``instruction: str`` 字段，max 128 chars。
+  ``speech_synthesizer.py:218-219`` 调用时 ``cmd["payload"]["parameters"]
+      ["instruction"] = self.instruction``，进入 WebSocket payload。
 
-适用音色：v3-flash 系列（longyumi_v3 / longfeifei_v3 / longanqin_v3 /
-longanhuan）已 audit 全支持 SSML。详见 config.yaml ``tts.available_voices``
-+ ROADMAP v3-G' 章节音色目录。
+我们传的字符串是自然语言指令： ``"你说话的情感是 {emotion}。"``（结尾必
+须有句号；前导空格按 DashScope 文档示例保留）。emotion 用文档列出的 7
+个英文枚举：``neutral / fearful / angry / sad / surprised / happy /
+disgusted``。
+
+硬约束：**只有 instruct-aware 音色支持此路径**（即 config.yaml 标
+``instruct: true`` 的音色，目前只有 ``longanhuan``）。其他音色传 instruction
+会被 SDK 返 400。所以 ``_blocking_synthesize`` 显式判 ``instruct_supported``
+分两条路。
+
+emotion 白名单：当前 LLM prompt（chat.py _build_emotion_instruction）只
+引导 neutral/happy/sad/angry/surprised 5 词。fearful / disgusted 在
+EMOTION_MAP 中只为兜底外部输入，**instruct 路径不引发**它们——避免给
+没在 LLM 引导列表的情感跑实验性 instruction。
 """
 from __future__ import annotations
 
@@ -36,7 +48,6 @@ import asyncio
 import logging
 import os
 from typing import Optional
-from xml.sax.saxutils import escape as xml_escape
 
 import dashscope
 from dashscope.audio.tts_v2 import AudioFormat, SpeechSynthesizer
@@ -45,6 +56,19 @@ from backend.config import get_cosyvoice_config
 from backend.tts.base import TTSBase
 
 logger = logging.getLogger(__name__)
+
+
+# v3-G' patch: instruct 路径触发的 emotion 白名单。
+# - happy / sad / angry / surprised：LLM emotion-instruction 引导用，4 项
+# - neutral：等价于"不指定"，按照 v3-D 起的约定不传 instruction
+# - fearful / disgusted：当前 LLM prompt 未引导，加进去会派发未验证的实验
+#   性 instruction，先排除；未来 prompt 加引导时同步加入此集合
+_INSTRUCT_EMOTION_WHITELIST: frozenset[str] = frozenset({
+    "happy",
+    "sad",
+    "angry",
+    "surprised",
+})
 
 
 # 中文情感词 → CosyVoice 英文情感值。语义见 _normalise_emotion 注释：
@@ -95,46 +119,49 @@ class CosyVoiceTTS(TTSBase):
                 "DASHSCOPE_API_KEY 未设置，CosyVoice 调用将失败"
             )
 
-    def _wrap_ssml(self, text: str, emotion_en: str) -> str:
-        """把正文包成 ``<voice emotion="X">…</voice>``。
-
-        - emotion ∈ {"", "neutral"} → 直接返回原 text，避免无意义 SSML overhead
-        - 其他 → ``<voice emotion="happy">escaped text</voice>``
-
-        DashScope SDK 在 ``call()`` 内部已强制 enable_ssml；plain text 仍按
-        plain 处理，包含 ``<voice>`` 标签的就走 SSML 路径。
-        """
-        if not emotion_en or emotion_en == "neutral":
-            return text
-        return f'<voice emotion="{emotion_en}">{xml_escape(text)}</voice>'
-
     def _blocking_synthesize(
         self, text: str, emotion_en: str,
     ) -> Optional[bytes]:
-        """同步调用 DashScope；放进 to_thread 里执行。"""
+        """同步调用 DashScope；放进 to_thread 里执行。
+
+        emotion 路由：
+          - 音色 ``instruct_supported=True`` 且 emotion 在白名单 → 传
+            ``instruction="你说话的情感是 X。"`` 走真情感引导
+          - 否则（音色不支持 / emotion 未引导 / neutral）→ plain text，emotion
+            字段静默丢弃（SDK 没渠道接收，不报错）
+        """
         kwargs: dict = {
             "model": self.model,
             "voice": self.voice,
             # 24kHz mono 16bit WAV — 浏览器原生可播
             "format": AudioFormat.WAV_24000HZ_MONO_16BIT,
         }
-        # instruct-supported 音色（如 longanhuan）：SSML emotion + 自然语言
-        # instruction 双管齐下；instruct 不支持时 (longyumi_v3 / longfeifei_v3
-        # / longanqin_v3) 仅用 SSML，避免 SDK 返 400。
-        if self.instruct_supported and emotion_en and emotion_en != "neutral":
-            kwargs["instruction"] = f"你说话的情感是{emotion_en}。"
-
-        # v3-G' chunk 1：把文本包成 <voice emotion="X">…</voice>，
-        # SDK 内部 enable_ssml=true 让真情感生效。
-        wrapped = self._wrap_ssml(text, emotion_en)
-        if wrapped is not text:
+        emotion_active = (
+            self.instruct_supported
+            and emotion_en in _INSTRUCT_EMOTION_WHITELIST
+        )
+        if emotion_active:
+            # 文档示例的 instruction 形态："你说话的情感是 {emotion}。"
+            # 前导空格 + 句号都按 DashScope CosyVoice instruct 文档保留。
+            instruction = f"你说话的情感是 {emotion_en}。"
+            kwargs["instruction"] = instruction
             logger.debug(
-                "[CosyVoice SSML] voice=%s emotion=%s wrapped=%r",
-                self.voice, emotion_en, wrapped[:120],
+                '[CosyVoice instruct] voice=%s emotion=%s instruction="%s"',
+                self.voice, emotion_en, instruction,
             )
+        else:
+            # 三种情况会落这里：音色不支持 instruct / emotion 未在白名单 /
+            # emotion=neutral。前两种走 plain，emotion 字段被丢弃；neutral
+            # 等价于"不指定"，与 v3-D 起约定一致。
+            if emotion_en and emotion_en != "neutral":
+                logger.debug(
+                    "[CosyVoice plain] voice=%s does not support instruct"
+                    " (or emotion %s not whitelisted), emotion ignored",
+                    self.voice, emotion_en,
+                )
 
         synthesizer = SpeechSynthesizer(**kwargs)
-        audio = synthesizer.call(wrapped)
+        audio = synthesizer.call(text)
         # SDK 在失败时返回 None / 空 bytes
         if not audio:
             logger.error(
