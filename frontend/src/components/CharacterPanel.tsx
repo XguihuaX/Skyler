@@ -19,6 +19,10 @@ import {
   type CharacterRow,
 } from '../lib/config';
 import { fetchLive2DModels } from '../lib/live2d';
+import {
+  buildVoiceModelJson,
+  parseVoiceModelJson,
+} from '../lib/tts';
 
 const DEFAULT_CHARACTER_NAME = 'Momo';
 const PERSONA_PREVIEW_LEN = 30;
@@ -263,6 +267,10 @@ export default function CharacterPanel() {
   // 打开都重新扫描；mount 时拉一次，刷新按钮按需重拉。
   const live2dModels    = useAppStore((s) => s.live2dModels);
   const setLive2dModels = useAppStore((s) => s.setLive2dModels);
+
+  // v3-G' chunk 1b：TTS provider + voice 清单，两级下拉数据源。
+  // 由 App.tsx mount 时 eager-load，CharacterPanel 直接读 store。
+  const ttsProviders = useAppStore((s) => s.ttsProviders);
 
   const [characters, setCharacters] = useState<CharacterRow[]>([]);
   const [loading, setLoading]       = useState(false);
@@ -615,22 +623,204 @@ export default function CharacterPanel() {
               />
             </div>
 
-            <div>
-              <label
-                className="block text-xs mb-1"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                TTS 声音
-              </label>
-              <input
-                type="text"
-                value={form.voice_model}
-                onChange={(e) => setForm({ ...form, voice_model: e.target.value })}
-                placeholder="例：zh-CN-XiaoxiaoNeural 或 SoVITS模型路径，留空使用全局默认"
-                className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
-                style={inputStyle}
-              />
-            </div>
+            {/* v3-G' chunk 1b：TTS 声音两级下拉（provider → voice）。
+                form.voice_model 仍是 character.voice_model JSON 字符串，
+                下拉编辑后通过 buildVoiceModelJson 写回；老格式 / 自定义内容
+                显示成"未识别 / 自定义"做向后兼容。*/}
+            {(() => {
+              const parsed = parseVoiceModelJson(form.voice_model);
+              const isCustomLegacy = !!form.voice_model.trim() && parsed === null;
+              const selectedProviderId = parsed?.provider ?? '';
+              const selectedVoiceId    = parsed?.voice ?? '';
+              const selectedProvider = ttsProviders.find(
+                (p) => p.id === selectedProviderId,
+              );
+              const selectedVoice = selectedProvider?.voices.find(
+                (v) => v.id === selectedVoiceId,
+              );
+
+              const onProviderChange = (newProviderId: string): void => {
+                if (!newProviderId) {
+                  setForm({ ...form, voice_model: '' });
+                  return;
+                }
+                const p = ttsProviders.find((x) => x.id === newProviderId);
+                const firstVoice = p?.voices[0];
+                if (!firstVoice) {
+                  // 该 provider 暂无 voice，留空让用户重选
+                  setForm({ ...form, voice_model: '' });
+                  return;
+                }
+                setForm({
+                  ...form,
+                  voice_model: buildVoiceModelJson(
+                    newProviderId,
+                    firstVoice.id,
+                    firstVoice.instruct === true,
+                  ),
+                });
+              };
+
+              const onVoiceChange = (newVoiceId: string): void => {
+                if (!selectedProvider || !newVoiceId) return;
+                const v = selectedProvider.voices.find((x) => x.id === newVoiceId);
+                if (!v) return;
+                setForm({
+                  ...form,
+                  voice_model: buildVoiceModelJson(
+                    selectedProvider.id,
+                    v.id,
+                    v.instruct === true,
+                  ),
+                });
+              };
+
+              return (
+                <div>
+                  <label
+                    className="block text-xs mb-1"
+                    style={{ color: 'var(--color-text-primary)' }}
+                  >
+                    TTS 声音
+                  </label>
+
+                  {/* Provider 下拉 */}
+                  <div className="relative mb-1">
+                    <select
+                      value={selectedProviderId}
+                      onChange={(e) => onProviderChange(e.target.value)}
+                      className="w-full appearance-none rounded-md px-2 py-1.5 pr-8 text-sm focus:outline-none"
+                      style={inputStyle}
+                    >
+                      <option value="">未配置（使用全局默认）</option>
+                      {ttsProviders.map((p) => (
+                        <option key={p.id} value={p.id}>{p.label}</option>
+                      ))}
+                    </select>
+                    <ChevronDown
+                      size={14}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                    />
+                  </div>
+
+                  {/* Voice 下拉（仅在 provider 选中后显示） */}
+                  {selectedProvider && (
+                    <div className="relative mb-1">
+                      <select
+                        value={selectedVoiceId}
+                        onChange={(e) => onVoiceChange(e.target.value)}
+                        className="w-full appearance-none rounded-md px-2 py-1.5 pr-8 text-sm focus:outline-none"
+                        style={inputStyle}
+                      >
+                        {/* 当前 voice 不在新拉的列表里 → 保留为"自定义"项不丢
+                            数据（比如配置文件 yaml 删了某个音色但角色还在用）*/}
+                        {selectedVoiceId &&
+                          !selectedProvider.voices.some((v) => v.id === selectedVoiceId) && (
+                            <option value={selectedVoiceId}>
+                              自定义：{selectedVoiceId}
+                            </option>
+                          )}
+                        {selectedProvider.voices.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.label}
+                            {v.traits ? ` · ${v.traits}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown
+                        size={14}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
+                        style={{ color: 'var(--color-text-secondary)' }}
+                      />
+                    </div>
+                  )}
+
+                  {/* 兼容性 badge：SSML / Instruct */}
+                  {selectedVoice && (
+                    <div className="flex items-center gap-1 mt-1 flex-wrap text-[10px]">
+                      {selectedVoice.ssml ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
+                          style={{
+                            background: 'var(--color-accent)',
+                            color: 'var(--color-bubble-ai-text)',
+                          }}
+                        >
+                          <CheckCircle2 size={10} />
+                          SSML 情感
+                        </span>
+                      ) : (
+                        <span
+                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
+                          style={{
+                            background: 'var(--color-bg-elevated)',
+                            color: 'var(--color-text-primary)',
+                            border: '1px solid var(--color-border)',
+                          }}
+                        >
+                          <AlertTriangle size={10} />
+                          无 SSML
+                        </span>
+                      )}
+                      {selectedVoice.instruct === true && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
+                          style={{
+                            background: 'var(--color-accent)',
+                            color: 'var(--color-bubble-ai-text)',
+                          }}
+                        >
+                          <CheckCircle2 size={10} />
+                          Instruct
+                        </span>
+                      )}
+                      {selectedVoice.instruct === false && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
+                          style={{
+                            background: 'var(--color-bg-elevated)',
+                            color: 'var(--color-text-secondary)',
+                            border: '1px solid var(--color-border)',
+                          }}
+                        >
+                          无 Instruct
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 老格式 / 未识别值兜底（向后兼容） */}
+                  {isCustomLegacy && (
+                    <div
+                      className="mt-1 flex items-start gap-1 text-[10px]"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                    >
+                      <AlertTriangle
+                        size={10}
+                        className="flex-shrink-0 mt-[1px]"
+                      />
+                      <span>
+                        当前 voice_model 是旧格式或自定义内容："
+                        {form.voice_model.length > 60
+                          ? form.voice_model.slice(0, 60) + '…'
+                          : form.voice_model}
+                        "。重新选 provider + voice 会覆盖。
+                      </span>
+                    </div>
+                  )}
+
+                  <p
+                    className="text-[10px] mt-1"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                  >
+                    选项来自 config.yaml ``tts.available_voices``。SSML 情感
+                    标识：跟你说不同情感的话时音色真有差异。留"未配置"则
+                    用全局默认音色。
+                  </p>
+                </div>
+              );
+            })()}
 
             <div>
               <div className="flex items-center justify-between mb-1">

@@ -14,6 +14,7 @@ import {
   fetchMessages,
 } from './lib/config';
 import { fetchLive2DModels } from './lib/live2d';
+import { fetchTtsVoices } from './lib/tts';
 
 // 方便子组件统一从 App 导入
 export { useAppApi } from './contexts/appApi';
@@ -69,6 +70,17 @@ function App() {
           useAppStore.getState().setLive2dModels(live2d.models);
         } catch (e) {
           console.error('[App] fetchLive2DModels failed:', e);
+        }
+
+        // v3-G' chunk 1b：eager-load TTS providers + voices，CharacterPanel
+        // 下拉数据源。失败不阻塞 —— 没数据时下拉 fallback 到"未配置"，用户
+        // 仍能编辑现有 character（v3-G' 之前的旧 plain JSON 文本框模式）。
+        try {
+          const tts = await fetchTtsVoices();
+          if (cancelled) return;
+          useAppStore.getState().setTtsProviders(tts.providers);
+        } catch (e) {
+          console.error('[App] fetchTtsVoices failed:', e);
         }
 
         const charId = useAppStore.getState().currentCharacterId;

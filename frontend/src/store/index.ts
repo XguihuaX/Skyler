@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { AppConfig, CharacterRow, ChatKind, ConversationRow } from '../lib/config';
 import type { Live2DModel } from '../lib/live2d';
+import type { TtsProvider } from '../lib/tts';
 
 export type AppMode = 'widget' | 'panel';
 export type AiStatus = 'idle' | 'listening' | 'thinking' | 'speaking' | 'interrupted';
@@ -226,6 +227,11 @@ interface AppState {
   live2dModels: Live2DModel[];
   setLive2dModels: (v: Live2DModel[]) => void;
 
+  // v3-G' chunk 1b — TTS provider + voice 清单，CharacterPanel 两级下拉数据源。
+  // 由 GET /api/tts/voices 填充；App.tsx mount 时 eager-load。
+  ttsProviders: TtsProvider[];
+  setTtsProviders: (v: TtsProvider[]) => void;
+
   conversations: ConversationRow[];
   setConversations: (v: ConversationRow[]) => void;
   upsertConversation: (c: ConversationRow) => void;
@@ -350,6 +356,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   live2dModels: [],
   setLive2dModels: (live2dModels) => set({ live2dModels }),
+
+  ttsProviders: [],
+  setTtsProviders: (ttsProviders) => set({ ttsProviders }),
 
   conversations: [],
   setConversations: (conversations) => set({ conversations }),
