@@ -51,3 +51,61 @@ export function resolveLive2dModelUrl(
 export const emotionMap: Record<string, unknown> = {
   // v3-E2 填充
 };
+
+// ---------------------------------------------------------------------------
+// v3-E1 step6: motion → Live2D model.motion(group, index, priority) 映射
+//
+// LLM 在回复中用 <motion>X</motion> 标签嵌入动作；后端 _parse_motion 抽出
+// 中文名 X 推到前端 store.currentMotion，Live2DCanvas useEffect 通过本 map
+// 查 group/index 调 model.motion()。
+//
+// Hiyori (hiyori_pro_t11) motion 资源分配：
+//   - Idle (m01/m02/m05)   → 自动 idle 循环用，不映射
+//   - Tap  (m07/m08)       → Step 3 触摸点击用，不映射
+//   - Tap@Body (m09)       → 保留扩展点（语义"摸身体"），不映射
+//   - Flick      (m03)     ← 本 map 用
+//   - FlickDown  (m04)     ← 本 map 用
+//   - FlickUp    (m06)     ← 本 map 用
+//   - Flick@Body (m10)     ← 本 map 用
+//
+// Hiyori 的 Flick* 系列每个 group 只有 1 条 motion（index 0）。LLM 输出新词
+// （map 没覆盖的"招手"/"叉腰"等）时 Live2DCanvas 降级 console.warn + no-op，
+// 不报错；想加新动作只要在这里新增 key。
+//
+// v3-E2 换模型时整体重写本 map（新模型的 motion group 名字会变）。
+// ---------------------------------------------------------------------------
+
+export interface MotionEntry {
+  group: string;  // Live2D motion group name（如 "Flick" / "FlickDown"）
+  index: number;  // 该 group 内的 motion 索引（0-based）
+}
+
+export const motionMap: Record<string, MotionEntry> = {
+  // 中文名 → Hiyori Flick* group。语义已通过 dev 调试钩子实测对齐 Hiyori
+  // 的实际美术动作（见各 group 下注释）。Hiyori 没有"挥手 / 点头 / 鞠躬"等
+  // 语义动作，因此本 map 也不收录这些词；LLM 若输出会被 useEffect 降级 warn。
+
+  // Flick (m03)：放松状态下轻轻甩手 — 慵懒 / 随意
+  '放松':       { group: 'Flick',       index: 0 },
+  '随意':       { group: 'Flick',       index: 0 },
+  '慵懒':       { group: 'Flick',       index: 0 },
+  '没事':       { group: 'Flick',       index: 0 },
+
+  // FlickDown (m04)：双手别在身后 — 害羞 / 收敛
+  '害羞':       { group: 'FlickDown',   index: 0 },
+  '不好意思':   { group: 'FlickDown',   index: 0 },
+  '腼腆':       { group: 'FlickDown',   index: 0 },
+  '小动作':     { group: 'FlickDown',   index: 0 },
+
+  // FlickUp (m06)：小臂举起晃（像应援荧光棒）— 加油 / 兴奋
+  '加油':       { group: 'FlickUp',     index: 0 },
+  '兴奋':       { group: 'FlickUp',     index: 0 },
+  '应援':       { group: 'FlickUp',     index: 0 },
+  '欢呼':       { group: 'FlickUp',     index: 0 },
+  '雀跃':       { group: 'FlickUp',     index: 0 },
+
+  // Flick@Body (m10)：复合动作（Flick → FlickDown，带表情）— 撒娇 / 俏皮
+  '撒娇':       { group: 'Flick@Body',  index: 0 },
+  '俏皮':       { group: 'Flick@Body',  index: 0 },
+  '调皮':       { group: 'Flick@Body',  index: 0 },
+};

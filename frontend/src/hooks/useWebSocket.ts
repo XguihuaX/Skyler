@@ -257,6 +257,18 @@ export function useWebSocket(): UseWebSocketReturn {
         break;
       }
 
+      case 'motion': {
+        // v3-E1 step6：AI 当段动作，每段可命中一次（per-segment，不是 per-turn）。
+        // 透传 LLM 输出的中文动作名（具体可用词以 frontend/src/config/live2d.ts
+        // 的 motionMap 为准，例：放松 / 害羞 / 加油 / 撒娇）。
+        // Live2DCanvas useEffect 订阅 currentMotion → motionMap 查 group/index
+        // 调 model.motion(group, index, NORMAL)。同名动作连续命中只会触发一次
+        // useEffect（依赖项引用相等），实测上够用 —— LLM 多段动作通常会换名字。
+        const value = msg.value ?? '';
+        if (value) s.setCurrentMotion(value);
+        break;
+      }
+
       case 'notify':
         s.pushNotification({ type: 'notify', content: msg.content ?? '' });
         break;
@@ -343,6 +355,8 @@ export function useWebSocket(): UseWebSocketReturn {
     s.clearCurrentThinking();
     // v3-E1 step5：新一轮开始，清掉上一轮的 emotion
     s.clearCurrentEmotion();
+    // v3-E1 step6：新一轮开始，清掉上一轮的 motion
+    s.clearCurrentMotion();
     // 乐观更新：立刻显示 user 气泡
     s.appendChatMessage({
       id: newClientId('u'),
@@ -374,6 +388,8 @@ export function useWebSocket(): UseWebSocketReturn {
     s.clearCurrentThinking();
     // v3-E1 step5：新一轮开始，清掉上一轮的 emotion
     s.clearCurrentEmotion();
+    // v3-E1 step6：新一轮开始，清掉上一轮的 motion
+    s.clearCurrentMotion();
     console.log(`[FRONT] send voice b64_len=${audioBase64.length}`);
     // 语音的 user 气泡等 asr_result 携带 message_id 时一起插入，
     // 避免内容为空的占位气泡。
@@ -446,6 +462,8 @@ export function useWebSocket(): UseWebSocketReturn {
     s.clearCurrentThinking();
     // v3-E1 step5：新一轮开始，清掉上一轮的 emotion
     s.clearCurrentEmotion();
+    // v3-E1 step6：新一轮开始，清掉上一轮的 motion
+    s.clearCurrentMotion();
 
     console.log('[FRONT] send touch');
     ws.send(JSON.stringify({

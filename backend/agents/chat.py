@@ -157,6 +157,64 @@ def _build_thinking_instruction() -> str:
 
 
 # ---------------------------------------------------------------------------
+# v3-E1 step6：动作标签 <motion>
+# ---------------------------------------------------------------------------
+
+# 形如 "...<motion>挥手</motion>..." —— 可出现在每段任意位置。
+# 与 emotion 不同：emotion 整轮一次（re.match 锚定开头），motion 每段独立。
+_MOTION_RE = re.compile(r"<motion>([^<]*)</motion>", re.IGNORECASE)
+
+
+def _parse_motion(text: str) -> Tuple[Optional[str], str]:
+    """解析并剥离单段文本中的 motion 标签。
+
+    Args:
+        text: 一段已成句的文本（_sentence_stream 切出的一句）。
+
+    Returns:
+        ``(motion_or_None, stripped_text)``：
+          - 命中 → 第一个 <motion>X</motion> 的 X（已 strip），整段所有
+            motion 标签一并从文本中剥掉（同段多个标签时只用第一个，剩余
+            一并剥除避免下游再次看到）。
+          - 未命中 → ``(None, text)`` 原样返回。
+
+    与 ``_parse_emotion`` 的差异：emotion 整轮锁定（仅第一段命中后整轮共用），
+    motion 每段独立解析，可在一轮回复中触发多次。
+    """
+    if not text:
+        return None, text
+    m = _MOTION_RE.search(text)
+    if m is None:
+        return None, text
+    motion = (m.group(1) or "").strip() or None
+    stripped = _MOTION_RE.sub("", text).strip()
+    return motion, stripped
+
+
+def _build_motion_instruction() -> str:
+    """生成注入 system prompt 的 motion 指令。
+
+    motion 是可选的；不打标签时 Live2D 模型保持 idle + 触摸响应，不做主动
+    动作。可用名字目前在前端 ``config/live2d.ts`` 的 ``motionMap`` 维护，
+    与 Hiyori 模型的 Flick* motion group 一一对应；换模型时改 map，不改这里。
+    """
+    return (
+        "你可以在回复中嵌入 <motion>X</motion> 标签让虚拟形象做动作。"
+        "当前可用动作（按语义分组，每组任选一个词使用即可）：\n"
+        "- 放松 / 随意 / 慵懒 / 没事（自然甩手）\n"
+        "- 害羞 / 不好意思 / 腼腆 / 小动作（双手别在身后）\n"
+        "- 加油 / 兴奋 / 应援 / 欢呼 / 雀跃(小臂举起晃，像应援)\n"
+        "- 撒娇 / 俏皮 / 调皮（活泼的复合表情动作）\n"
+        "每段（句号 / 问号 / 感叹号断开的一段）最多 1 个 motion 标签，"
+        "标签会被 TTS 自动剥除，不会读出来。"
+        "不需要主动动作时不打标签，保持安静即可。"
+        "注意：当前角色没有「挥手 / 打招呼 / 再见 / 点头 / 鞠躬」等具体动作，"
+        "请不要使用这类词，否则动作不会被触发。"
+        "示例：<emotion>happy</emotion>嘿嘿，被你发现啦~<motion>害羞</motion>"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Sentence splitter
 # ---------------------------------------------------------------------------
 
@@ -617,8 +675,10 @@ async def _build_messages(
     base = get_base_instruction().strip()
     emotion_inst = _build_emotion_instruction()
     thinking_inst = _build_thinking_instruction()
+    motion_inst = _build_motion_instruction()
     # v3-F：thinking 指令紧跟 emotion 指令（两者都是输出格式约束，归一处）
-    head_parts = [emotion_inst, thinking_inst]
+    # v3-E1 step6：motion 指令也归此处，三条共同构成输出格式约束块
+    head_parts = [emotion_inst, thinking_inst, motion_inst]
     if base:
         head_parts.append(base)
     head_parts.append(persona_block)

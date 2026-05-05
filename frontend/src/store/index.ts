@@ -188,6 +188,17 @@ interface AppState {
   setCurrentEmotion: (v: string | null) => void;
   clearCurrentEmotion: () => void;
 
+  // v3-E1 step6: AI 当段动作（每段可命中一次，由后端 motion 消息推送）
+  // null = 当前没有待触发动作（新轮开始 / 上次已消费完）。WS 'motion' 写入；
+  // 调用方在 sendText / sendVoice / sendTouch 开始新轮时 clear。
+  // 值为 LLM 输出的中文动作名（可用词以 config/live2d.ts motionMap 为准）。
+  // 与 currentEmotion 区别：emotion per-turn 一次，motion per-segment 多次。
+  // 消费方：Live2DCanvas useEffect 通过 motionMap 查 group/index 调
+  // model.motion(group, index, NORMAL)。motionMap 没覆盖的词降级 no-op。
+  currentMotion: string | null;
+  setCurrentMotion: (v: string | null) => void;
+  clearCurrentMotion: () => void;
+
   // 镜像 GET /api/config 的字段（启动时由 syncFromConfig 写入）
   defaultUserId: string;
   setDefaultUserId: (v: string) => void;
@@ -307,6 +318,10 @@ export const useAppStore = create<AppState>((set) => ({
   currentEmotion: null,
   setCurrentEmotion: (currentEmotion) => set({ currentEmotion }),
   clearCurrentEmotion: () => set({ currentEmotion: null }),
+
+  currentMotion: null,
+  setCurrentMotion: (currentMotion) => set({ currentMotion }),
+  clearCurrentMotion: () => set({ currentMotion: null }),
 
   defaultUserId: 'default',
   setDefaultUserId: (defaultUserId) => set({ defaultUserId }),

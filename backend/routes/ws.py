@@ -47,7 +47,7 @@ from typing import Optional, Tuple
 
 from sqlalchemy import select
 
-from backend.agents.chat import ChatAgent, _parse_emotion, _parse_thinking
+from backend.agents.chat import ChatAgent, _parse_emotion, _parse_motion, _parse_thinking
 from backend.asr.whisper import whisper_asr
 from backend.config import config_yaml, get_planner_model, get_tts_enabled
 from backend.config.prompt_manager import prompt_manager
@@ -743,6 +743,23 @@ async def _handle_message(
                         await ws.send_json({
                             "type": "thinking",
                             "value": thinking_value,
+                        })
+
+                    # v3-E1 step6：每段独立解析 motion 标签 —— 与 emotion（整轮
+                    # 一次锁定）不同，motion 每段都可能命中，命中即 push 让前端
+                    # Live2DCanvas useEffect 触发 model.motion()。NORMAL 优先级
+                    # 跟触摸 Tap 同级（先到先服务）。同段多个标签只用第一个，
+                    # _parse_motion 已把所有 motion 标签从 sentence 剥除，避免
+                    # 残留进 text_chunk / chat_history。
+                    parsed_motion, sentence = _parse_motion(sentence)
+                    if parsed_motion:
+                        logger.info(
+                            "[motion] pushed value=%s user=%s",
+                            parsed_motion, user_id,
+                        )
+                        await ws.send_json({
+                            "type": "motion",
+                            "value": parsed_motion,
                         })
 
                     # 剥标签后可能为空（极端情况：句子只有标签），跳过本句

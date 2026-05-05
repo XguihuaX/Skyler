@@ -4,7 +4,7 @@ import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
 import { useAppApi } from '../contexts/appApi';
 import { useAppStore } from '../store';
 import { useAudioAmplitude } from '../hooks/useAudioAmplitude';
-import { emotionMap } from '../config/live2d';
+import { emotionMap, motionMap } from '../config/live2d';
 
 // pixi-live2d-display 内部用 window.PIXI 取 Ticker 等共享实例。必须在创建任何
 // Live2DModel 之前完成挂载，否则模型的自动 ticker 不会跑（黑屏 / 不眨眼）。
@@ -63,6 +63,9 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
   // v3-E1 step5：当轮 emotion（由后端 WS 推送，透传 LLM 原始输出）。null 表示
   // 当前没有 emotion（中性消息或新轮刚开始）。
   const currentEmotion = useAppStore((s) => s.currentEmotion);
+  // v3-E1 step6：当段 motion（per-segment，每段独立解析）。null = 无待触发动作。
+  // 同名连续命中只触发一次 useEffect（依赖项引用相等）—— LLM 多段动作通常会换名字。
+  const currentMotion = useAppStore((s) => s.currentMotion);
 
   useEffect(() => {
     const model = modelRef.current;
@@ -87,6 +90,35 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
     // 防 unused 警告 / 让未来启用时编辑器能跳转过去
     void emotionMap;
   }, [currentEmotion]);
+
+  useEffect(() => {
+    // v3-E1 step6：currentMotion 变化时调 model.motion()。
+    // - motionMap 没覆盖的词降级 console.warn + no-op（容错：LLM 可能输出
+    //   "招手"/"叉腰"等未登记词，不应报错）
+    // - NORMAL 优先级与 Tap 触摸同级，先到先服务（不会被新 motion 立刻覆盖）
+    // - model.motion 返回 Promise<boolean>；忽略返回值，pixi-live2d-display
+    //   会在 console 自报失败
+    if (!currentMotion) return;
+    const model = modelRef.current;
+    if (!model) return;
+
+    const entry = motionMap[currentMotion];
+    if (!entry) {
+      console.warn(`[live2d] motion="${currentMotion}" not in motionMap, skip`);
+      return;
+    }
+    try {
+      void model.motion(entry.group, entry.index, MotionPriority.NORMAL);
+      console.log(
+        `[live2d] motion=${currentMotion} → ${entry.group}[${entry.index}] (NORMAL)`,
+      );
+    } catch (err) {
+      console.warn(
+        `[live2d] motion("${entry.group}", ${entry.index}) failed:`,
+        err,
+      );
+    }
+  }, [currentMotion]);
 
   const handleTouch = useCallback(() => {
     const now = Date.now();
