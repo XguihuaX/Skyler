@@ -39,6 +39,10 @@ interface MountContext {
   container: HTMLElement;
   resizeObserver: ResizeObserver | null;
   cancelled: boolean;   // unloadModel 在加载未完成时翻为 true
+  // v3-E2 patch：document.mouseleave / window.blur 用来把 gaze focus 拉回
+  // 中央。两个 listener 注册一次，cleanup 函数同时移除两个，避免 _teardown
+  // 时分散维护。
+  gazeResetCleanup: (() => void) | null;
 }
 
 /**
@@ -66,6 +70,7 @@ export class PixiCubism4Runtime implements Live2DRuntime {
       container,
       resizeObserver: null,
       cancelled: false,
+      gazeResetCleanup: null,
     };
     this.contexts.set(handle.id, ctx);
 
@@ -121,6 +126,29 @@ export class PixiCubism4Runtime implements Live2DRuntime {
     ctx.nativeH = loaded.height || 1;
     app.stage.addChild(loaded);
     this._fit(ctx);
+
+    // v3-E2 patch：双保险监听把 gaze focus 拉回中央。
+    // pixi-live2d-display autoFocus 通过 window.mousemove 持续更新
+    // ``model.focus(x, y)``，但鼠标拖出 Tauri window 后 mousemove 不再触发，
+    // focus 卡在最后一个值（视线斜向某处不复位）。两条手动复位通道：
+    //   - document.mouseleave：鼠标离开 viewport（拖出 window 边界）
+    //   - window.blur：Tauri window 失焦（cmd+Tab / 别 app 抢焦点）
+    // 二者覆盖"鼠标还在屏幕但不在 window"和"鼠标到别 app"两种场景。
+    // model.focus(0, 0) 不带 instant 参数 → 平滑过渡（pixi-live2d-display
+    // 内置阻尼），视觉比硬切自然。
+    const handleGazeReset = (): void => {
+      if (!ctx.model) return;  // _teardown 中可能已 null
+      const m = ctx.model as unknown as {
+        focus?: (x: number, y: number, instant?: boolean) => void;
+      };
+      m.focus?.(0, 0);
+    };
+    document.addEventListener('mouseleave', handleGazeReset);
+    window.addEventListener('blur', handleGazeReset);
+    ctx.gazeResetCleanup = () => {
+      document.removeEventListener('mouseleave', handleGazeReset);
+      window.removeEventListener('blur', handleGazeReset);
+    };
 
     ctx.resizeObserver = new ResizeObserver(() => {
       if (!ctx.app) return;
@@ -229,6 +257,12 @@ export class PixiCubism4Runtime implements Live2DRuntime {
   }
 
   private _teardown(ctx: MountContext): void {
+    // 先卸 mouseleave / blur listener 再 destroy 模型 —— 否则正卡在 dispatch
+    // 半路的 listener 可能拿到已销毁的 ctx.model 调 focus()。
+    if (ctx.gazeResetCleanup) {
+      try { ctx.gazeResetCleanup(); } catch { /* swallow */ }
+      ctx.gazeResetCleanup = null;
+    }
     if (ctx.resizeObserver) {
       try { ctx.resizeObserver.disconnect(); } catch { /* swallow */ }
       ctx.resizeObserver = null;
