@@ -184,6 +184,17 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
         canvas.style.display = 'block';
         container.appendChild(canvas);
 
+        // React StrictMode 双 mount 时第一次加载会被 cleanup 中途取消（cancelled
+        // flag 触发 destroy），pixi-live2d-display 的 MotionManager 已经并行
+        // kick off 各 motion3.json 的 fetch，destroy → AbortController abort →
+        // console 出现 "[MotionManager(hiyori)] Failed to load motion: motion/
+        // hiyori_m01.motion3.json - Error: Aborted"（m05 同症，其他 motion 命中
+        // race 窗口才会报，所以不固定）。这是 cosmetic warning，不影响实际行为：
+        // 第二次 mount 后 model 完整加载所有 motion，idle 循环、Tap、Flick* 全
+        // 部能正常播。真问题表现是 Hiyori 完全不动 / motion 切换失败 / idle 卡
+        // 帧 —— v3-E1 Step 1-6 全程未观察到。Step Z audit 结论：保持现状，不
+        // 主动 abort（要做就要在 model load 之前装 AbortController 并 hook 进
+        // pixi-live2d-display 的 fetch 路径，代价远大于消 warning 的收益）。
         const loaded = await Live2DModel.from(modelUrl, {
           autoFocus: true,
           autoHitTest: false,

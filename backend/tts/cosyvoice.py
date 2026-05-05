@@ -28,8 +28,12 @@ from backend.tts.base import TTSBase
 logger = logging.getLogger(__name__)
 
 
-# 中文情感词 → CosyVoice 英文情感值。
-# LLM 也可能直接输出英文（"happy"），此时 EMOTION_MAP miss → 视作 neutral。
+# 中文情感词 → CosyVoice 英文情感值。语义见 _normalise_emotion 注释：
+# - 命中本表 → 返回映射的英文值
+# - 未命中（已是英文枚举如 "happy"，或未知中文如 "困惑"）→ 透传不变
+# - 空串 / None → "neutral" 兜底
+# 透传策略允许 LLM 直接输出英文枚举跳过映射；未知值由下游 SDK 报错，
+# 由 synthesize() 的 try/except 吞掉返回 None，上层静默降级。
 EMOTION_MAP: dict[str, str] = {
     "开心": "happy", "高兴": "happy", "快乐": "happy",
     "悲伤": "sad",   "难过": "sad",   "伤心": "sad",
