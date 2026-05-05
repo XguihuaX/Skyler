@@ -1,26 +1,68 @@
-// v3-E1: 把 character.live2d_model（用户在 CharacterPanel 填写的目录名）映射到
-// 该模型目录下实际的 model3.json 入口文件。每个 Live2D 模型的 model3.json
-// 文件名由作者决定，没法靠目录名推断，所以维护一个显式 map。
+// v3-E1: 把 character.live2d_model（用户在 CharacterPanel 填写的目录名）映射
+// 到该模型目录下实际的 model3.json 入口文件。每个 Live2D 模型的 model3.json
+// 文件名由作者决定，没法靠目录名推断。
+//
+// v3-E2 chunk 3：scanner 后端 (GET /api/live2d/models) 自动读 model3.json
+// 返回 model3_path —— 不再需要前端手维护字典。本文件保留 hardcode 字典
+// 仅作"scanner 不可达 / store 还没填充"时的兜底，以及一个无网络的离线
+// 默认（Hiyori）。
 //
 // 加新模型时：
 //   1. 把模型资产放到 frontend/public/live2d/<name>/
-//   2. 在这里登记 <name> -> "<actual>.model3.json"
-//   3. CharacterPanel 里给角色填上 <name>
+//   2. CharacterPanel 里给角色填上 <name>
+//   3. （可选）若想离线兜底，在 live2dModelEntry 里登记 <name> -> 入口
+//      文件名；scanner 工作时不需要这一步
+
+import type { Live2DModel } from '../lib/live2d';
 
 export const live2dModelEntry: Record<string, string> = {
   hiyori: 'hiyori_pro_t11.model3.json',
 };
 
+/**
+ * 解析 character.live2d_model（slug）到 Vite 静态 URL。
+ *
+ * 优先级：
+ *   1. scanner store（``models``）按 slug 命中 → 用 ``model3_path``
+ *   2. ``live2dModelEntry`` hardcode 命中 → 拼 ``/live2d/<slug>/<file>``
+ *   3. 都 miss → null + console.warn，CharacterView 回退静态图
+ *
+ * scanner 命中时不读 hardcode（即便 hardcode 也有该 slug）—— scanner 是
+ * 唯一真相源，hardcode 只在 scanner 数据没到时兜底。
+ *
+ * @param modelName slug，等于 ``frontend/public/live2d/<slug>/`` 目录名
+ * @param models    可选；scanner store 的 ``live2dModels``。不传 / 空数组
+ *                  时直接走 hardcode 兜底（启动早期 / 离线 / API 报错场景）
+ */
 export function resolveLive2dModelUrl(
   modelName: string | null | undefined,
+  models?: readonly Live2DModel[],
 ): string | null {
   if (!modelName) return null;
-  const entry = live2dModelEntry[modelName];
-  if (!entry) {
-    console.warn(`[live2d] unknown model name: ${modelName}, fallback to image`);
-    return null;
+
+  // 1. Scanner-first
+  if (models && models.length > 0) {
+    const scanned = models.find((m) => m.slug === modelName);
+    if (scanned && scanned.model3_path) {
+      return scanned.model3_path;
+    }
   }
-  return `/live2d/${modelName}/${entry}`;
+
+  // 2. Hardcode fallback —— scanner 不可达或还没填充时用
+  const entry = live2dModelEntry[modelName];
+  if (entry) {
+    if (models && models.length > 0) {
+      // scanner 列出来了但没这个 slug + hardcode 有 → 数据不一致，告警但仍走兜底
+      console.warn(
+        `[live2d] slug "${modelName}" not in scanner result, using hardcode fallback`,
+      );
+    }
+    return `/live2d/${modelName}/${entry}`;
+  }
+
+  // 3. 都没有 → 让 CharacterView 回退静态图
+  console.warn(`[live2d] unknown model name: ${modelName}, fallback to image`);
+  return null;
 }
 
 // ---------------------------------------------------------------------------

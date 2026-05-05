@@ -13,6 +13,7 @@ import {
   fetchHealth,
   fetchMessages,
 } from './lib/config';
+import { fetchLive2DModels } from './lib/live2d';
 
 // 方便子组件统一从 App 导入
 export { useAppApi } from './contexts/appApi';
@@ -55,6 +56,19 @@ function App() {
           }
         } catch (e) {
           console.error('[App] fetchCharacters failed:', e);
+        }
+
+        // v3-E2 patch：eager-load live2d 扫描结果。Widget 模式下用户可能
+        // 永远不打开 CharacterPanel，但 CharacterView 解析角色 live2d_model
+        // 依赖这个 store 字段；不在这里 fetch，widget-only 用户切换角色后
+        // 会因 store 空 → resolveLive2dModelUrl 走 hardcode 兜底 → 命中
+        // 不到的 slug 直接 fallback 静态图。
+        try {
+          const live2d = await fetchLive2DModels();
+          if (cancelled) return;
+          useAppStore.getState().setLive2dModels(live2d.models);
+        } catch (e) {
+          console.error('[App] fetchLive2DModels failed:', e);
         }
 
         const charId = useAppStore.getState().currentCharacterId;

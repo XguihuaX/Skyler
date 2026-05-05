@@ -21,10 +21,16 @@ export default function CharacterView({
   const mode               = useAppStore((s) => s.mode);
   const characters         = useAppStore((s) => s.characters);
   const currentCharacterId = useAppStore((s) => s.currentCharacterId);
+  // v3-E2 patch：scanner 结果作为主数据源传给 resolveLive2dModelUrl，
+  // hardcode 字典退为兜底（store 空时仍能解析 hiyori）。
+  const live2dModels       = useAppStore((s) => s.live2dModels);
 
   const currentCharacter =
     characters.find((c) => c.id === currentCharacterId) ?? null;
-  const live2dUrl = resolveLive2dModelUrl(currentCharacter?.live2d_model);
+  const live2dUrl = resolveLive2dModelUrl(
+    currentCharacter?.live2d_model,
+    live2dModels,
+  );
 
   const isPanel = mode === 'panel';
   // panel 模式下加一层半透明背景叠加，使前景气泡更易读
