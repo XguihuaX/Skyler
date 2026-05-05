@@ -70,28 +70,28 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
     runtime.setMouthOpen(handle, amplitude);
   }, [amplitude]);
 
-  // emotion 视觉数据流：v3-E1 step5 起仅 console.log + 占位回调（Hiyori 没
-  // .exp3.json）；v3-E3 接入有 expression 的模型时打开 setExpression 调用。
+  // emotion 视觉数据流：v3-E2 chunk 7 接通 ——
+  // - emotionMap[currentEmotion] 命中 → ``runtime.setExpression(handle, name)``
+  // - emotionMap 空（如 Hiyori / 八重默认 ``{}``）→ lookup miss → 无 setExpression
+  //   调用，行为与 v3-E1 console.log 占位等价（无视觉变化）
+  // - 角色 emotion_map_json 填充后（CharacterPanel 编辑 / 用户接入有 .exp3.json
+  //   的模型时），同一 useEffect 自然激活，无需改组件代码
   useEffect(() => {
     if (!currentEmotion) return;
     const runtime = runtimeRef.current;
     const handle  = handleRef.current;
     if (!runtime || !handle) return;
-    // 走 character emotionMap 取绑定。空 map → 没绑定，跳过；有绑定 → v3-E3
-    // 这里改成根据 binding.type 走 runtime.setExpression / setParameter。
-    const binding = maps.emotionMap[currentEmotion];
-    if (binding == null) {
+    const expressionName = maps.emotionMap[currentEmotion];
+    if (!expressionName) {
+      // 短路：空 map / 未登记 emotion 词 → 不调 SDK（Hiyori / 八重路径）
       console.log(
-        `[live2d] emotion=${currentEmotion} (no binding in character emotionMap, skip)`,
+        `[live2d] emotion=${currentEmotion} (no expression mapping for this character, skip)`,
       );
       return;
     }
-    // 当前 binding 形态未定（v3-E3 才定形），先 console.log 占位。
-    // 真正接通时改成：
-    //   if (binding.type === 'expression') runtime.setExpression(handle, binding.name);
-    //   else if (binding.type === 'params') binding.params.forEach(...);
+    const ok = runtime.setExpression(handle, expressionName);
     console.log(
-      `[live2d] emotion=${currentEmotion} binding present but visual hookup awaits v3-E3`,
+      `[live2d] emotion=${currentEmotion} → expression=${expressionName} ok=${ok}`,
     );
   }, [currentEmotion, maps]);
 

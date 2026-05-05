@@ -48,9 +48,18 @@ export function resolveLive2dModelUrl(
 // fearful / disgusted / 等。完整列表见 config.yaml emotions。
 // ---------------------------------------------------------------------------
 
-export const emotionMap: Record<string, unknown> = {
-  // v3-E2 填充
-};
+// v3-E2 chunk 7：emotionMap value 类型确定为 ``string`` —— 即"emotion 词
+// → Live2D expression 名"，runtime.setExpression 直接吃这个值。
+//
+// 全局默认仍留空 ``{}`` —— v3-E1 内置的 Hiyori 没 .exp3.json，无 expression
+// 可绑；任何 emotion 词查询本表都会 miss，Live2DCanvas useEffect 走"无绑定
+// 短路 console.log"分支，行为与 v3-E1 完全一致。
+//
+// per-character emotion_map_json 写实际内容时（如 8 重神子未来加 mod 添
+// expression、或换上自带 .exp3.json 的目标模型），CharacterPanel 编辑后
+// resolveCharacterMaps 优先取 character 字段，本默认只在该字段 NULL / 坏
+// JSON 时兜底。
+export const emotionMap: Record<string, string> = {};
 
 // ---------------------------------------------------------------------------
 // v3-E1 step6: motion → Live2D model.motion(group, index, priority) 映射

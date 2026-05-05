@@ -8,8 +8,12 @@
 //   渲染失效。调试期试错友好。
 // - DEFAULT_HIT_AREA_MAP 留空 ``{}``：v3-E1 没启用 hit-area 路由，先准备
 //   契约；接通八重神子 8 个 HitAreas 时给那个角色写自己的 map。
-// - 类型对齐 v3-E1 现有 motionMap 的 ``MotionEntry`` 结构。emotionMap 的
-//   value 在 v3-E1 是 ``unknown``（v3-E3 才定形），这里也透传 unknown。
+// - v3-E2 chunk 7：``EmotionMap`` 从 ``Record<string, unknown>`` 升为
+//   ``Record<string, string>``，value 直接是 Live2D expression 名（v3-E1
+//   step5 占位 unknown 是因为没决定 binding 形状；本步定为最简单的"emotion
+//   词 → expression 名"形态，跟 ``model.expression(name)`` 直接对接）。
+//   未来若需要更复杂的 binding（参数偏移列表等）再升级类型 + ts strict 提
+//   醒所有调用方调整。
 
 import type { CharacterRow } from '../config';
 import {
@@ -18,8 +22,10 @@ import {
   type MotionEntry,
 } from '../../config/live2d';
 
+export type EmotionMap = Record<string, string>;
+
 export interface CharacterMaps {
-  emotionMap: Record<string, unknown>;
+  emotionMap: EmotionMap;
   motionMap:  Record<string, MotionEntry>;
   hitAreaMap: Record<string, string>;
 }
