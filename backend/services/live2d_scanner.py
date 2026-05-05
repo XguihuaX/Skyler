@@ -8,10 +8,17 @@ free-text field.
 
 Resolution rules
 ----------------
-- Project root is anchored via ``Path(__file__).resolve()`` walking up two
+- Project root is anchored via ``Path(__file__).absolute()`` walking up two
   parents (``backend/services/live2d_scanner.py`` → repo root). Both
   ``uvicorn backend.main:app`` and the Tauri-embedded backend launch with
   different CWDs, so we never trust ``Path.cwd()``.
+- **Symlink discipline**: scanner works at the **path-literal** level and
+  never follows symlinks (no ``Path.resolve()``). Users routinely ``ln -s
+  <external-IP-asset> frontend/public/live2d/<slug>`` to keep IP assets out
+  of the repo (``.gitignore`` already excludes those slug dirs); the URL
+  served by Vite + the path computed here must stay inside ``frontend/
+  public/`` regardless of where the symlink target lives. ``.resolve()``
+  would chase the link to its real path, breaking ``relative_to()``.
 - Top-level subdirs of ``live2d/`` are considered character slugs.
 - ``core/`` is the Cubism Core JS SDK runtime (whitelisted in .gitignore
   alongside ``hiyori/``); skipped here because it has no ``.model3.json``.
@@ -50,7 +57,12 @@ logger = logging.getLogger(__name__)
 
 # This file: <repo>/backend/services/live2d_scanner.py
 # parents:    [services, backend, <repo root>]
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+#
+# 用 .absolute() 而非 .resolve() —— 不解析 symlink，让 ``frontend/public/
+# live2d/yae`` 这种指向外部 IP 资产的软链保持在 repo path 命名空间内，
+# 后续 relative_to(public_root) 能算出正确的 Vite 静态 URL。详见模块顶
+# "Symlink discipline" 段。
+_REPO_ROOT = Path(__file__).absolute().parents[2]
 _LIVE2D_DIR = _REPO_ROOT / "frontend" / "public" / "live2d"
 
 # 子目录黑名单：core/ 是 SDK runtime（v3-E2 commit 2 .gitignore 白名单），
@@ -180,7 +192,11 @@ def _scan_slug(slug_dir: Path) -> Live2DModelInfo:
                 pixi_compatible=False,
                 warnings=warnings + ["FileReferences.Moc missing in model3.json"],
             )
-        moc3_path = (entry.parent / moc_rel).resolve()
+        # .absolute() not .resolve() —— 不能 follow yae symlink 跳出 repo
+        # path 空间，否则 _to_static_url 的 relative_to(public_root) 会炸。
+        # moc_rel 一般是干净的相对文件名（"BCSZ1.1.moc3"），.absolute() 同
+        # 时把可能的 ``../`` 等相对成分规整为绝对路径，又不解析 symlink。
+        moc3_path = (entry.parent / moc_rel).absolute()
     except json.JSONDecodeError as exc:
         return Live2DModelInfo(
             slug=slug,
