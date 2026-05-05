@@ -146,15 +146,30 @@ export class PixiCubism4Runtime implements Live2DRuntime {
     app.stage.addChild(loaded);
     this._fit(ctx);
 
-    // v3-E2 patch：双保险监听把 gaze focus 拉回中央。
+    // v3-E2 patch：把 gaze focus 拉回中央，覆盖鼠标离开 webview 的所有场景。
     // pixi-live2d-display autoFocus 通过 window.mousemove 持续更新
     // ``model.focus(x, y)``，但鼠标拖出 Tauri window 后 mousemove 不再触发，
-    // focus 卡在最后一个值（视线斜向某处不复位）。两条手动复位通道：
-    //   - document.mouseleave：鼠标离开 viewport（拖出 window 边界）
-    //   - window.blur：Tauri window 失焦（cmd+Tab / 别 app 抢焦点）
-    // 二者覆盖"鼠标还在屏幕但不在 window"和"鼠标到别 app"两种场景。
+    // focus 卡在最后一个值（视线斜向某处不复位）。
+    //
+    // 四层监听（互不替代，叠加触发）：
+    //
+    // 标准浏览器（W3C）路径 ——
+    //   1. document.mouseleave：鼠标离开整个 viewport
+    //   2. window.blur：window 失焦（cmd+Tab）
+    //
+    // macOS Tauri (WKWebView) 实测兜底（commit 0cd4fa5 后用户验证 1/2 都不
+    // 触发，必须加另外两条）——
+    //   3. document.mouseout (relatedTarget === null)：鼠标离开整个 document，
+    //      须 filter relatedTarget 否则 element 间转移也触发会让视线乱跳
+    //   4. window.mousemove 坐标 clamp：缓慢滑到边缘时 mouseout 也可能不触发，
+    //      检查 e.client{X,Y} 越界即复位
+    //
+    // 保留 1/2 是因为它们在标准浏览器仍 work，未来 Tauri 升级修了这个 webview
+    // bug / 切到 Electron / 项目嵌别的 host 时不返工。3/4 是 macOS Tauri 实测
+    // 可靠的兜底。
+    //
     // model.focus(0, 0) 不带 instant 参数 → 平滑过渡（pixi-live2d-display
-    // 内置阻尼），视觉比硬切自然。
+    // 内置阻尼），视觉比硬切自然。重复调用 focus(0, 0) 是幂等的。
     const handleGazeReset = (): void => {
       if (!ctx.model) return;  // _teardown 中可能已 null
       const m = ctx.model as unknown as {
@@ -162,11 +177,32 @@ export class PixiCubism4Runtime implements Live2DRuntime {
       };
       m.focus?.(0, 0);
     };
+    const handleMouseOut = (e: MouseEvent): void => {
+      // relatedTarget === null 是"鼠标离开整个 document"的可靠判断；
+      // 如果是 element → element 转移，relatedTarget 是新 element，跳过。
+      if (e.relatedTarget !== null) return;
+      handleGazeReset();
+    };
+    const handleMouseMove = (e: MouseEvent): void => {
+      // mousemove 高频事件：4 次数值比较 + early-out，性能可忽略。
+      // 在 viewport 内时直接 return，只有越界（鼠标拖到边缘 / 跨界瞬间）
+      // 才触发 reset。
+      if (
+        e.clientX < 0 || e.clientX > window.innerWidth ||
+        e.clientY < 0 || e.clientY > window.innerHeight
+      ) {
+        handleGazeReset();
+      }
+    };
     document.addEventListener('mouseleave', handleGazeReset);
     window.addEventListener('blur', handleGazeReset);
+    document.addEventListener('mouseout', handleMouseOut);
+    window.addEventListener('mousemove', handleMouseMove);
     ctx.gazeResetCleanup = () => {
       document.removeEventListener('mouseleave', handleGazeReset);
       window.removeEventListener('blur', handleGazeReset);
+      document.removeEventListener('mouseout', handleMouseOut);
+      window.removeEventListener('mousemove', handleMouseMove);
     };
 
     ctx.resizeObserver = new ResizeObserver(() => {
