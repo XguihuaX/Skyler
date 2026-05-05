@@ -119,17 +119,26 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
     if (now - lastTouchAtRef.current < TOUCH_DEBOUNCE_MS) return;
     lastTouchAtRef.current = now;
 
-    // 1. 立即播放 Tap motion（不等后端），让用户感知点击立刻生效
+    // 1. 立即播放 Tap motion（不等后端），让用户感知点击立刻生效。
+    // v3-E2 chunk 6：per-character override —— 先查 motion_map['Tap']，命中
+    // 走该角色的"点击反馈动作"（八重映射到 Start[0]）；miss 才回退 v3-E1
+    // 写死的 'Tap' group + random[0,1]（Hiyori 默认 motionMap 没 'Tap' key →
+    // 走回退 → 行为完全不变）。
     const runtime = runtimeRef.current;
     const handle  = handleRef.current;
     if (runtime && handle) {
-      const idx = Math.floor(Math.random() * TAP_MOTION_COUNT);
-      runtime.startMotion(handle, TAP_MOTION_GROUP, idx);
+      const tapEntry = maps.motionMap['Tap'];
+      if (tapEntry) {
+        runtime.startMotion(handle, tapEntry.group, tapEntry.index);
+      } else {
+        const idx = Math.floor(Math.random() * TAP_MOTION_COUNT);
+        runtime.startMotion(handle, TAP_MOTION_GROUP, idx);
+      }
     }
 
     // 2. 通知后端：本轮按 touch 事件路由（注入 system 指令 + 入对话历史）
     sendTouch();
-  }, [sendTouch]);
+  }, [sendTouch, maps]);
 
   useEffect(() => {
     const container = containerRef.current;
