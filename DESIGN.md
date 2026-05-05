@@ -996,6 +996,16 @@ interface Live2DRuntime {
 
 emotion 视觉绑定（`runtime.setExpression`）的代码路径在 v3-E2 chunk 7 已就绪。等有 `.exp3.json` 的模型接入后立刻激活，组件 / runtime 不需要改。
 
+### Motion sound policy
+
+模型 motion3.json 可能引用配音 wav（八重 BCSZ1.1 的 6 个"早上好 / 中午好 / 不变 / 无聊 / 夜晚 / 初见" motion 都带）。pixi-live2d-display 默认看到 `Sound` 字段会自动播这个 wav。Skyler 的语音输出统一由 LLM + TTS pipeline 驱动，motion-bundled sound 与 TTS 同时跑会出现双 audio 流重叠。
+
+**v3-E2 patch 决定**：通过 pixi-live2d-display 模块级 `config.sound = false` 全局禁用 motion-bundled sound（设置点见 `frontend/src/lib/live2d/runtimes/pixiCubism4.ts` 顶层）。模型自带 wav 不再播放，所有声音走 TTS。
+
+公开 `model.motion(group, idx, priority)` 在本版 pixi-live2d-display 没有 `audio` 第 4 参数（types/index.d.ts:1692），无法 per-call 关闭，只能走全局 flag。
+
+未来路径：per-character toggle —— 鼠标点击触发的 motion 允许播原声 wav（保八重等模型的演出价值），LLM 标签触发的 motion 不播（让 TTS 独占）。需要 `Live2DRuntime.startMotion` 接口加 `playSound?: boolean` + 区分调用路径。详见 ROADMAP backlog "Motion-bundled sound per-character toggle"。
+
 ---
 
 ## 十四之B、Tech Debt

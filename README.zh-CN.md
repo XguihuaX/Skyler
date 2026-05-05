@@ -252,6 +252,13 @@ python -m tools.check_moc3_version frontend/public/live2d/yae/
 会播 `Start` motion（八重的初见配音），而不是 Hiyori 的 `Tap` 随机一条
 —— 这就是 per-character `motion_map_json` 生效的视觉信号。
 
+> **注意：模型 motion3.json 中引用的配音 wav 默认禁用。** 部分模型（八重
+> BCSZ1.1 含 6 段配音）会在 motion 自带 wav；Skyler 所有语音输出统一走
+> LLM + TTS pipeline，让 motion 自动播 wav 会跟 TTS 重叠。当前在 SDK
+> config 层全局关闭。未来 per-character 开关已在 ROADMAP backlog —— 鼠标
+> 点击触发的 motion 可以播原声 wav 保留演出价值，LLM 标签触发的不播让
+> TTS 独占。
+
 ---
 
 ## 路线图

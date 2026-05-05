@@ -172,7 +172,16 @@
 - [x] **emotion 视觉绑定接通（`runtime.setExpression`）** —— `950710e`（chunk 5 偏离 6 收口）
 - [x] **Momo (id=1) persona 还原成 ChatAgent 原文** —— `d01f3b4`
 
-**v3-E2 commit 范围**：`1831836` (moc3 checker) → `d01f3b4` (Momo restore)
+**v3-E2 commit 范围**：`1831836` (moc3 checker) → 主线 `d01f3b4` (Momo restore) + 收尾 patch 链。
+
+**收尾 patch 历史**：
+
+| Hash | 内容 |
+|---|---|
+| `1a16953` | scanner symlink 兼容（`Path.resolve()` → `.absolute()`，让 `ln -s` 进 slug 不炸 relative_to）|
+| `f021899` | `resolveLive2dModelUrl` 走 scanner store 主源 + hardcode 仅兜底 + App.tsx eager-load（修 "unknown model name: yae" 切八重显示静态图）|
+| `0cd4fa5` | document.mouseleave / window.blur 把 gaze focus 拉回中央（修鼠标拖出 Tauri 视线卡住）|
+| `<本次>` | 全局禁用 motion-bundled sound（修 BCSZ1.1 motion3.json 自带 wav 与 TTS 重叠）|
 
 **Backlog（不阻塞 v3-E2 关闭）**：
 
@@ -180,6 +189,8 @@
 - [ ] **加藤惠 Cubism 4 重制版搜寻** —— 现有加藤惠资产是 Cubism 2（`.moc` 不是 `.moc3`），完全不兼容 pixi-live2d-display。要么找重制版，要么放弃这套资产
 - [ ] **hit-area 路由真接通** —— 八重 8 个 HitAreas 已经在 `hit_area_map_json` 写好契约，但 `Live2DCanvas` 当前 click 仍走整体 canvas（`autoHitTest=false`）。接通需要改 `handleTouch` 拿到 PIXI 局部坐标 → `runtime.hitTest()` → 查 hitAreaMap → 派发对应 motion group
 - [ ] **资产分发方案** —— git 入库（不可，IP 风险）vs git-lfs vs release tag 分发；自制 Momo 模型完成后要决定怎么 ship
+- [ ] **角色装饰显隐 (parts opacity toggle)** —— 八重等模型有可显隐部件（头饰 / 装饰 / 服装层），通过 `model.internalModel.coreModel.setPartOpacity()` 控制。实施需要：`characters.customizable_parts_json` 字段 + 后端从 `.cdi3.json` 列出 parts 的 API + CharacterPanel toggle UI + Live2DCanvas 同步 state。估 1–1.5 天独立 chunk
+- [ ] **Motion-bundled sound per-character toggle** —— 当前 v3-E2 patch 全局禁用 motion-bundled sound 避免与 TTS 重叠。未来按调用路径区分：鼠标点击触发 → 播 motion wav（保八重原声）/ LLM 标签触发 → 不播（让 TTS 独占）。需要 `Live2DRuntime.startMotion` 接口加 `playSound?: boolean` 参数 + 区分 `Live2DCanvas.handleTouch` vs `currentMotion` useEffect 调用路径
 
 ---
 

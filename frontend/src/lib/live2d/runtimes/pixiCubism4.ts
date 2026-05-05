@@ -11,7 +11,11 @@
 // - contain-fit：保持模型原始宽高比，居中缩放
 // - lip sync 写 ParamMouthOpenY；motion 走 model.motion(NORMAL)
 import * as PIXI from 'pixi.js';
-import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
+import {
+  Live2DModel,
+  MotionPriority,
+  config as pixiL2DConfig,
+} from 'pixi-live2d-display/cubism4';
 
 import type { Live2DRuntime, ModelHandle } from '../runtime';
 
@@ -19,6 +23,21 @@ import type { Live2DRuntime, ModelHandle } from '../runtime';
 // Live2DModel 之前完成挂载，否则模型的自动 ticker 不会跑（黑屏 / 不眨眼）。
 // v3-E1 Live2DCanvas 顶层做的，搬到 runtime 模块顶层等价（import 时执行）。
 (window as unknown as { PIXI: typeof PIXI }).PIXI = PIXI;
+
+// v3-E2 patch：全局禁用 motion-bundled sound。
+// 起因：BCSZ1.1（八重）motion3.json 含 ``Sound: 八重神子-X.wav`` 字段，
+// pixi-live2d-display 默认看到此字段会自动播这个 wav。但 Skyler 的语音输出
+// 由 LLM + TTS pipeline 统一驱动，motion 触发时 TTS 也在跑 → 双 audio
+// stream 同时播 → 鬼畜重叠。
+//
+// pixi-live2d-display 的公开 ``model.motion(group, idx, priority)`` 接口
+// 在本版本（types/index.d.ts:1692）**没有** audio 第 4 参数，无法 per-call
+// 关闭。模块级 ``config.sound`` 是全局开关：设 false 后所有 model 实例的
+// motion 都不再播 bundled sound。
+//
+// 这是阶段性方案。未来 per-character 配置（鼠标点击 vs LLM 标签区分播
+// 不播 wav）见 ROADMAP backlog "Motion-bundled sound per-character toggle"。
+pixiL2DConfig.sound = false;
 
 // pixi-live2d-display 的 internalModel.coreModel 在类型层是 unknown 风格，
 // 这里只声明我们用到的子集，避免到处 as any。
@@ -191,6 +210,8 @@ export class PixiCubism4Runtime implements Live2DRuntime {
     try {
       // model.motion 返回 Promise<boolean>；不 await，pixi-live2d-display
       // 失败会自己 console。返回 true 表示派发成功（不等于"动作播完"）。
+      // motion-bundled sound 全局禁用（模块顶 ``pixiL2DConfig.sound = false``），
+      // 避免与 TTS 重叠 —— 公开接口没 audio 4 arg，只能走全局 flag。
       void model.motion(group, index, MotionPriority.NORMAL);
       return true;
     } catch (err) {

@@ -258,6 +258,14 @@ BCSZ1.1. Click the model and Skyler plays the `Start` motion (Yae's
 intro voice line) instead of Hiyori's `Tap` random pick — that's the
 per-character `motion_map_json` taking effect.
 
+> **Heads-up — motion-bundled sound is muted globally.** A model's
+> `motion3.json` may reference WAV files (BCSZ1.1 ships with six voiced
+> motions, for example). Skyler routes all spoken output through its
+> LLM + TTS pipeline, so the auto-played motion WAVs would collide with
+> TTS output. They're disabled at the SDK config level. A future
+> per-character toggle is on the roadmap (so e.g. tap-triggered motions
+> can keep the original voice line while LLM-driven ones stay quiet).
+
 ---
 
 ## Roadmap
