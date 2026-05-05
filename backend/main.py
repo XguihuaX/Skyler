@@ -37,6 +37,9 @@ from backend.database.migrations.v3_e1_z import run_migration as migrate_v3_e1_z
 from backend.database.migrations.v3_e2_per_character_maps import (
     run_migration as migrate_v3_e2_per_character_maps,
 )
+from backend.database.migrations.v3_e2_restore_momo_persona import (
+    run_migration as migrate_v3_e2_restore_momo_persona,
+)
 from backend.database.migrations.v3_e2_yae_maps import (
     run_migration as migrate_v3_e2_yae_maps,
 )
@@ -92,6 +95,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 1b7. V3-E2 data migration: 八重 (id=2) live2d_model='yae' + maps ──────
     await migrate_v3_e2_yae_maps()
+
+    # ── 1b8. V3-E2 data migration: Momo (id=1) persona 还原成 ChatAgent 原文 ──
+    await migrate_v3_e2_restore_momo_persona()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
