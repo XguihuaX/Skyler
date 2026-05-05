@@ -44,6 +44,9 @@ from backend.database.migrations.v3_e2_yae_maps import (
     run_migration as migrate_v3_e2_yae_maps,
 )
 from backend.database.migrations.v3_f import run_migration as migrate_v3_f
+from backend.database.migrations.v3_g_default_voice import (
+    run_migration as migrate_v3_g_default_voice,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -99,6 +102,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 1b8. V3-E2 data migration: Momo (id=1) persona 还原成 ChatAgent 原文 ──
     await migrate_v3_e2_restore_momo_persona()
+
+    # ── 1b9. V3-G' chunk 1c: Momo (id=1) 默认 voice_model = cosyvoice/longyumi_v3 ─
+    await migrate_v3_g_default_voice()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
