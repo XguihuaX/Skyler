@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react';
 import { useAppStore } from '../store';
 import {
   createCharacter,
@@ -10,6 +18,7 @@ import {
   updateBaseInstruction,
   type CharacterRow,
 } from '../lib/config';
+import { fetchLive2DModels } from '../lib/live2d';
 
 const DEFAULT_CHARACTER_NAME = 'Momo';
 const PERSONA_PREVIEW_LEN = 30;
@@ -250,12 +259,19 @@ export default function CharacterPanel() {
   const currentCharacterId    = useAppStore((s) => s.currentCharacterId);
   const setCurrentCharacterId = useAppStore((s) => s.setCurrentCharacterId);
 
+  // v3-E2 commit 3b：Live2D 模型扫描结果，下拉数据源。从 store 读，避免每次表单
+  // 打开都重新扫描；mount 时拉一次，刷新按钮按需重拉。
+  const live2dModels    = useAppStore((s) => s.live2dModels);
+  const setLive2dModels = useAppStore((s) => s.setLive2dModels);
+
   const [characters, setCharacters] = useState<CharacterRow[]>([]);
   const [loading, setLoading]       = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm]             = useState<FormState | null>(null); // null = 不显示表单
   const [pendingDelete, setPendingDelete] = useState<CharacterRow | null>(null);
   const [toasts, setToasts]         = useState<ToastInfo[]>([]);
+  const [live2dLoading, setLive2dLoading] = useState(false);
+  const [live2dError,   setLive2dError]   = useState<string | null>(null);
 
   const showToast = useCallback((text: string) => {
     const id = Date.now() + Math.random();
@@ -280,6 +296,26 @@ export default function CharacterPanel() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // v3-E2 commit 3b：Live2D 模型列表加载 + 刷新按钮共享同一回调
+  const refreshLive2D = useCallback(async () => {
+    setLive2dLoading(true);
+    setLive2dError(null);
+    try {
+      const data = await fetchLive2DModels();
+      setLive2dModels(data.models);
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.error('[CharacterPanel] live2d models fetch failed:', e);
+      setLive2dError(msg);
+    } finally {
+      setLive2dLoading(false);
+    }
+  }, [setLive2dModels]);
+
+  useEffect(() => {
+    void refreshLive2D();
+  }, [refreshLive2D]);
 
   const startCreate = () => {
     setForm({ ...EMPTY_FORM, mode: 'create' });
@@ -597,25 +633,139 @@ export default function CharacterPanel() {
             </div>
 
             <div>
-              <label
-                className="block text-xs mb-1"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                Live2D 模型
-              </label>
-              <input
-                type="text"
-                value={form.live2d_model}
-                onChange={(e) => setForm({ ...form, live2d_model: e.target.value })}
-                placeholder="hiyori"
-                className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
-                style={inputStyle}
-              />
+              <div className="flex items-center justify-between mb-1">
+                <label
+                  className="block text-xs"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  Live2D 模型
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void refreshLive2D()}
+                  disabled={live2dLoading}
+                  className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                  title="重新扫描 frontend/public/live2d/"
+                >
+                  <RefreshCw
+                    size={10}
+                    className={live2dLoading ? 'animate-spin' : ''}
+                  />
+                  刷新
+                </button>
+              </div>
+              <div className="relative">
+                <select
+                  value={form.live2d_model}
+                  onChange={(e) =>
+                    setForm({ ...form, live2d_model: e.target.value })
+                  }
+                  className="w-full appearance-none rounded-md px-2 py-1.5 pr-8 text-sm focus:outline-none"
+                  style={inputStyle}
+                >
+                  <option value="">未绑定（使用静态图片）</option>
+                  {/* 当前值不在扫描列表里 → 保留它做"自定义"选项，避免编辑时被改写 */}
+                  {form.live2d_model &&
+                    !live2dModels.some((m) => m.slug === form.live2d_model) && (
+                      <option value={form.live2d_model}>
+                        自定义：{form.live2d_model}
+                      </option>
+                    )}
+                  {live2dModels.map((m) => (
+                    <option key={m.slug} value={m.slug}>
+                      {m.slug} {m.pixi_compatible ? '· 兼容' : '· 不兼容'}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  size={14}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                />
+              </div>
+              {/* 选中模型的兼容性 badge + warnings + 自定义 / 加载错误兜底 */}
+              {(() => {
+                const selected = form.live2d_model
+                  ? live2dModels.find((m) => m.slug === form.live2d_model)
+                  : null;
+                const isCustomOrphan = Boolean(
+                  form.live2d_model && !selected,
+                );
+                return (
+                  <>
+                    {selected && (
+                      <div className="mt-1 flex items-center gap-1 text-[10px]">
+                        {selected.pixi_compatible ? (
+                          <span
+                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
+                            style={{
+                              background: 'var(--color-accent)',
+                              color: 'var(--color-bubble-ai-text)',
+                            }}
+                          >
+                            <CheckCircle2 size={10} />
+                            兼容 · {selected.moc3_version_label}
+                          </span>
+                        ) : (
+                          <span
+                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
+                            style={{
+                              background: 'var(--color-bg-elevated)',
+                              color: 'var(--color-text-primary)',
+                              border: '1px solid var(--color-border)',
+                            }}
+                          >
+                            <AlertTriangle size={10} />
+                            不兼容（Cubism 5 / 缺件）
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {selected && selected.warnings.length > 0 && (
+                      <div
+                        className="mt-1 flex items-start gap-1 text-[10px]"
+                        style={{ color: 'var(--color-text-secondary)' }}
+                      >
+                        <AlertTriangle
+                          size={10}
+                          className="flex-shrink-0 mt-[1px]"
+                        />
+                        <span>{selected.warnings.join('；')}</span>
+                      </div>
+                    )}
+                    {isCustomOrphan && (
+                      <div
+                        className="mt-1 flex items-start gap-1 text-[10px]"
+                        style={{ color: 'var(--color-text-secondary)' }}
+                      >
+                        <AlertTriangle
+                          size={10}
+                          className="flex-shrink-0 mt-[1px]"
+                        />
+                        <span>
+                          目录里没扫到 “{form.live2d_model}”。检查
+                          frontend/public/live2d/ 下是否有该 slug，或点刷新。
+                        </span>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+              {live2dError && (
+                <p
+                  className="text-[10px] mt-1"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  列表加载失败：{live2dError}
+                </p>
+              )}
               <p
                 className="text-[10px] mt-1"
                 style={{ color: 'var(--color-text-secondary)' }}
               >
-                对应 frontend/public/live2d/&lt;name&gt;/ 目录名。留空则使用静态图片。
+                选项来自 frontend/public/live2d/。新角色资产请先放进对应 slug
+                目录，详见 frontend/public/live2d/README.md。
               </p>
             </div>
 

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { AppConfig, CharacterRow, ChatKind, ConversationRow } from '../lib/config';
+import type { Live2DModel } from '../lib/live2d';
 
 export type AppMode = 'widget' | 'panel';
 export type AiStatus = 'idle' | 'listening' | 'thinking' | 'speaking' | 'interrupted';
@@ -220,6 +221,11 @@ interface AppState {
   currentCharacterId: number | null;
   setCurrentCharacterId: (v: number | null) => void;
 
+  // v3-E2 commit 3b — Live2D 模型扫描结果，CharacterPanel 下拉数据源。
+  // 由 GET /api/live2d/models 填充；CharacterPanel mount 和点击刷新按钮时拉。
+  live2dModels: Live2DModel[];
+  setLive2dModels: (v: Live2DModel[]) => void;
+
   conversations: ConversationRow[];
   setConversations: (v: ConversationRow[]) => void;
   upsertConversation: (c: ConversationRow) => void;
@@ -341,6 +347,9 @@ export const useAppStore = create<AppState>((set) => ({
   setCharacters: (characters) => set({ characters }),
   currentCharacterId: null,
   setCurrentCharacterId: (currentCharacterId) => set({ currentCharacterId }),
+
+  live2dModels: [],
+  setLive2dModels: (live2dModels) => set({ live2dModels }),
 
   conversations: [],
   setConversations: (conversations) => set({ conversations }),
