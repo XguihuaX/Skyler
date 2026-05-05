@@ -2,7 +2,7 @@
 
 > Living document. 每完成一个里程碑同步更新 + commit + push。
 >
-> 当前状态（2026-05-06）：v2.7 完整 + v3-A/B/C/D 完成 + **v3-E1 主线 8 commit + v3-E2 多模型 9 commit 完成**（约 v3 整体 85%）。Hiyori 端到端正常；八重神子 (id=2) 接入 BCSZ1.1（per-character motion / hit-area map 已写）；Live2DRuntime 抽象层 + per-character `*_map_json` 字段已就位；emotion 视觉绑定路径已接通（找有 `.exp3.json` 的模型即激活）。剩 v3-F' 主动对话 / v3-G' TTS UI / v3-G 成长系统。
+> 当前状态（2026-05-06）：v2.7 完整 + v3-A/B/C/D + **v3-E1 (8 commit) + v3-E2 多模型 (9 commit) + v3-G' TTS UI + instruct emotion (5 commit + patch) 完成**（约 v3 整体 90%）。Hiyori / 八重神子 Live2D 端到端正常；TTS provider/voice 两级下拉 + 6 个 cosyvoice 音色 + emotion 真生效（longanhuan 走 instruct）。剩 v3-F' 主动对话 / v3-G 成长系统。
 
 ---
 
@@ -24,7 +24,7 @@
 | v3-F：语音体验飞跃（打断 ✅ / 并发 ✅ / 预处理 ✅ / 内心独白 ✅） | ✅ 完成 | 100% |
 | **v3-F'：主动对话 + 时间感知（饭点 / 睡前 / 长时无互动）** | 📋 计划中 | 0% |
 | v3-G：生活 & 工具型能力（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 | 0% |
-| **v3-G'：TTS UI 升级 + cosyvoice emotion 真生效（SSML）** | 📋 计划中 | 0% |
+| **v3-G'：TTS UI 升级 + cosyvoice emotion 走 instruct（chunk 1a SSML 路径已撤回）** | ✅ 主线完成（5 commit + patch，2026-05-06）| 100% |
 | v4：屏幕感知 + 视觉能力 | 📋 远期 | 0% |
 | **v5-D：autodl 部署 + 子 agent 隔离** | 📋 远期 | 0% |
 | **v5-T1：GPT-SoVITS 后端接通（依赖 v5-D）** | 📋 远期 | 0% |
@@ -139,7 +139,7 @@
 
 2. **cosyvoice EMOTION_MAP 注释 / 行为不一致**
    - `backend/tts/cosyvoice.py:31-51` 注释说 miss → neutral，代码实际透传
-   - 改注释或改代码二选一（与 v3-G' SSML 重构方向不冲突即可）
+   - 改注释或改代码二选一（v3-G' 改走 instruct 路径不再用 SSML，本条独立处理即可）
    - **预计**：5 分钟
 
 3. **Hiyori idle motion m01/m05 fetch Aborted**
@@ -314,49 +314,36 @@
 
 **目标**：把现有的 voice_model JSON 文本框升级成生产级 voice picker，**同时让 cosyvoice emotion 真正生效**（当前 emotion 字段被 SDK 忽略，audit 已确认）。
 
-**后端**：
+**主线完成清单（5 commit + patch）**：
 
-- [ ] **`GET /api/tts/voices` 接口** —— 返回 cosyvoice / sovits 音色清单：
-  ```jsonc
-  {
-    "providers": [
-      {
-        "id": "cosyvoice",
-        "label": "CosyVoice",
-        "voices": [
-          {"id": "longyumi_v3", "label": "龙裕米 v3", "ssml": true, "instruct": null}
-        ]
-      }
-    ]
-  }
-  ```
-- [ ] **`backend/tts/cosyvoice.py` 改造为走 SSML** —— `<voice emotion="happy">{text}</voice>`，`enable_ssml=true`；当前 emotion 字段被 SDK 静默忽略
-- [ ] **`config.yaml` 加 `available_voices` 列表** —— 启动时后端读取，缓存
+| Hash | 内容 |
+|---|---|
+| `de7ebe2` | ⚠️ chunk 1a：`/api/tts/voices` 接口 + cosyvoice.py SSML emotion 包装。**SSML emotion 路径事后证实是错的**（DashScope SSML 标签没 emotion 属性，被 SDK 静默忽略），但其他改动（API + config 结构）继续生效 |
+| `bd46a80` | chunk 1b：CharacterPanel 两级下拉（provider → voice）+ tts.ts API client + 兼容 badge |
+| `bf21915` | chunk 1c：Momo (id=1) lifespan 默认音色 = `cosyvoice/longyumi_v3` |
+| `b29662c` | patch (a)：撤销 SSML emotion 包装；emotion 真生效改走 **instruct 自然语言指令路径**（`instruction="你说话的情感是 X。"`）；config.yaml 改 6 音色（longyumi_v3 / longfeifei_v3 / longwan_v3 / longqiang_v3 / longxing_v3 / longanhuan） |
+| `e73e2bc` | patch (b)：前端 SSML badge 删除；保留 Instruct badge 改名"情感控制 / 纯音色"；下拉选项展示 `{label} · {traits}` |
 
-**前端**：
+**为什么撤回 SSML**：DashScope 官方 SSML 标签合法属性是 voice / rate / pitch / volume / effect / bgm，**没有 emotion**。chunk 1a 的 `<voice emotion="happy">...</voice>` 是非法 SSML，请求要么被忽略要么返 400。真情感控制走 SDK 的 `instruction` 参数（`speech_synthesizer.py:218-219` audit 证实），**v3-D 起一直就有这条路径**，但仅在音色 `instruct: true` 时启用。chunk 1a 没改正机制，只是在并行加了一条无效的 SSML wrapper。patch (a) 撤销 wrapper + 把 instruct 路径作为 emotion 真生效的唯一通道。
 
-- [ ] **CharacterPanel `voice_model` 升级为两级下拉** —— provider → voice
-- [ ] **per-character voice 独立配置** —— 每个角色配自己的音色
-- [ ] **Momo (id=1) lifespan 给硬编码默认** —— 开箱有声，不用强制用户先填 voice_model
+**当前 instruct 支持音色**：
 
-**音色目录（v3-E1 阶段已 audit 元数据）**：
+| voice | traits | instruct |
+|---|---|---|
+| longyumi_v3 | 正经青年女 | ❌ |
+| longfeifei_v3 | 甜美娇气女 | ❌ |
+| longwan_v3 | 柔声女 | ❌ |
+| longqiang_v3 | 浪漫女 | ❌ |
+| longxing_v3 | 邻家女 | ❌ |
+| **longanhuan** | **欢脱元气女** | **✅** |
 
-| voice         | 特质            | 年龄    | SSML | Instruct |
-|---------------|-----------------|---------|------|----------|
-| longyumi_v3   | 当前使用        | -       | ✅   | ?        |
-| longfeifei_v3 | 甜美娇气女      | 20~25   | ✅   | ❌       |
-| longanqin_v3  | 亲和活泼女      | 20~25   | ✅   | ❌       |
-| longanhuan    | 欢脱元气女      | 20~30   | ✅   | ✅       |
+→ 想要 emotion 真生效（开心 / 难过 / 生气 真有差异）必须切到 longanhuan。其他 5 个音色 emotion 字段被静默丢弃，TTS 仍正常播但情感由音色本身固定风格决定。
 
-**设计含义**：
+**emotion 白名单**：instruct 路径只对 happy / sad / angry / surprised 生效；neutral 等价"不指定"不传 instruction；fearful / disgusted 当前 LLM prompt 未引导，先不实验性派发。
 
-- 所有 v3-flash 音色都支持 SSML → emotion 控制走 SSML（统一路径）
-- 大多数音色不支持 instruct → 不能用 instruct 自然语言指令
-- v3-G' cosyvoice.py 修改后 emotion 真正听得出差异（开心 / 难过 / 生气 在音色上有可见区别）
+**架构验证（已 done）**：`/api/tts/voices` schema 容纳多 provider，未来 v5-T1 SoVITS 接通时只要后端追加 entry，前端代码 0 改动 ✓。
 
-**架构验证**：mock 一个 SoVITS provider 进 `/api/tts/voices` 返回，确认 UI 自动多 provider 选项 → 删掉 mock。这步证明架构经得起 v5-T1 的验收（前端代码 0 改动）。
-
-**估时**：2 天。
+**估时**：实际 ~1 天（含 audit + patch）。
 
 ---
 
@@ -479,7 +466,7 @@ DESIGN §13 已有完整设计。要点：
 - [x] **v3-E1 Step Z 收尾**（4 条 cleanup 完成：commits `488a6a1` / `f2d7f78` / `d984916`）
 - [x] **v3-E2 多模型接入**（runtime 抽象层 + per-character maps + 八重 BCSZ1.1 接入 + Momo persona 还原；9 commit 完成 2026-05-06）
 - [x] **v3-E3 emotion 视觉绑定**（代码路径已接通 chunk 7 `950710e`，剩纯运营找模型）
-- [ ] **v3-G' TTS UI 升级 + cosyvoice SSML**（独立任务）—— 2 天
+- [x] **v3-G' TTS UI 升级 + cosyvoice instruct emotion**（5 commit + 1 patch，2026-05-06）—— SSML 路径事后撤回，改走 instruct
 - [ ] **v3-F' 主动对话**（依赖 [touch] kind 字段同设计）—— 1-2 天
 
 v3-E 全套 + 主动陪伴中两条已完成 + 收尾。剩 v3-F' / v3-G' / v3-G。
@@ -558,4 +545,4 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
 
 ---
 
-*文档版本：1.4 | 最后更新：2026-05-06（v3-E2 多模型 9 commit 完成：moc3 checker / 资产隔离 / 扫描 API + 下拉 / per-character maps / runtime 抽象 / 八重 BCSZ1.1 接入 / emotion 绑定接通 / Momo persona 还原）*
+*文档版本：1.5 | 最后更新：2026-05-06（v3-G' TTS UI + cosyvoice instruct emotion 完成：5 commit + 1 patch；chunk 1a SSML emotion 路径事后撤回——DashScope SSML 标签没 emotion 属性，audit 后改走 SDK instruction 字段）*

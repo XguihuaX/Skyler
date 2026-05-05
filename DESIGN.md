@@ -1204,12 +1204,14 @@ pixi-live2d-display 及其所有维护中的 fork（advanced / lipsyncpatch / mu
 - [ ] **自然语言 cron 调度**（Hermes #3 借鉴）—— 扩展现有 scheduler，支持自然语言定义任意定时任务（不只是 alarm）
 - [ ] **角色状态面板 / 成长系统**（OLV v1.4 + DESIGN 计划合并）—— 当前心情 / 亲密度 / 当前思绪 / 当前正在做什么；与 profile_summary 联动；详见 §十九
 
-#### v3-G'：TTS 配置 UI 升级 📋 计划中（小但重要）
-- [ ] **`GET /api/tts/voices` 接口** —— 返回当前可用的 provider + voice 列表（按 §6.4 结构）
-- [ ] **CharacterPanel TTS 表单升级** —— 裸 JSON 文本框换成 provider + voice 两级下拉；**只显示真实可用选项**（当前阶段就 CosyVoice + 1 个 voice）
-- [ ] **config.yaml `tts.cosyvoice.available_voices` 列表** —— 当前阶段 `[longyumi_v3]`，加新音色直接 append；后端 startup 扫描 + 缓存
-- [ ] **写回逻辑** —— 用户选择后前端拼出 `voice_model` JSON 写回 character；与 §6.2 schema 兼容
-- [ ] **架构验证**：v5-T1 接通 SoVITS 后 UI 不需要改代码，自动多 provider 选项
+#### v3-G'：TTS UI + cosyvoice instruct emotion ✅ 完成（5 commit + patch，2026-05-06）
+- [x] **`GET /api/tts/voices` 接口**（`de7ebe2`）—— provider/voice 两级结构，从 `config.yaml` `tts.available_voices` 读
+- [x] **CharacterPanel 两级下拉**（`bd46a80`）—— provider → voice，下拉项展示 `{label} · {traits}`
+- [x] **`config.yaml` `tts.available_voices.cosyvoice` 列表**（最终 6 音色：longyumi_v3 / longfeifei_v3 / longwan_v3 / longqiang_v3 / longxing_v3 / longanhuan）
+- [x] **写回逻辑**：用户选择 → `buildVoiceModelJson(provider, voice, instruct_supported)` 写回 character.voice_model 同字段，向后兼容旧 plain 字符串（UI 提示"自定义"）
+- [x] **Momo (id=1) 默认音色 lifespan migration**（`bf21915`）`v3_g_default_voice.py` 幂等
+- [x] **emotion 真生效路径修正**（`b29662c` + `e73e2bc`）：chunk 1a 把 emotion 包成 `<voice emotion="X">` SSML 是错的——DashScope SSML 标签合法属性是 voice / rate / pitch / volume / effect / bgm，**没 emotion**。撤回 SSML wrapper，改走 SDK `instruction` 字段 (`speech_synthesizer.py:218-219` audit 证实) —— `instruction="你说话的情感是 X。"`，仅 `instruct_supported=true` 音色启用。当前 6 个 cosyvoice 音色里只 longanhuan instruct=true
+- [x] **架构验证**：`/api/tts/voices` schema 容纳多 provider，未来 v5-T1 SoVITS 接通时后端追加 entry，前端 0 改动
 
 ### 📋 阶段六：v4 屏幕感知 + 视觉能力（OLV #4 借鉴）
 

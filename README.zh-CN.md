@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **状态（2026-05）**：v2.7 后端 + UI 完整 · v3-A/B/C/D + **v3-E1 8 commit + v3-E2 多模型 9 commit 完成**（约 v3 整体 85%）· Hiyori 和八重神子都能渲染；per-character `*_map_json` 通过 `Live2DRuntime` 抽象层走通；emotion → `setExpression` 路径已接通（等有 `.exp3.json` 的模型即激活）· 接下来：v3-F' 主动对话 → v3-G' TTS UI + cosyvoice SSML → v3-G 成长系统。
+> **状态（2026-05）**：v2.7 后端 + UI 完整 · v3-A/B/C/D + **v3-E1 (8 commit) + v3-E2 多模型 (9 commit) + v3-G' TTS UI + instruct emotion (5 commit + patch) 完成**（约 v3 整体 90%）· Hiyori / 八重神子 Live2D 端到端正常；TTS 两级下拉 + 6 个 cosyvoice 音色 + emotion 真生效（longanhuan 走 instruct）· 接下来：v3-F' 主动对话 → v3-G 成长系统。
 >
 > *项目原名 MomoOS，2026-05 重命名为 Skyler。*
 
@@ -272,7 +272,7 @@ python -m tools.check_moc3_version frontend/public/live2d/yae/
   - ✅ **v3-E2 完成**（9 commit）：runtime 抽象层 + per-character `*_map_json` + 资产扫描 API + 下拉 + 八重神子 BCSZ1.1 接入 + emotion 视觉绑定路径接通 + Momo persona 还原
   - **v3-E3**：纯运营任务 —— 找一个有 `.exp3.json` 的模型，填该角色 `emotion_map_json`，美术调参
   - **v3-F'**：主动对话 + 时间感知（饭点 / 睡前 / 长时无互动触发）
-  - **v3-G'**：TTS UI 升级 + cosyvoice SSML（当前 emotion 字段被 SDK 静默忽略；per-character voice picker + 已 audit 音色目录）
+  - ✅ **v3-G' 完成**（5 commit + patch）：CharacterPanel 两级下拉 voice picker（provider → voice）、6 个 cosyvoice 音色目录、emotion 通过 SDK `instruction` 字段在 instruct-supported 音色（longanhuan）上真生效。chunk 1a 的 SSML 方案事后证明是错的——DashScope SSML 标签没 emotion 属性——已撤回，回到 v3-D 起就有的 instruct 自然语言指令路径作为唯一通道。
 - **v3-G + v4（第 2 梯队，1–2 个月）**：剪贴板助手、每日简报、自然语言 cron、角色状态面板 + 成长系统；屏幕感知（主动 + 被动 + VLM）；AI 用自己的浏览器
 - **v5（第 3 梯队，长期）**：
   - **v5-D**：autodl 部署 + 子 agent 隔离
@@ -327,7 +327,7 @@ Skyler 站在两个项目的肩膀上：
 | v3-F：语音体验飞跃（打断 + 并发 + 预处理 + 内心独白） | ✅ 完成 |
 | v3-F'：主动对话 + 时间感知 | 📋 计划中 |
 | v3-G：生活 & 工具层（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 |
-| v3-G'：TTS UI 升级 + cosyvoice SSML emotion | 📋 计划中 |
+| v3-G'：TTS UI + cosyvoice instruct emotion | ✅ 完成（5 commit + patch，2026-05-06）—— SSML 路径撤回，instruct 路径正典 |
 | v4：屏幕感知 | 📋 计划中 |
 | v5-D / T1 / T2：autodl + GPT-SoVITS + 自定义 voice 训练 | 📋 长期 |
 | v6+：多设备 / 云端部署 | 📋 长期 |
