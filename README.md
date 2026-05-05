@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + **v3-E1 Live2D main line (8 commits)** done (~75% of v3) · Hiyori avatar is alive: rendering + idle + touch Tap + lip-sync + emotion data pipeline + LLM-driven motion · next up: Step Z cleanup → v3-E2 multi-model → v3-E3 emotion visual binding → v3-F' proactive dialogue → v3-G' TTS UI + cosyvoice SSML.
+> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + **v3-E1 (8 commits) + v3-E2 multi-model (9 commits)** done (~85% of v3) · Hiyori + Yae Miko both render; per-character `*_map_json` maps wired through `Live2DRuntime` abstraction; emotion → `setExpression` path live (waits on a model with `.exp3.json`) · next up: v3-F' proactive dialogue → v3-G' TTS UI + cosyvoice SSML → v3-G growth system.
 >
 > *Project formerly known as MomoOS — rebranded to Skyler in 2026-05.*
 
@@ -229,21 +229,47 @@ guarantees about any Live2D model assets you add. Sourcing, licensing,
 and distribution rights for those assets are entirely the user's
 responsibility.
 
+### Walkthrough: adding 八重神子 (Yae Miko) from a BCSZ1.1 dump
+
+Concrete example — a Cubism 4 八重神子 model lives at
+`<some-path>/BCSZ1.1/`. Skyler's character with id=2 is already named
+"八重神子" and has its `motion_map_json` / `hit_area_map_json` populated
+by the `v3_e2_yae_maps` migration. To make her render:
+
+```bash
+# Option A: copy assets into the slug dir
+cp -r "<some-path>/BCSZ1.1" frontend/public/live2d/yae
+
+# Option B: symlink (saves disk, easier to update)
+ln -s "<some-path>/BCSZ1.1" frontend/public/live2d/yae
+```
+
+Either way, `frontend/public/live2d/yae/` is gitignored — assets stay
+local, the database migration that points character id=2 at slug `yae`
+is what's tracked. Validate then refresh the UI:
+
+```bash
+python -m tools.check_moc3_version frontend/public/live2d/yae/
+# Expected: [OK] version=3 (Cubism SDK 4.0)
+```
+
+Open the CharacterPanel, switch to 八重神子, and the avatar swaps to
+BCSZ1.1. Click the model and Skyler plays the `Start` motion (Yae's
+intro voice line) instead of Hiyori's `Tap` random pick — that's the
+per-character `motion_map_json` taking effect.
+
 ---
 
 ## Roadmap
 
 See [**ROADMAP.md**](ROADMAP.md) for the full prioritized roadmap.
 
-**In progress**
-- v3-E1 Step Z cleanup (4 items: `[touch]` kind field / cosyvoice EMOTION_MAP comment / Hiyori idle motion m01/m05 fetch warning / chat_history `<thinking>` SQL cleanup)
-
 **TL;DR — the next moves:**
 
 - **v3 finish (Tier 1, 1–3 weeks)**:
-  - ✅ **v3-E1 main line done** (8 commits): Hiyori Live2D — rendering, idle, touch Tap, lip sync, emotion pipeline, LLM-driven motion
-  - **v3-E2**: multi-model Live2D (Yae Miko / Kato Megumi / custom Momo) — per-character emotionMap/motionMap upgrade, license review, asset management
-  - **v3-E3**: emotion visual binding (depends on E2 model selection — `.exp3.json` or param offsets)
+  - ✅ **v3-E1 done** (8 commits + Step Z cleanup): Hiyori Live2D — rendering, idle, touch Tap, lip sync, emotion pipeline, LLM-driven motion
+  - ✅ **v3-E2 done** (9 commits): runtime abstraction, per-character `*_map_json`, asset scanner API + dropdown, Yae Miko (BCSZ1.1) wired in, emotion visual binding code path live, Momo persona restored
+  - **v3-E3**: pure operational task — find a model with `.exp3.json`, fill that character's `emotion_map_json`, art-tune
   - **v3-F'**: proactive dialogue + time awareness (mealtime / bedtime / long idle triggers)
   - **v3-G'**: TTS UI upgrade + cosyvoice SSML (current emotion field silently ignored by SDK; per-character voice picker with verified voice catalog)
 - **v3-G + v4 (Tier 2, 1–2 months)**: clipboard assistant, daily briefing, natural-language cron, character status panel + growth system; screen awareness (active + passive + VLM); AI inner browser
@@ -294,9 +320,9 @@ The life & tools agent reference. Borrowed concepts:
 | v3-B: `character.voice_model` + CosyVoice | ✅ done |
 | v3-C: PlannerAgent simplification | ✅ done |
 | v3-D: emotion system | ✅ done (frontend pipeline wired in v3-E1 Step 5; visual binding deferred to v3-E3) |
-| v3-E1: Live2D integration via Hiyori | ✅ main line done (8 commits, May 2026) — Step Z cleanup 4 items remaining |
-| v3-E2: multi-model Live2D (Yae Miko / Kato Megumi / custom Momo) | 📋 next up |
-| v3-E3: emotion visual binding (depends on E2) | 📋 after E2 |
+| v3-E1: Live2D integration via Hiyori | ✅ done (8 commits + Step Z cleanup, May 2026) |
+| v3-E2: multi-model Live2D (runtime abstraction + per-character maps + Yae Miko BCSZ1.1) | ✅ done (9 commits, May 2026-05-06) |
+| v3-E3: emotion visual binding | 🚧 code path live; needs a model with `.exp3.json` |
 | v3-F: voice UX (interrupt + concurrency + preprocessor + thinking) | ✅ done |
 | v3-F': proactive dialogue + time awareness | 📋 planned |
 | v3-G: life & tools layer (clipboard / daily briefing / cron / growth) | 📋 planned |

@@ -2,7 +2,7 @@
 
 > Living document. 每完成一个里程碑同步更新 + commit + push。
 >
-> 当前状态（2026-05-05）：v2.7 完整 + v3-A/B/C/D 完成 + **v3-E1 主线 8 commit 完成**（约 v3 整体 75%）。Hiyori Live2D 已活起来：渲染 + idle + 触摸 Tap + 口型同步 + emotion 数据流 + motion LLM 驱动。剩 v3-E1 Step Z cleanup 4 条 → 进入 v3-E2 多模型 / v3-E3 emotion 视觉。
+> 当前状态（2026-05-06）：v2.7 完整 + v3-A/B/C/D 完成 + **v3-E1 主线 8 commit + v3-E2 多模型 9 commit 完成**（约 v3 整体 85%）。Hiyori 端到端正常；八重神子 (id=2) 接入 BCSZ1.1（per-character motion / hit-area map 已写）；Live2DRuntime 抽象层 + per-character `*_map_json` 字段已就位；emotion 视觉绑定路径已接通（找有 `.exp3.json` 的模型即激活）。剩 v3-F' 主动对话 / v3-G' TTS UI / v3-G 成长系统。
 
 ---
 
@@ -19,8 +19,8 @@
 | **v3-C：PlannerAgent 简化** | ✅ 完成 | 100% |
 | **v3-D：emotion 后端解析 + TTS 联动** | ✅ 完成（前端数据流 v3-E1 step5 接入；视觉绑定 v3-E3） | 100% |
 | **v3-E1：Live2D 接入（用 Hiyori 走通流程）** | ✅ 主线完成（8 commit） | 95%（Step Z cleanup 4 条剩余） |
-| **v3-E2：换上目标 / 多模型（八重神子 / 加藤惠 / Momo 等）** | 📋 依赖 E1 主线 | 0% |
-| **v3-E3：emotion 视觉绑定真上线（依赖 E2 模型选定）** | 📋 依赖 E2 | 0% |
+| **v3-E2：多模型 Live2D 接入（runtime 抽象层 + per-character maps）** | ✅ 完成（9 commit，2026-05-06）| 95%（IP license / 加藤惠 Cubism 4 重制版 / hit-area 路由 backlog 不阻塞）|
+| **v3-E3：emotion 视觉绑定真上线** | 🚧 代码路径已接通，等有 `.exp3.json` 的模型 | 90%（运营任务）|
 | v3-F：语音体验飞跃（打断 ✅ / 并发 ✅ / 预处理 ✅ / 内心独白 ✅） | ✅ 完成 | 100% |
 | **v3-F'：主动对话 + 时间感知（饭点 / 睡前 / 长时无互动）** | 📋 计划中 | 0% |
 | v3-G：生活 & 工具型能力（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 | 0% |
@@ -156,36 +156,45 @@
 
 ---
 
-### v3-E2：多模型 Live2D 接入（八重神子 / 加藤惠 / 自制 Momo 等）
+### v3-E2：多模型 Live2D 接入 ✅ 完成（2026-05-06）
 
 任务：让 Skyler 支持多个 Live2D 模型，不只是临时的 Hiyori。E1 跑通后，换模型主要是**资产替换 + per-character 配置升级**，但 v3-E1 当前的全局共享 motionMap / emotionMap 必须先升级为 per-character。
 
-**清单**：
+**主线完成清单**：
 
-- [ ] **模型 license 风险评估** —— IP 角色版权（八重神子 = miHoYo / 加藤惠 = 漫画台）公开发布前必须清掉，用商用授权或自制替换
-- [ ] **moc3 ver ≤ 4 校验脚本** —— `tools/check_moc3_version.py`，pixi-live2d-display 不支持 Cubism 5（issue #118 自 2023-10 未修复）
-- [ ] **CharacterPanel `live2d_model` 字段升级成下拉** —— vs 当前文本框；列表来自 `frontend/public/live2d/` 扫描
-- [ ] **per-character emotionMap / motionMap / hitAreaMap 配置** —— v3-E1 当前是全局共享（`frontend/src/config/live2d.ts`），v3-E2 必须按角色拆分；要么放 `live2d/<name>/config.ts`，要么放 character 表 JSON 字段
-- [ ] **资产管理方案** —— git 入库（小模型）vs git-lfs（大资产）vs release tag 分发（避免主仓臃肿）
-- [ ] **还原 Momo (id=1) persona 到 ChatAgent 原文** —— 当前临时占位八重神子人设（因为只有 Momo 绑了 Live2D），v3-E2 给八重神子直接绑她自己的模型后还原 Momo 人设
-- [ ] **Step 2/3/4/5/6 全部模型回归测试** —— 渲染 / idle / 触摸 Tap / 口型同步 / emotion push（v3-E3 视觉绑定）/ motion 多语义
+- [x] **moc3 ver ≤ 4 校验脚本** —— `tools/check_moc3_version.py`（`1831836`，扫 .moc3 + Cubism 2 .moc 都走 magic 校验）
+- [x] **资产路径规范化 + IP 隔离 .gitignore + 资产管理文档** —— `frontend/public/live2d/` 标准目录 + `frontend/public/live2d/README.md`（`661d428`，commit 2 of v3-E2）
+- [x] **`GET /api/live2d/models` 扫描 API + CharacterPanel 下拉** —— 后端 `daaae81` + 前端 `c723ec8`（commit 3a + 3b of v3-E2）
+- [x] **per-character `*_map_json` 字段（DB 迁移 + ORM + Pydantic + 前端类型）** —— `0397b72`（commit 4 of v3-E2）
+- [x] **`Live2DRuntime` 抽象层 + `PixiCubism4Runtime` + `RuntimeRegistry`** —— `daf7b3a`（commit 5 of v3-E2）
+- [x] **`Live2DCanvas` 重写：runtime 接口调用 + `resolveCharacterMaps` fallback** —— `9ba5b72`
+- [x] **八重神子 (id=2) 接入 BCSZ1.1 + maps 数据迁移** —— `5cab58a`（commit 6 of v3-E2）
+- [x] **emotion 视觉绑定接通（`runtime.setExpression`）** —— `950710e`（chunk 5 偏离 6 收口）
+- [x] **Momo (id=1) persona 还原成 ChatAgent 原文** —— `d01f3b4`
 
-**估时**：2-3 天（不算找模型 / 谈 license / 训练自制 Momo 的时间）。
+**v3-E2 commit 范围**：`1831836` (moc3 checker) → `d01f3b4` (Momo restore)
+
+**Backlog（不阻塞 v3-E2 关闭）**：
+
+- [ ] **模型 license 风险评估** —— 八重神子 / 加藤惠 = 米哈游 IP；当前 `frontend/public/live2d/yae/` 走 .gitignore 隔离不入库，**公开发布前必须清掉或换自制 / 已授权资产**
+- [ ] **加藤惠 Cubism 4 重制版搜寻** —— 现有加藤惠资产是 Cubism 2（`.moc` 不是 `.moc3`），完全不兼容 pixi-live2d-display。要么找重制版，要么放弃这套资产
+- [ ] **hit-area 路由真接通** —— 八重 8 个 HitAreas 已经在 `hit_area_map_json` 写好契约，但 `Live2DCanvas` 当前 click 仍走整体 canvas（`autoHitTest=false`）。接通需要改 `handleTouch` 拿到 PIXI 局部坐标 → `runtime.hitTest()` → 查 hitAreaMap → 派发对应 motion group
+- [ ] **资产分发方案** —— git 入库（不可，IP 风险）vs git-lfs vs release tag 分发；自制 Momo 模型完成后要决定怎么 ship
 
 ---
 
 ### v3-E3：emotion 视觉绑定真上线
 
-依赖 v3-E2（确定目标模型后才能填 emotionMap）。Hiyori 没有 `.exp3.json`，v3-E1 Step 5 数据流已就位但视觉绑定 deferred 到这里。
+⚠️ chunk 7 已经在 `Live2DCanvas` emotion useEffect 接通了 `runtime.setExpression(handle, name)`，**视觉绑定的代码路径全部就绪**。剩下的纯粹是"找一个有 `.exp3.json` 的模型 + 填该角色 `emotion_map_json`" 的运营工作，不再是技术任务。
 
-**清单**：
+**剩余清单**：
 
-- [ ] **选项 a：模型自带 `.exp3.json`** —— `emotionMap[key] = { type: 'expression', name: 'F01' }`，`Live2DCanvas` useEffect 改成 `model.expression(map.name)`
-- [ ] **选项 b：模型无 expression 文件** —— `emotionMap[key] = { type: 'params', params: [{id, value}, ...] }`，遍历 `setParameterValueById`
-- [ ] **多 emotion 美术调参直到自然** —— 每个目标 emotion（happy / sad / angry / surprised / 等）都要试，不自然就调参数权重
-- [ ] **验收**：跟角色说不同情感的话，面部有可见变化（"我今天好开心" / "我有点难过"）
+- [ ] **找 / 接入 / 自制有 `.exp3.json` 的目标模型** —— Hiyori / 八重 (BCSZ1.1) 都没自带 expression 文件
+- [ ] **填该角色 `emotion_map_json`** —— `Record<string, string>`，emotion 词 → expression 名（CharacterPanel 编辑或直接 SQL UPDATE）
+- [ ] **美术调参** —— 试每个 emotion（happy / sad / angry / surprised），不自然时换 expression / 调参数权重
+- [ ] **验收**：跟角色说不同情感的话，面部有可见变化
 
-代码改动只在 `frontend/src/config/live2d.ts` 的 emotionMap + `Live2DCanvas` useEffect 内部 —— 数据流完全不动。
+`Live2DRuntime.setExpression` 选项 a（model.expression）已实现；选项 b（参数偏移）需扩 runtime 接口加 `setParameter(id, value)`，未来需要时再加。
 
 **估时**：1 天（有 `.exp3.json`）/ 2-3 天（自制偏移）。
 
@@ -456,13 +465,13 @@ DESIGN §13 已有完整设计。要点：
 ### Step 3（接下来 2-3 周）：v3 灵魂
 - [x] **下载 Hiyori 模型**
 - [x] **v3-E1 Live2D 主线**（Step 1-6 + 角色修复 + Step Z.1，8 commit 完成）
-- [ ] **v3-E1 Step Z 收尾**（4 条 cleanup：[touch] kind 字段 / cosyvoice 注释 / idle motion warning audit / chat_history SQL 清洗）—— 半到一天
-- [ ] **v3-E2 多模型接入**（八重神子 / 加藤惠 / 自制 Momo；per-character map 升级 + license 评估 + 资产管理）—— 2-3 天
-- [ ] **v3-E3 emotion 视觉绑定**（依赖 E2 模型选定）—— 1-3 天
-- [ ] **v3-G' TTS UI 升级 + cosyvoice SSML**（与 E2 / E3 可并行）—— 2 天
+- [x] **v3-E1 Step Z 收尾**（4 条 cleanup 完成：commits `488a6a1` / `f2d7f78` / `d984916`）
+- [x] **v3-E2 多模型接入**（runtime 抽象层 + per-character maps + 八重 BCSZ1.1 接入 + Momo persona 还原；9 commit 完成 2026-05-06）
+- [x] **v3-E3 emotion 视觉绑定**（代码路径已接通 chunk 7 `950710e`，剩纯运营找模型）
+- [ ] **v3-G' TTS UI 升级 + cosyvoice SSML**（独立任务）—— 2 天
 - [ ] **v3-F' 主动对话**（依赖 [touch] kind 字段同设计）—— 1-2 天
 
-做完这一组，v3-E + 主动陪伴完成，Skyler 真正"活"了 + 主动找你说话，TTS UI 也不再是裸 JSON。
+v3-E 全套 + 主动陪伴中两条已完成 + 收尾。剩 v3-F' / v3-G' / v3-G。
 
 ### Step 4（接下来 1-2 个月）：工具层
 v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），逐步加每日简报、智能提醒、cron、屏幕感知。
@@ -538,4 +547,4 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
 
 ---
 
-*文档版本：1.3 | 最后更新：2026-05-05（v3-E1 主线 8 commit 完成；铺开 v3-E2 / v3-E3 / v3-F' / v3-G' / 技术债章节）*
+*文档版本：1.4 | 最后更新：2026-05-06（v3-E2 多模型 9 commit 完成：moc3 checker / 资产隔离 / 扫描 API + 下拉 / per-character maps / runtime 抽象 / 八重 BCSZ1.1 接入 / emotion 绑定接通 / Momo persona 还原）*

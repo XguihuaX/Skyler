@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **状态（2026-05）**：v2.7 后端 + UI 完整 · v3-A/B/C/D + **v3-E1 Live2D 主线 8 commit 完成**（约 v3 整体 75%）· Hiyori 看板娘已活起来：渲染 + idle + 触摸 Tap + 口型同步 + emotion 数据流 + LLM 驱动 motion · 接下来：Step Z cleanup → v3-E2 多模型 → v3-E3 emotion 视觉 → v3-F' 主动对话 → v3-G' TTS UI + cosyvoice SSML。
+> **状态（2026-05）**：v2.7 后端 + UI 完整 · v3-A/B/C/D + **v3-E1 8 commit + v3-E2 多模型 9 commit 完成**（约 v3 整体 85%）· Hiyori 和八重神子都能渲染；per-character `*_map_json` 通过 `Live2DRuntime` 抽象层走通；emotion → `setExpression` 路径已接通（等有 `.exp3.json` 的模型即激活）· 接下来：v3-F' 主动对话 → v3-G' TTS UI + cosyvoice SSML → v3-G 成长系统。
 >
 > *项目原名 MomoOS，2026-05 重命名为 Skyler。*
 
@@ -225,21 +225,45 @@ Skyler 默认带 Live2D 官方免费样品模型 **Hiyori**。想加新角色按
 资产 license 背书**。资产怎么来的、有没有授权、能不能传播，完全是用户
 自己的责任。
 
+### 实操示例：从 BCSZ1.1 dump 接入八重神子
+
+具体例子 —— Cubism 4 的八重神子资产在 `<某路径>/BCSZ1.1/`。Skyler 的
+character id=2 已经叫「八重神子」，`motion_map_json` / `hit_area_map_json`
+也已经由 `v3_e2_yae_maps` 迁移填好。让她渲染只差资产入位：
+
+```bash
+# 选项 A：复制资产到 slug 目录
+cp -r "<某路径>/BCSZ1.1" frontend/public/live2d/yae
+
+# 选项 B：软链接（省盘 + 改源更方便）
+ln -s "<某路径>/BCSZ1.1" frontend/public/live2d/yae
+```
+
+任一种方式，`frontend/public/live2d/yae/` 都被 .gitignore 排除 —— 资产
+留本地，进 git 的只有"character id=2 指向 slug `yae`"这条数据迁移。验证
+之后刷新 UI：
+
+```bash
+python -m tools.check_moc3_version frontend/public/live2d/yae/
+# 期望：[OK] version=3 (Cubism SDK 4.0)
+```
+
+打开 CharacterPanel，切到八重神子，立绘换成 BCSZ1.1。点击模型 Skyler
+会播 `Start` motion（八重的初见配音），而不是 Hiyori 的 `Tap` 随机一条
+—— 这就是 per-character `motion_map_json` 生效的视觉信号。
+
 ---
 
 ## 路线图
 
 完整路线图见 [**ROADMAP.md**](ROADMAP.md)。
 
-**进行中**
-- v3-E1 Step Z cleanup（4 条：`[touch]` kind 字段 / cosyvoice EMOTION_MAP 注释 / Hiyori idle motion m01/m05 fetch warning audit / chat_history `<thinking>` SQL 清洗）
-
 **TL;DR —— 接下来要做的事：**
 
 - **v3 收尾（第 1 梯队，1–3 周）**：
-  - ✅ **v3-E1 主线完成**（8 commit）：Hiyori Live2D —— 渲染、idle、触摸 Tap、口型同步、emotion 数据流、LLM 驱动 motion
-  - **v3-E2**：多模型 Live2D（八重神子 / 加藤惠 / 自制 Momo）—— per-character emotionMap/motionMap 升级、license 评估、资产管理
-  - **v3-E3**：emotion 视觉绑定（依赖 E2 模型选定，`.exp3.json` 或参数偏移二选一）
+  - ✅ **v3-E1 完成**（8 commit + Step Z cleanup）：Hiyori Live2D —— 渲染、idle、触摸 Tap、口型同步、emotion 数据流、LLM 驱动 motion
+  - ✅ **v3-E2 完成**（9 commit）：runtime 抽象层 + per-character `*_map_json` + 资产扫描 API + 下拉 + 八重神子 BCSZ1.1 接入 + emotion 视觉绑定路径接通 + Momo persona 还原
+  - **v3-E3**：纯运营任务 —— 找一个有 `.exp3.json` 的模型，填该角色 `emotion_map_json`，美术调参
   - **v3-F'**：主动对话 + 时间感知（饭点 / 睡前 / 长时无互动触发）
   - **v3-G'**：TTS UI 升级 + cosyvoice SSML（当前 emotion 字段被 SDK 静默忽略；per-character voice picker + 已 audit 音色目录）
 - **v3-G + v4（第 2 梯队，1–2 个月）**：剪贴板助手、每日简报、自然语言 cron、角色状态面板 + 成长系统；屏幕感知（主动 + 被动 + VLM）；AI 用自己的浏览器
@@ -290,9 +314,9 @@ Skyler 站在两个项目的肩膀上：
 | v3-B：`character.voice_model` + CosyVoice | ✅ 完成 |
 | v3-C：PlannerAgent 简化 | ✅ 完成 |
 | v3-D：emotion 系统 | ✅ 完成（前端数据流接入 v3-E1 Step 5；视觉绑定 v3-E3）|
-| v3-E1：Live2D 接入（用 Hiyori 走通） | ✅ 主线完成（8 commit，2026-05）—— Step Z cleanup 4 条剩余 |
-| v3-E2：多模型 Live2D（八重神子 / 加藤惠 / 自制 Momo） | 📋 下一步要做 |
-| v3-E3：emotion 视觉绑定（依赖 E2） | 📋 E2 之后 |
+| v3-E1：Live2D 接入（用 Hiyori 走通） | ✅ 完成（8 commit + Step Z cleanup，2026-05）|
+| v3-E2：多模型 Live2D（runtime 抽象层 + per-character maps + 八重 BCSZ1.1）| ✅ 完成（9 commit，2026-05-06）|
+| v3-E3：emotion 视觉绑定 | 🚧 代码路径已接通，等有 `.exp3.json` 的模型 |
 | v3-F：语音体验飞跃（打断 + 并发 + 预处理 + 内心独白） | ✅ 完成 |
 | v3-F'：主动对话 + 时间感知 | 📋 计划中 |
 | v3-G：生活 & 工具层（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 |
