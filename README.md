@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D in progress (~60% of v3 done) · Live2D, voice interrupt, screen vision, and life-tools layer up next.
+> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + **v3-E1 Live2D main line (8 commits)** done (~75% of v3) · Hiyori avatar is alive: rendering + idle + touch Tap + lip-sync + emotion data pipeline + LLM-driven motion · next up: Step Z cleanup → v3-E2 multi-model → v3-E3 emotion visual binding → v3-F' proactive dialogue → v3-G' TTS UI + cosyvoice SSML.
 >
 > *Project formerly known as MomoOS — rebranded to Skyler in 2026-05.*
 
@@ -82,10 +82,14 @@ All components use `var(--color-*)` from `styles/themes.css` (no hardcoded Tailw
 - **Todo management** — agent-created and user-created tasks tracked in SQLite
 - **Proactive push** — backend initiates messages anytime via persistent WebSocket (`notify` / `alarm` / future `screen_comment`)
 
-### 🌸 Character Presence
-- v2.7: static character image + Galgame layout (full-bleed character + floating dialogue bubbles + history drawer)
-- v3 (in progress): emotion tag system (`<emotion>...</emotion>`) parsed from LLM, drives TTS voice variation
-- v3 (next): Live2D Cubism 5 avatar with idle animations, expression sync, lip sync, touch response
+### 🌸 Character Presence (v3-E1 main line done, May 2026)
+- 🎭 **Live2D avatar** (Hiyori sample model, Cubism 4) — rendering + idle / focus / breath, Galgame full-bleed layout
+- 👄 **Lip sync** — Web Audio AnalyserNode → `ParamMouthOpenY`, shared AudioContext across multi-segment TTS
+- 👆 **Touch response** — click avatar → Tap motion + AI proactive reply (special-turn injection)
+- 🎬 **LLM-driven motion** — `<motion>X</motion>` tags drive 16 Chinese motion words → 4 Hiyori `Flick*` motion groups (semantics verified live: 放松甩手 / 害羞收敛 / 加油应援 / 撒娇俏皮)
+- 😊 **Emotion data pipeline** — `<emotion>X</emotion>` parsed → WS push → store; visual binding deferred to v3-E3 (Hiyori has no `.exp3.json`)
+- 🧠 **Inner monologue** — `<thinking>X</thinking>` lets the LLM think without TTS reading it; not persisted
+- v2.7 baseline: emotion tag system drives TTS voice variation; static fallback when no Live2D model bound
 
 ### 🪟 Interface
 - **Dual UI modes** — transparent floating widget + full panel (Tauri 2)
@@ -195,13 +199,17 @@ A transparent floating Widget appears. Click ⚙ to open the full Panel.
 
 See [**ROADMAP.md**](ROADMAP.md) for the full prioritized roadmap.
 
+**In progress**
+- v3-E1 Step Z cleanup (4 items: `[touch]` kind field / cosyvoice EMOTION_MAP comment / Hiyori idle motion m01/m05 fetch warning / chat_history `<thinking>` SQL cleanup)
+
 **TL;DR — the next moves:**
 
 - **v3 finish (Tier 1, 1–3 weeks)**:
-  - **v3-E1**: Live2D integration with the official **Hiyori** sample model (proves the SDK + emotion + touch + lip-sync pipeline)
-  - **v3-E2**: swap to a target Cubism model (asset replacement, no code change)
-  - **v3-F**: voice interrupt, TTS multi-segment concurrency, TTS preprocessor (skip `*action*` etc.), `<thinking>` inner monologue
-  - **v3-G'**: TTS UI upgrade — replace raw JSON textbox with a per-character provider + voice two-level dropdown (only shows real available options)
+  - ✅ **v3-E1 main line done** (8 commits): Hiyori Live2D — rendering, idle, touch Tap, lip sync, emotion pipeline, LLM-driven motion
+  - **v3-E2**: multi-model Live2D (Yae Miko / Kato Megumi / custom Momo) — per-character emotionMap/motionMap upgrade, license review, asset management
+  - **v3-E3**: emotion visual binding (depends on E2 model selection — `.exp3.json` or param offsets)
+  - **v3-F'**: proactive dialogue + time awareness (mealtime / bedtime / long idle triggers)
+  - **v3-G'**: TTS UI upgrade + cosyvoice SSML (current emotion field silently ignored by SDK; per-character voice picker with verified voice catalog)
 - **v3-G + v4 (Tier 2, 1–2 months)**: clipboard assistant, daily briefing, natural-language cron, character status panel + growth system; screen awareness (active + passive + VLM); AI inner browser
 - **v5 (Tier 3, long-term)**:
   - **v5-D**: autodl deployment + sub-agent isolation
@@ -249,12 +257,14 @@ The life & tools agent reference. Borrowed concepts:
 | v3-A: 8-theme system + lucide-react | ✅ done |
 | v3-B: `character.voice_model` + CosyVoice | ✅ done |
 | v3-C: PlannerAgent simplification | ✅ done |
-| v3-D: emotion system (backend) | ✅ done (frontend wiring waits for Live2D) |
-| v3-E1: Live2D integration via Hiyori | 📋 next up |
-| v3-E2: target model swap | 📋 after E1 |
-| v3-F: voice UX (interrupt + concurrency + preprocessor + thinking) | 📋 planned |
+| v3-D: emotion system | ✅ done (frontend pipeline wired in v3-E1 Step 5; visual binding deferred to v3-E3) |
+| v3-E1: Live2D integration via Hiyori | ✅ main line done (8 commits, May 2026) — Step Z cleanup 4 items remaining |
+| v3-E2: multi-model Live2D (Yae Miko / Kato Megumi / custom Momo) | 📋 next up |
+| v3-E3: emotion visual binding (depends on E2) | 📋 after E2 |
+| v3-F: voice UX (interrupt + concurrency + preprocessor + thinking) | ✅ done |
+| v3-F': proactive dialogue + time awareness | 📋 planned |
 | v3-G: life & tools layer (clipboard / daily briefing / cron / growth) | 📋 planned |
-| v3-G': TTS config UI upgrade (per-character two-level dropdown) | 📋 planned |
+| v3-G': TTS UI upgrade + cosyvoice SSML emotion | 📋 planned |
 | v4: Screen awareness | 📋 planned |
 | v5-D / T1 / T2: autodl + GPT-SoVITS + custom voice training | 📋 long-term |
 | v6+: Multi-device / cloud deployment | 📋 long-term |

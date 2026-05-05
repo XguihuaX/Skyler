@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **状态（2026-05）**：v2.7 后端 + UI 完整 · v3-A/B/C/D 进行中（约 v3 整体 60%）· 接下来做 Live2D、语音打断、屏幕感知、生活工具层。
+> **状态（2026-05）**：v2.7 后端 + UI 完整 · v3-A/B/C/D + **v3-E1 Live2D 主线 8 commit 完成**（约 v3 整体 75%）· Hiyori 看板娘已活起来：渲染 + idle + 触摸 Tap + 口型同步 + emotion 数据流 + LLM 驱动 motion · 接下来：Step Z cleanup → v3-E2 多模型 → v3-E3 emotion 视觉 → v3-F' 主动对话 → v3-G' TTS UI + cosyvoice SSML。
 >
 > *项目原名 MomoOS，2026-05 重命名为 Skyler。*
 
@@ -83,10 +83,14 @@ Settings → UI 风格 可切换：
 - **Todo 管理** —— agent 创建和用户创建的任务都存 SQLite
 - **主动推送** —— 后端通过持久 WebSocket 随时主动发送（`notify` / `alarm` / 未来的 `screen_comment`）
 
-### 🌸 角色存在感
-- v2.7：静态角色图 + Galgame 布局（角色满铺 + 浮动对话气泡 + 历史抽屉）
-- v3 进行中：emotion 标签系统（`<emotion>...</emotion>`）从 LLM 解析，驱动 TTS 多音色
-- v3 接下来：Live2D Cubism 5 看板娘 + idle 动画、表情同步、口型同步、触摸响应
+### 🌸 角色存在感（v3-E1 主线完成，2026-05）
+- 🎭 **Live2D 看板娘**（Hiyori 样本模型，Cubism 4）—— 渲染 + idle / focus / breath，Galgame 满铺布局
+- 👄 **口型同步** —— Web Audio AnalyserNode → `ParamMouthOpenY`，跨多段 TTS 共享 AudioContext
+- 👆 **触摸响应** —— 点击看板娘 → Tap motion + AI 主动回复（special turn 注入）
+- 🎬 **LLM 驱动动作** —— `<motion>X</motion>` 标签驱动 16 个中文动作词 → Hiyori 4 个 `Flick*` motion group（语义实测对齐：放松甩手 / 害羞收敛 / 加油应援 / 撒娇俏皮）
+- 😊 **Emotion 数据流** —— `<emotion>X</emotion>` 解析 → WS push → store；视觉绑定 deferred 到 v3-E3（Hiyori 没有 `.exp3.json`）
+- 🧠 **内心独白** —— `<thinking>X</thinking>` 让 LLM 思考但 TTS 不读、不持久化
+- v2.7 基线：emotion 标签驱动 TTS 多音色；未绑 Live2D 时回退静态角色图
 
 ### 🪟 界面
 - **双 UI 模式** —— 透明浮动 widget + 完整面板（Tauri 2）
@@ -196,13 +200,17 @@ npm run tauri dev
 
 完整路线图见 [**ROADMAP.md**](ROADMAP.md)。
 
+**进行中**
+- v3-E1 Step Z cleanup（4 条：`[touch]` kind 字段 / cosyvoice EMOTION_MAP 注释 / Hiyori idle motion m01/m05 fetch warning audit / chat_history `<thinking>` SQL 清洗）
+
 **TL;DR —— 接下来要做的事：**
 
 - **v3 收尾（第 1 梯队，1–3 周）**：
-  - **v3-E1**：用 Live2D 官方样本 **Hiyori** 走通整个 Live2D 集成（验证 SDK + emotion + 触摸 + 口型同步管道）
-  - **v3-E2**：换上目标 Cubism 模型（资产替换，不动代码）
-  - **v3-F**：语音打断、TTS 多段并发、TTS 预处理器（剥离 `*动作*` 等不读出）、`<thinking>` 内心独白
-  - **v3-G'**：TTS UI 升级 —— 裸 JSON 文本框换成 per-character provider + voice 两级下拉（**只显示真实可用选项**）
+  - ✅ **v3-E1 主线完成**（8 commit）：Hiyori Live2D —— 渲染、idle、触摸 Tap、口型同步、emotion 数据流、LLM 驱动 motion
+  - **v3-E2**：多模型 Live2D（八重神子 / 加藤惠 / 自制 Momo）—— per-character emotionMap/motionMap 升级、license 评估、资产管理
+  - **v3-E3**：emotion 视觉绑定（依赖 E2 模型选定，`.exp3.json` 或参数偏移二选一）
+  - **v3-F'**：主动对话 + 时间感知（饭点 / 睡前 / 长时无互动触发）
+  - **v3-G'**：TTS UI 升级 + cosyvoice SSML（当前 emotion 字段被 SDK 静默忽略；per-character voice picker + 已 audit 音色目录）
 - **v3-G + v4（第 2 梯队，1–2 个月）**：剪贴板助手、每日简报、自然语言 cron、角色状态面板 + 成长系统；屏幕感知（主动 + 被动 + VLM）；AI 用自己的浏览器
 - **v5（第 3 梯队，长期）**：
   - **v5-D**：autodl 部署 + 子 agent 隔离
@@ -250,12 +258,14 @@ Skyler 站在两个项目的肩膀上：
 | v3-A：8 套主题 + lucide-react | ✅ 完成 |
 | v3-B：`character.voice_model` + CosyVoice | ✅ 完成 |
 | v3-C：PlannerAgent 简化 | ✅ 完成 |
-| v3-D：emotion 系统（后端）| ✅ 完成（前端等 Live2D）|
-| v3-E1：Live2D 接入（用 Hiyori 走通） | 📋 下一步要做 |
-| v3-E2：换目标模型 | 📋 E1 之后 |
-| v3-F：语音体验飞跃（打断 + 并发 + 预处理 + 内心独白） | 📋 计划中 |
+| v3-D：emotion 系统 | ✅ 完成（前端数据流接入 v3-E1 Step 5；视觉绑定 v3-E3）|
+| v3-E1：Live2D 接入（用 Hiyori 走通） | ✅ 主线完成（8 commit，2026-05）—— Step Z cleanup 4 条剩余 |
+| v3-E2：多模型 Live2D（八重神子 / 加藤惠 / 自制 Momo） | 📋 下一步要做 |
+| v3-E3：emotion 视觉绑定（依赖 E2） | 📋 E2 之后 |
+| v3-F：语音体验飞跃（打断 + 并发 + 预处理 + 内心独白） | ✅ 完成 |
+| v3-F'：主动对话 + 时间感知 | 📋 计划中 |
 | v3-G：生活 & 工具层（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 |
-| v3-G'：TTS 配置 UI 升级（per-character 两级下拉） | 📋 计划中 |
+| v3-G'：TTS UI 升级 + cosyvoice SSML emotion | 📋 计划中 |
 | v4：屏幕感知 | 📋 计划中 |
 | v5-D / T1 / T2：autodl + GPT-SoVITS + 自定义 voice 训练 | 📋 长期 |
 | v6+：多设备 / 云端部署 | 📋 长期 |
