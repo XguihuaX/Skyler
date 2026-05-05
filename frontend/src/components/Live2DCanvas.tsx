@@ -1,14 +1,10 @@
-import { useCallback, useEffect, useRef } from 'react';
-import * as PIXI from 'pixi.js';
-import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useAppApi } from '../contexts/appApi';
 import { useAppStore } from '../store';
 import { useAudioAmplitude } from '../hooks/useAudioAmplitude';
-import { emotionMap, motionMap } from '../config/live2d';
-
-// pixi-live2d-display 内部用 window.PIXI 取 Ticker 等共享实例。必须在创建任何
-// Live2DModel 之前完成挂载，否则模型的自动 ticker 不会跑（黑屏 / 不眨眼）。
-(window as unknown as { PIXI: typeof PIXI }).PIXI = PIXI;
+import { resolveCharacterMaps } from '../lib/live2d/maps';
+import { getRuntime } from '../lib/live2d/registry';
+import type { Live2DRuntime, ModelHandle } from '../lib/live2d/runtime';
 
 // v3-E1 step3：点击防抖窗口（毫秒）
 const TOUCH_DEBOUNCE_MS = 1000;
@@ -16,19 +12,11 @@ const TOUCH_DEBOUNCE_MS = 1000;
 // v3-E1 step3：点击触发的 motion group。Hiyori 的 Tap 组下有两条 motion
 // （m07 / m08），index 0/1 随机播一个。换模型时只要保留 "Tap" group 就能
 // 沿用，否则在这里改 group 名。
+// v3-E2：依然硬编码（per-character hitAreaMap 只决定"点哪里 → 触发什么"，
+// 当前实现是 canvas 整体点击不分区域，未来 hit-area 路由接通后这两个常量
+// 会被 hitAreaMap 替代）。
 const TAP_MOTION_GROUP = 'Tap';
 const TAP_MOTION_COUNT = 2;
-
-// v3-E1 step4：口型同步参数。Hiyori model3.json 的 LipSync group 只有一个
-// 参数 ID，主仓 0.5.0-beta 走 setParameterValueById 直写。换模型时若参数
-// 名不同（比如 "PARAM_MOUTH_OPEN_Y"），改这里。
-const LIPSYNC_PARAM_ID = 'ParamMouthOpenY';
-
-// pixi-live2d-display 的 internalModel.coreModel 在类型层是 unknown 风格，
-// 这里只声明我们用到的子集，避免到处 as any。
-interface CubismCoreModelLipSync {
-  setParameterValueById?: (id: string, value: number) => void;
-}
 
 interface Live2DCanvasProps {
   modelUrl: string;
@@ -37,22 +25,23 @@ interface Live2DCanvasProps {
 /**
  * 渲染单个 Live2D Cubism 4 模型，铺满父容器。
  *
- * 行为（v3-E1 Step 2 范围）：
- * - 默认开启 idle motion 循环、自动眨眼、呼吸（pixi-live2d-display 内置）
- * - autoFocus 打开：眼睛跟随鼠标
- * - autoHitTest 关闭：触摸响应留给 Step 3
- * - contain-fit：保持模型原始宽高比，居中缩放到刚好放进容器
- * - 父容器尺寸变化（窗口 resize / Panel↔Widget 模式切换）由 ResizeObserver 监听
+ * v3-E2 chunk 5 重构：组件不再直接 import pixi.js / pixi-live2d-display；
+ * 改为通过 ``getRuntime()`` 拿 ``Live2DRuntime`` 实例，所有模型操作走接口。
+ * 行为与 v3-E1 严格 1:1（idle / 触摸 Tap / motion / lip sync）。
  *
  * StrictMode 安全：
  * - cancelled flag 防御 React 18 dev 模式 mount→cleanup→mount 双跑
- * - cleanup 会 disconnect ResizeObserver、destroy 模型、destroy PIXI Application
+ * - cleanup 调 runtime.unloadModel，runtime 内部销毁 stage / 模型 / observer
+ *
+ * v3-E2 per-character 接入：
+ * - 当前角色（store.currentCharacterId）经 resolveCharacterMaps 取出 motion /
+ *   emotion / hitArea map。NULL / 空 / parse 失败 → 全局默认（Hiyori 不变）。
  */
 export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // 当前活跃的 model 引用，供 onClick 调 model.motion 用。
-  // 用 ref 而非 state：模型变更不应触发 React re-render。
-  const modelRef = useRef<Live2DModel | null>(null);
+  // 持有 runtime 实例 + 当前 handle。runtime 实例随 mount 创建，unmount 后丢弃。
+  const runtimeRef = useRef<Live2DRuntime | null>(null);
+  const handleRef  = useRef<ModelHandle | null>(null);
   // 上一次成功触发触摸的时间戳，做 1 秒防抖
   const lastTouchAtRef = useRef<number>(0);
 
@@ -60,65 +49,70 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
   // v3-E1 step4：实时 TTS 振幅；驱动 ParamMouthOpenY。
   // 静默时 hook 返回 0，嘴自然闭合；v3-F 打断后 audio 队列清空，振幅也回 0。
   const amplitude = useAudioAmplitude();
-  // v3-E1 step5：当轮 emotion（由后端 WS 推送，透传 LLM 原始输出）。null 表示
-  // 当前没有 emotion（中性消息或新轮刚开始）。
+  // v3-E1 step5：当轮 emotion（由后端 WS 推送，透传 LLM 原始输出）
   const currentEmotion = useAppStore((s) => s.currentEmotion);
-  // v3-E1 step6：当段 motion（per-segment，每段独立解析）。null = 无待触发动作。
-  // 同名连续命中只触发一次 useEffect（依赖项引用相等）—— LLM 多段动作通常会换名字。
+  // v3-E1 step6：当段 motion（per-segment，每段独立解析）
   const currentMotion = useAppStore((s) => s.currentMotion);
+  // v3-E2：取当前角色的 maps（per-character JSON 字段优先，回退全局默认）
+  const characters = useAppStore((s) => s.characters);
+  const currentCharacterId = useAppStore((s) => s.currentCharacterId);
+  const character = useMemo(
+    () => characters.find((c) => c.id === currentCharacterId) ?? null,
+    [characters, currentCharacterId],
+  );
+  const maps = useMemo(() => resolveCharacterMaps(character), [character]);
 
+  // 嘴型同步：每次 amplitude 变化驱动 runtime
   useEffect(() => {
-    const model = modelRef.current;
-    if (!model) return;
-    const coreModel = model.internalModel
-      ?.coreModel as unknown as CubismCoreModelLipSync | undefined;
-    coreModel?.setParameterValueById?.(LIPSYNC_PARAM_ID, amplitude);
+    const runtime = runtimeRef.current;
+    const handle  = handleRef.current;
+    if (!runtime || !handle) return;
+    runtime.setMouthOpen(handle, amplitude);
   }, [amplitude]);
 
+  // emotion 视觉数据流：v3-E1 step5 起仅 console.log + 占位回调（Hiyori 没
+  // .exp3.json）；v3-E3 接入有 expression 的模型时打开 setExpression 调用。
   useEffect(() => {
     if (!currentEmotion) return;
-    // v3-E1 step5: 仅铺数据流，不做视觉绑定（Hiyori 没有 .exp3.json，美术调参
-    // 对临时模型无意义）。v3-E2 换上目标模型后这里改成：
-    //   const binding = emotionMap[currentEmotion];
-    //   if (binding?.type === 'expression') model.expression(binding.name);
-    //   else if (binding?.type === 'params') binding.params.forEach(p =>
-    //     coreModel.setParameterValueById(p.id, p.value));
-    // 详见 frontend/src/config/live2d.ts emotionMap 注释。
-    console.log(
-      `[live2d] emotion=${currentEmotion} (no visual binding for Hiyori, awaits v3-E2)`,
-    );
-    // 防 unused 警告 / 让未来启用时编辑器能跳转过去
-    void emotionMap;
-  }, [currentEmotion]);
-
-  useEffect(() => {
-    // v3-E1 step6：currentMotion 变化时调 model.motion()。
-    // - motionMap 没覆盖的词降级 console.warn + no-op（容错：LLM 可能输出
-    //   "招手"/"叉腰"等未登记词，不应报错）
-    // - NORMAL 优先级与 Tap 触摸同级，先到先服务（不会被新 motion 立刻覆盖）
-    // - model.motion 返回 Promise<boolean>；忽略返回值，pixi-live2d-display
-    //   会在 console 自报失败
-    if (!currentMotion) return;
-    const model = modelRef.current;
-    if (!model) return;
-
-    const entry = motionMap[currentMotion];
-    if (!entry) {
-      console.warn(`[live2d] motion="${currentMotion}" not in motionMap, skip`);
+    const runtime = runtimeRef.current;
+    const handle  = handleRef.current;
+    if (!runtime || !handle) return;
+    // 走 character emotionMap 取绑定。空 map → 没绑定，跳过；有绑定 → v3-E3
+    // 这里改成根据 binding.type 走 runtime.setExpression / setParameter。
+    const binding = maps.emotionMap[currentEmotion];
+    if (binding == null) {
+      console.log(
+        `[live2d] emotion=${currentEmotion} (no binding in character emotionMap, skip)`,
+      );
       return;
     }
-    try {
-      void model.motion(entry.group, entry.index, MotionPriority.NORMAL);
+    // 当前 binding 形态未定（v3-E3 才定形），先 console.log 占位。
+    // 真正接通时改成：
+    //   if (binding.type === 'expression') runtime.setExpression(handle, binding.name);
+    //   else if (binding.type === 'params') binding.params.forEach(...);
+    console.log(
+      `[live2d] emotion=${currentEmotion} binding present but visual hookup awaits v3-E3`,
+    );
+  }, [currentEmotion, maps]);
+
+  // motion 触发：currentMotion 变化时调 runtime.startMotion
+  useEffect(() => {
+    if (!currentMotion) return;
+    const runtime = runtimeRef.current;
+    const handle  = handleRef.current;
+    if (!runtime || !handle) return;
+    const entry = maps.motionMap[currentMotion];
+    if (!entry) {
+      console.warn(`[live2d] motion="${currentMotion}" not in character motionMap, skip`);
+      return;
+    }
+    const ok = runtime.startMotion(handle, entry.group, entry.index);
+    if (ok) {
       console.log(
-        `[live2d] motion=${currentMotion} → ${entry.group}[${entry.index}] (NORMAL)`,
-      );
-    } catch (err) {
-      console.warn(
-        `[live2d] motion("${entry.group}", ${entry.index}) failed:`,
-        err,
+        `[live2d] motion=${currentMotion} → ${entry.group}[${entry.index}]`,
       );
     }
-  }, [currentMotion]);
+  }, [currentMotion, maps]);
 
   const handleTouch = useCallback(() => {
     const now = Date.now();
@@ -126,11 +120,11 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
     lastTouchAtRef.current = now;
 
     // 1. 立即播放 Tap motion（不等后端），让用户感知点击立刻生效
-    const model = modelRef.current;
-    if (model) {
+    const runtime = runtimeRef.current;
+    const handle  = handleRef.current;
+    if (runtime && handle) {
       const idx = Math.floor(Math.random() * TAP_MOTION_COUNT);
-      // motion() 返回 Promise<boolean>；忽略返回值，失败时 pixi 会在 console 自报
-      void model.motion(TAP_MOTION_GROUP, idx, MotionPriority.NORMAL);
+      runtime.startMotion(handle, TAP_MOTION_GROUP, idx);
     }
 
     // 2. 通知后端：本轮按 touch 事件路由（注入 system 指令 + 入对话历史）
@@ -142,110 +136,33 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
     if (!container) return;
 
     let cancelled = false;
-    let app: PIXI.Application | null = null;
-    let model: Live2DModel | null = null;
-    let nativeW = 1;
-    let nativeH = 1;
-    let resizeObserver: ResizeObserver | null = null;
-
-    const fit = () => {
-      if (!app || !model) return;
-      const w = app.renderer.width / (app.renderer.resolution || 1);
-      const h = app.renderer.height / (app.renderer.resolution || 1);
-      if (w <= 0 || h <= 0) return;
-      const scale = Math.min(w / nativeW, h / nativeH);
-      model.scale.set(scale);
-      model.x = (w - nativeW * scale) / 2;
-      model.y = (h - nativeH * scale) / 2;
-    };
+    const runtime = getRuntime();
+    runtimeRef.current = runtime;
 
     (async () => {
       try {
-        const initialW = container.clientWidth || 1;
-        const initialH = container.clientHeight || 1;
-
-        const created = new PIXI.Application({
-          width: initialW,
-          height: initialH,
-          backgroundAlpha: 0,
-          antialias: true,
-          autoDensity: true,
-          resolution: window.devicePixelRatio || 1,
-        });
+        const handle = await runtime.loadModel(container, modelUrl);
         if (cancelled) {
-          created.destroy(true, { children: true, texture: true, baseTexture: true });
+          runtime.unloadModel(handle);
           return;
         }
-        app = created;
-        const canvas = created.view as unknown as HTMLCanvasElement;
-        // PIXI 默认内联宽高样式可能反过来撑住父容器，强制让 canvas 跟父容器走
-        canvas.style.width = '100%';
-        canvas.style.height = '100%';
-        canvas.style.display = 'block';
-        container.appendChild(canvas);
-
-        // React StrictMode 双 mount 时第一次加载会被 cleanup 中途取消（cancelled
-        // flag 触发 destroy），pixi-live2d-display 的 MotionManager 已经并行
-        // kick off 各 motion3.json 的 fetch，destroy → AbortController abort →
-        // console 出现 "[MotionManager(hiyori)] Failed to load motion: motion/
-        // hiyori_m01.motion3.json - Error: Aborted"（m05 同症，其他 motion 命中
-        // race 窗口才会报，所以不固定）。这是 cosmetic warning，不影响实际行为：
-        // 第二次 mount 后 model 完整加载所有 motion，idle 循环、Tap、Flick* 全
-        // 部能正常播。真问题表现是 Hiyori 完全不动 / motion 切换失败 / idle 卡
-        // 帧 —— v3-E1 Step 1-6 全程未观察到。Step Z audit 结论：保持现状，不
-        // 主动 abort（要做就要在 model load 之前装 AbortController 并 hook 进
-        // pixi-live2d-display 的 fetch 路径，代价远大于消 warning 的收益）。
-        const loaded = await Live2DModel.from(modelUrl, {
-          autoFocus: true,
-          autoHitTest: false,
-        });
-        if (cancelled) {
-          try { loaded.destroy(); } catch { /* swallow */ }
-          if (app) {
-            app.destroy(true, { children: true, texture: true, baseTexture: true });
-            app = null;
-          }
-          return;
-        }
-        model = loaded;
-        modelRef.current = loaded;
-        nativeW = loaded.width || 1;
-        nativeH = loaded.height || 1;
-        app.stage.addChild(loaded);
-        fit();
-
-        resizeObserver = new ResizeObserver(() => {
-          if (!app) return;
-          const w = container.clientWidth || 1;
-          const h = container.clientHeight || 1;
-          app.renderer.resize(w, h);
-          fit();
-        });
-        resizeObserver.observe(container);
+        handleRef.current = handle;
       } catch (err) {
-        console.error('[Live2DCanvas] failed to load model', modelUrl, err);
+        // loadModel 在 cancelled 时会自己 throw，吞掉
+        if (!cancelled) {
+          console.error('[Live2DCanvas] failed to load model', modelUrl, err);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-        resizeObserver = null;
+      const handle = handleRef.current;
+      if (handle && runtimeRef.current) {
+        runtimeRef.current.unloadModel(handle);
       }
-      if (model) {
-        try { model.destroy(); } catch (err) { console.warn('[Live2DCanvas] model destroy', err); }
-        model = null;
-      }
-      modelRef.current = null;
-      if (app) {
-        try {
-          app.destroy(true, { children: true, texture: true, baseTexture: true });
-        } catch (err) {
-          console.warn('[Live2DCanvas] app destroy', err);
-        }
-        app = null;
-      }
+      handleRef.current = null;
+      runtimeRef.current = null;
     };
   }, [modelUrl]);
 
