@@ -23,6 +23,9 @@ export interface CapabilityDTO {
   user_visible: boolean;
   has_health_check: boolean;
   health: CapabilityHealth;
+  // v3-G chunk 1.5 — 外部 MCP 反向注册的 capability 携带来源 server 名
+  source_server: string | null;
+  expose_via_server: boolean;
 }
 
 export interface CapabilitiesResponse {

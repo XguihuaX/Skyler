@@ -223,14 +223,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # mcp SDK 的 StreamableHTTPSessionManager 必须在 ``async with .run()``
     # 上下文里才能 handle_request；run() 内部启 anyio task group 管理所有
     # SSE 流。退出 with 块即关闭。
+    #
+    # ── 9. v3-G chunk 1.5 — MCP clients：连接外部 server 反向注册 capability
+    # 任何 client 启动失败都不阻塞主流程（log warning + last_error 标记，UI
+    # 提示用户去 docs/mcp-client-setup.md 排查）。
+    from backend.mcp import client as mcp_client_module
     mcp_cfg = config_yaml.get("mcp_server") or {}
-    if mcp_cfg.get("enabled", False):
+    server_enabled = bool(mcp_cfg.get("enabled", False))
+
+    if server_enabled:
         async with mcp_server.get_session_manager().run():
             logger.info("MCP server session manager started")
-            yield
-            logger.info("MCP server session manager shutting down")
+            await mcp_client_module.init_clients_from_config()
+            try:
+                yield
+            finally:
+                await mcp_client_module.shutdown_clients()
+                logger.info("MCP server session manager shutting down")
     else:
-        yield
+        # mcp server 关掉时 client 仍可独立工作
+        await mcp_client_module.init_clients_from_config()
+        try:
+            yield
+        finally:
+            await mcp_client_module.shutdown_clients()
 
     await cron_scheduler.shutdown()
     await scheduler.stop()

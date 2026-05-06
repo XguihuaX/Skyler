@@ -86,3 +86,26 @@ scheduler:
 mcp_server:
   enabled: true
   endpoint_path: /mcp
+
+# v3-G chunk 1.5 — Skyler 作 MCP client 连接外部 server，反向注册为 capability
+# 默认全部 enabled: false（避免开箱即跑就拉起子进程占资源）。用户按需开启。
+# 详细配置：docs/mcp-client-setup.md
+# 环境变量插值：${HOME} / ${BRAVE_API_KEY} 等用 os.path.expandvars。
+mcp_clients:
+  filesystem:
+    description: "本地文件读取（Anthropic 官方 server）"
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "${HOME}/Documents"]
+    enabled: false
+    expose_via_skyler_server: true   # 代理给外部 LLM 工具，让 Claude Desktop 等也能用
+
+  brave-search:
+    description: "Brave 搜索（需要 BRAVE_API_KEY）"
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-brave-search"]
+    env:
+      BRAVE_API_KEY: "${BRAVE_API_KEY}"
+    enabled: false
+    expose_via_skyler_server: false   # 不代理 —— 防止 Brave API 配额被多级转发耗尽

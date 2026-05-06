@@ -35,6 +35,10 @@ class CapabilityDTO(BaseModel):
     user_visible: bool
     has_health_check: bool
     health: dict[str, Any]
+    # v3-G chunk 1.5：外部 MCP capability 的来源 server 名（仅非空时前端
+    # 渲染来源徽章）。内置 capability metadata 不带 source_server，返 None。
+    source_server: str | None
+    expose_via_server: bool
 
 
 class CapabilitiesResponse(BaseModel):
@@ -63,6 +67,8 @@ def _to_dto(cap: Capability, health: dict[str, Any]) -> CapabilityDTO:
         user_visible=cap.user_visible,
         has_health_check=cap.health_check is not None,
         health=health,
+        source_server=cap.metadata.get("source_server"),
+        expose_via_server=bool(cap.metadata.get("expose_via_server", True)),
     )
 
 

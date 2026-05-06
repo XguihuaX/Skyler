@@ -39,6 +39,48 @@ class MCPServerStatus(BaseModel):
     exposed_tool_names: list[str]
 
 
+# ---------------------------------------------------------------------------
+# External MCP clients status / reconnect
+# ---------------------------------------------------------------------------
+
+class MCPClientStatusItem(BaseModel):
+    name: str
+    description: str
+    enabled: bool
+    connected: bool
+    transport: str
+    tool_count: int
+    expose_via_server: bool
+    last_error: str | None
+
+
+class MCPClientsStatusResponse(BaseModel):
+    clients: list[MCPClientStatusItem]
+
+
+@router.get("/mcp/clients/status", response_model=MCPClientsStatusResponse)
+async def clients_status() -> MCPClientsStatusResponse:
+    from backend.mcp import client as mcp_client
+    return MCPClientsStatusResponse(clients=mcp_client.list_status())
+
+
+class ReconnectResponse(BaseModel):
+    status: str
+    detail: str | None = None
+
+
+@router.post("/mcp/clients/{name}/reconnect", response_model=ReconnectResponse)
+async def reconnect_client(name: str) -> ReconnectResponse:
+    from backend.mcp import client as mcp_client
+    try:
+        await mcp_client.reconnect(name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"client {name!r} not configured")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"reconnect failed: {exc}")
+    return ReconnectResponse(status="ok", detail=f"reconnected {name}")
+
+
 @router.get("/mcp/server/status", response_model=MCPServerStatus)
 async def server_status() -> MCPServerStatus:
     cfg = _server_config()

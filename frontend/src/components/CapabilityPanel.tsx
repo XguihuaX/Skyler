@@ -41,7 +41,10 @@ import {
   type GoogleStatusResponse,
 } from '../lib/integrations';
 import {
+  fetchMcpClientsStatus,
   fetchMcpServerStatus,
+  reconnectMcpClient,
+  type MCPClientStatusItem,
   type MCPServerStatus,
 } from '../lib/mcp';
 
@@ -266,6 +269,119 @@ function MCPServerBanner({ status }: { status: MCPServerStatus | null }) {
 
 
 // ---------------------------------------------------------------------------
+// v3-G chunk 1.5 — 外部 MCP clients section
+// ---------------------------------------------------------------------------
+
+interface MCPClientsSectionProps {
+  clients: MCPClientStatusItem[];
+  reconnectingId: string | null;
+  onReconnect: (name: string) => Promise<void>;
+}
+
+function MCPClientsSection({
+  clients, reconnectingId, onReconnect,
+}: MCPClientsSectionProps) {
+  if (clients.length === 0) return null;
+
+  return (
+    <div className="mb-4">
+      <h4
+        className="text-[11px] mb-2 uppercase tracking-wide"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        外部 MCP servers
+      </h4>
+      <div className="space-y-1">
+        {clients.map((c) => {
+          const dotColor = c.connected
+            ? 'var(--color-accent)'
+            : c.enabled
+              ? '#dc2626'
+              : 'var(--color-text-secondary)';
+          const stateLabel = c.connected
+            ? '已连接'
+            : c.enabled
+              ? '连接失败'
+              : '未启用';
+          return (
+            <div
+              key={c.name}
+              className="rounded-lg px-3 py-2 flex items-center gap-2 flex-wrap"
+              style={{
+                background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
+                border: '1px solid var(--color-border-subtle)',
+              }}
+            >
+              <span
+                className="inline-block w-2 h-2 rounded-full"
+                style={{ background: dotColor }}
+              />
+              <span
+                className="text-xs font-medium"
+                style={{ color: 'var(--color-text-primary)' }}
+              >
+                {c.name}
+              </span>
+              <span
+                className="text-[10px]"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                {c.transport} · {stateLabel}
+                {c.connected && ` · ${c.tool_count} tools`}
+              </span>
+              {c.description && (
+                <span
+                  className="text-[10px] truncate"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  · {c.description}
+                </span>
+              )}
+              {c.last_error && (
+                <span
+                  className="text-[10px] truncate flex-1 min-w-0"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                  title={c.last_error}
+                >
+                  · {c.last_error}
+                </span>
+              )}
+              {c.enabled && (
+                <button
+                  type="button"
+                  onClick={() => void onReconnect(c.name)}
+                  disabled={reconnectingId === c.name}
+                  className="ml-auto text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+                  style={{
+                    background: 'var(--color-bg-elevated)',
+                    color: 'var(--color-text-primary)',
+                    border: '1px solid var(--color-border-subtle)',
+                  }}
+                >
+                  <RefreshCw
+                    size={10}
+                    className={reconnectingId === c.name ? 'animate-spin' : ''}
+                  />
+                  {reconnectingId === c.name ? '重连中…' : '重连'}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <p
+        className="text-[10px] mt-2"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        外部 MCP server 在 config.yaml 顶层 <code>mcp_clients</code> 块配置；改完重启后端生效。
+        详见 docs/mcp-client-setup.md。
+      </p>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
 // 单张卡
 // ---------------------------------------------------------------------------
 
@@ -343,6 +459,19 @@ function CapabilityCard({
             style={{ color: 'var(--color-text-secondary)' }}
           >
             {cap.category} · {cap.name}
+            {cap.source_server && (
+              <span
+                className="ml-1.5 inline-flex items-center px-1 rounded text-[9px]"
+                style={{
+                  background: 'var(--color-bg-elevated)',
+                  border: '1px solid var(--color-border-subtle)',
+                  color: 'var(--color-text-secondary)',
+                }}
+                title={`来自外部 MCP server: ${cap.source_server}`}
+              >
+                [ext · {cap.source_server}]
+              </span>
+            )}
           </p>
           <p
             className="text-xs mt-2"
@@ -472,6 +601,9 @@ export default function CapabilityPanel() {
 
   // v3-G chunk 1.5：MCP server 状态。顶部 banner 显示。
   const [mcpServerStatus, setMcpServerStatus] = useState<MCPServerStatus | null>(null);
+  // v3-G chunk 1.5：外部 MCP clients 状态。
+  const [mcpClients,        setMcpClients]        = useState<MCPClientStatusItem[]>([]);
+  const [mcpReconnectingId, setMcpReconnectingId] = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -513,11 +645,35 @@ export default function CapabilityPanel() {
     }
   }, []);
 
+  const refreshMcpClients = useCallback(async () => {
+    try {
+      const s = await fetchMcpClientsStatus();
+      setMcpClients(s.clients);
+    } catch (e) {
+      console.error('[CapabilityPanel] mcp clients status failed:', e);
+      setMcpClients([]);
+    }
+  }, []);
+
+  const onReconnectClient = useCallback(async (name: string) => {
+    setMcpReconnectingId(name);
+    try {
+      await reconnectMcpClient(name);
+      await refreshMcpClients();
+      await loadAll();
+    } catch (e) {
+      console.error('[CapabilityPanel] reconnect failed:', e);
+    } finally {
+      setMcpReconnectingId(null);
+    }
+  }, [loadAll, refreshMcpClients]);
+
   useEffect(() => {
     void loadAll();
     void refreshGoogleStatus();
     void refreshMcpServerStatus();
-  }, [loadAll, refreshGoogleStatus, refreshMcpServerStatus]);
+    void refreshMcpClients();
+  }, [loadAll, refreshGoogleStatus, refreshMcpServerStatus, refreshMcpClients]);
 
   const onCardRefresh = useCallback(async (name: string) => {
     try {
@@ -633,6 +789,13 @@ export default function CapabilityPanel() {
 
       {/* v3-G chunk 1.5 — Skyler 自身作 MCP server 的 banner */}
       <MCPServerBanner status={mcpServerStatus} />
+
+      {/* v3-G chunk 1.5 — 外部 MCP servers 状态条 */}
+      <MCPClientsSection
+        clients={mcpClients}
+        reconnectingId={mcpReconnectingId}
+        onReconnect={onReconnectClient}
+      />
 
       {loading && items.length === 0 ? (
         <p
