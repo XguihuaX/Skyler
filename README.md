@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + **v3-E1 (8 commits) + v3-E2 multi-model (9 commits) + v3-G' TTS UI + instruct emotion (5 commits + patch)** done (~90% of v3) · Hiyori / Yae Miko Live2D rendering, six-voice CosyVoice picker with real emotion control on instruct-supported voices (longanhuan) · next up: v3-F' proactive dialogue → v3-G growth system.
+> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + **v3-E1 (8 commits) + v3-E2 multi-model (9 commits) + v3-G' TTS UI + instruct emotion (5 commits + 2 patches)** done (~90% of v3) · Hiyori / Yae Miko Live2D rendering, seven-voice CosyVoice picker with real emotion control on the two instruct-aware voices (longanhuan / longanyang) · next up: v3-F' proactive dialogue → v3-G growth system.
 >
 > *Project formerly known as MomoOS — rebranded to Skyler in 2026-05.*
 
@@ -279,7 +279,7 @@ See [**ROADMAP.md**](ROADMAP.md) for the full prioritized roadmap.
   - ✅ **v3-E2 done** (9 commits): runtime abstraction, per-character `*_map_json`, asset scanner API + dropdown, Yae Miko (BCSZ1.1) wired in, emotion visual binding code path live, Momo persona restored
   - **v3-E3**: pure operational task — find a model with `.exp3.json`, fill that character's `emotion_map_json`, art-tune
   - **v3-F'**: proactive dialogue + time awareness (mealtime / bedtime / long idle triggers)
-  - ✅ **v3-G' done** (5 commits + patch): per-character voice picker (provider → voice two-level dropdown), six CosyVoice voices catalogued, real emotion control via SDK `instruction` field on instruct-supported voices (longanhuan). The chunk-1a SSML approach turned out to be wrong — DashScope SSML has no `emotion` attribute, so it was reverted in favor of the natural-language instruct path that's been in place since v3-D.
+  - ✅ **v3-G' done** (5 commits + 2 patches): per-character voice picker (provider → voice two-level dropdown), seven CosyVoice voices catalogued (incl. instruct-aware male `longanyang`), real emotion control via SDK `instruction` field on instruct-supported voices. The chunk-1a SSML approach turned out to be wrong — DashScope SSML has no `emotion` attribute, so it was reverted in favor of the natural-language instruct path that's been in place since v3-D. Patch (c) further locked the instruction string to the documented strict format (`"你说话的情感是{emotion}。"` — no whitespace) after a `InvalidParameter 428` audit. Phase 2 (custom voice cloning + GPT-SoVITS training) remains pending until reference samples / autodl GPU are ready.
 - **v3-G + v4 (Tier 2, 1–2 months)**: clipboard assistant, daily briefing, natural-language cron, character status panel + growth system; screen awareness (active + passive + VLM); AI inner browser
 - **v5 (Tier 3, long-term)**:
   - **v5-D**: autodl deployment + sub-agent isolation
@@ -334,7 +334,7 @@ The life & tools agent reference. Borrowed concepts:
 | v3-F: voice UX (interrupt + concurrency + preprocessor + thinking) | ✅ done |
 | v3-F': proactive dialogue + time awareness | 📋 planned |
 | v3-G: life & tools layer (clipboard / daily briefing / cron / growth) | 📋 planned |
-| v3-G': TTS UI + cosyvoice instruct emotion | ✅ done (5 commits + patch, 2026-05-06) — SSML path reverted, instruct path is canonical |
+| v3-G': TTS UI + cosyvoice instruct emotion | ✅ done (5 commits + 2 patches, 2026-05-06) — SSML reverted, instruct path canonical, instruction string locked to strict no-whitespace format, longanyang male voice added; Phase 2 (custom voice cloning) 📋 pending |
 | v4: Screen awareness | 📋 planned |
 | v5-D / T1 / T2: autodl + GPT-SoVITS + custom voice training | 📋 long-term |
 | v6+: Multi-device / cloud deployment | 📋 long-term |

@@ -21,6 +21,7 @@ import {
 import { fetchLive2DModels } from '../lib/live2d';
 import {
   buildVoiceModelJson,
+  fetchTtsVoices,
   parseVoiceModelJson,
 } from '../lib/tts';
 
@@ -269,8 +270,12 @@ export default function CharacterPanel() {
   const setLive2dModels = useAppStore((s) => s.setLive2dModels);
 
   // v3-G' chunk 1b：TTS provider + voice 清单，两级下拉数据源。
-  // 由 App.tsx mount 时 eager-load，CharacterPanel 直接读 store。
-  const ttsProviders = useAppStore((s) => s.ttsProviders);
+  // 由 App.tsx mount 时 eager-load；patch (d) 在 CharacterPanel mount 时
+  // 兜底再拉一次 + 加手动刷新按钮，应对 dev 模式下"前端先开后端"导致
+  // eager-load 失败的时序问题（生产 Tauri sidecar 时序固定无此问题，
+  // patch 同时改善 dev DX 与生产兜底）。
+  const ttsProviders    = useAppStore((s) => s.ttsProviders);
+  const setTtsProviders = useAppStore((s) => s.setTtsProviders);
 
   const [characters, setCharacters] = useState<CharacterRow[]>([]);
   const [loading, setLoading]       = useState(false);
@@ -280,6 +285,8 @@ export default function CharacterPanel() {
   const [toasts, setToasts]         = useState<ToastInfo[]>([]);
   const [live2dLoading, setLive2dLoading] = useState(false);
   const [live2dError,   setLive2dError]   = useState<string | null>(null);
+  const [ttsLoading,    setTtsLoading]    = useState(false);
+  const [ttsError,      setTtsError]      = useState<string | null>(null);
 
   const showToast = useCallback((text: string) => {
     const id = Date.now() + Math.random();
@@ -324,6 +331,33 @@ export default function CharacterPanel() {
   useEffect(() => {
     void refreshLive2D();
   }, [refreshLive2D]);
+
+  // v3-G' patch (d)：TTS voices 列表加载 + 刷新按钮共享同一回调。
+  // App.tsx mount 时已经 eager-load 一次；这里只在 store 还空时兜底
+  // 再拉，避免重复请求。
+  const refreshTts = useCallback(async () => {
+    setTtsLoading(true);
+    setTtsError(null);
+    try {
+      const data = await fetchTtsVoices();
+      setTtsProviders(data.providers);
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.error('[CharacterPanel] tts voices fetch failed:', e);
+      setTtsError(msg);
+    } finally {
+      setTtsLoading(false);
+    }
+  }, [setTtsProviders]);
+
+  useEffect(() => {
+    if (ttsProviders.length === 0) {
+      void refreshTts();
+    }
+    // 依赖只挂 refreshTts —— 仅 mount 时判一次，后续 ttsProviders 变化不
+    // 触发重拉（避免清空后又自动重拉成死循环）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTts]);
 
   const startCreate = () => {
     setForm({ ...EMPTY_FORM, mode: 'create' });
@@ -677,12 +711,32 @@ export default function CharacterPanel() {
 
               return (
                 <div>
-                  <label
-                    className="block text-xs mb-1"
-                    style={{ color: 'var(--color-text-primary)' }}
-                  >
-                    TTS 声音
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label
+                      className="block text-xs"
+                      style={{ color: 'var(--color-text-primary)' }}
+                    >
+                      TTS 声音
+                    </label>
+                    {/* v3-G' patch (d)：手动刷新音色列表。dev 模式下前端先开
+                        后端会让 App.tsx eager-load 失败，此处给用户兜底入口；
+                        加载中图标自旋，颜色用 secondary（themes.css 没专门的
+                        muted 变量，统一沿用 secondary 做弱化色）。*/}
+                    <button
+                      type="button"
+                      onClick={() => void refreshTts()}
+                      disabled={ttsLoading}
+                      className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                      title="刷新音色列表（重新调 /api/tts/voices）"
+                    >
+                      <RefreshCw
+                        size={10}
+                        className={ttsLoading ? 'animate-spin' : ''}
+                      />
+                      刷新
+                    </button>
+                  </div>
 
                   {/* Provider 下拉 */}
                   <div className="relative mb-1">
@@ -765,6 +819,18 @@ export default function CharacterPanel() {
                         </span>
                       )}
                     </div>
+                  )}
+
+                  {/* v3-G' patch (d)：列表加载失败兜底文字。颜色沿用
+                      secondary（themes.css 无 error 变量），图标 + 重试提示
+                      让用户知道下拉为空不是配置问题而是网络问题。*/}
+                  {ttsError && (
+                    <p
+                      className="text-[10px] mt-1"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                    >
+                      未能加载音色列表，请稍后重试（{ttsError}）
+                    </p>
                   )}
 
                   {/* 老格式 / 未识别值兜底（向后兼容） */}

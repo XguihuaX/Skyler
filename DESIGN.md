@@ -4,7 +4,7 @@
 >
 > **改名提示**：项目原名 MomoOS，2026-05 重命名为 **Skyler**。代码内 localStorage key（`momoos.mode` / `momoos.theme` / `momoos.convListCollapsed`）暂未跟改，保留为代码现实；后续做 v3 收尾 commit 时统一重命名 + 加 fallback 读取（旧 key → 新 key），不破坏用户既有状态。
 >
-> **当前状态**：v2.7 全部完成 + v3-A/B/C/D 进行中（约 v3 整体 60%）。详见 §十六 阶段性进度。
+> **当前状态**：v2.7 全部完成 + v3-A/B/C/D + v3-E1/E2 + v3-F + v3-G' 完成（约 v3 整体 90%）。详见 §十六 阶段性进度。
 
 ---
 
@@ -1204,14 +1204,43 @@ pixi-live2d-display 及其所有维护中的 fork（advanced / lipsyncpatch / mu
 - [ ] **自然语言 cron 调度**（Hermes #3 借鉴）—— 扩展现有 scheduler，支持自然语言定义任意定时任务（不只是 alarm）
 - [ ] **角色状态面板 / 成长系统**（OLV v1.4 + DESIGN 计划合并）—— 当前心情 / 亲密度 / 当前思绪 / 当前正在做什么；与 profile_summary 联动；详见 §十九
 
-#### v3-G'：TTS UI + cosyvoice instruct emotion ✅ 完成（5 commit + patch，2026-05-06）
+#### v3-G'：TTS UI + cosyvoice instruct emotion ✅ 完成（5 commit + 2 patch，2026-05-06）
 - [x] **`GET /api/tts/voices` 接口**（`de7ebe2`）—— provider/voice 两级结构，从 `config.yaml` `tts.available_voices` 读
-- [x] **CharacterPanel 两级下拉**（`bd46a80`）—— provider → voice，下拉项展示 `{label} · {traits}`
-- [x] **`config.yaml` `tts.available_voices.cosyvoice` 列表**（最终 6 音色：longyumi_v3 / longfeifei_v3 / longwan_v3 / longqiang_v3 / longxing_v3 / longanhuan）
+- [x] **CharacterPanel 两级下拉**（`bd46a80`）—— provider → voice，下拉项展示 `{label} · {traits}`；patch (d) 加 mount auto-refetch + 刷新按钮（dev 模式时序兜底）
+- [x] **`config.yaml` `tts.available_voices.cosyvoice` 列表**（7 音色：longyumi_v3 / longfeifei_v3 / longwan_v3 / longqiang_v3 / longxing_v3 / longanhuan / longanyang）
 - [x] **写回逻辑**：用户选择 → `buildVoiceModelJson(provider, voice, instruct_supported)` 写回 character.voice_model 同字段，向后兼容旧 plain 字符串（UI 提示"自定义"）
 - [x] **Momo (id=1) 默认音色 lifespan migration**（`bf21915`）`v3_g_default_voice.py` 幂等
-- [x] **emotion 真生效路径修正**（`b29662c` + `e73e2bc`）：chunk 1a 把 emotion 包成 `<voice emotion="X">` SSML 是错的——DashScope SSML 标签合法属性是 voice / rate / pitch / volume / effect / bgm，**没 emotion**。撤回 SSML wrapper，改走 SDK `instruction` 字段 (`speech_synthesizer.py:218-219` audit 证实) —— `instruction="你说话的情感是 X。"`，仅 `instruct_supported=true` 音色启用。当前 6 个 cosyvoice 音色里只 longanhuan instruct=true
+- [x] **emotion 真生效路径修正**（`b29662c` + `e73e2bc`）：chunk 1a 把 emotion 包成 `<voice emotion="X">` SSML 是错的——DashScope SSML 标签合法属性是 voice / rate / pitch / volume / effect / bgm，**没 emotion**。撤回 SSML wrapper，改走 SDK `instruction` 字段 (`speech_synthesizer.py:218-219` audit 证实)，仅 `instruct_supported=true` 音色启用
+- [x] **instruction 字符串严格匹配文档**（patch (c) `d05d292`）：`"你说话的情感是{emotion}。"`，emotion 与"是"之间**不能**有空格，否则系统音色返 `InvalidParameter 428`。同 commit 加 instruct-aware 男声 longanyang
 - [x] **架构验证**：`/api/tts/voices` schema 容纳多 provider，未来 v5-T1 SoVITS 接通时后端追加 entry，前端 0 改动
+
+**TTS provider 抽象层 + emotion 数据流**（v3-G' 定型）：
+
+```
+LLM 输出 <emotion>X</emotion> 标记（v3-D 解析）
+       ↓
+WebSocket emotion 字段（store: turnEmotion）
+       ↓
+get_tts_engine(character) 解析 voice_model JSON
+       ↓                        ┌─ provider="cosyvoice" → CosyVoiceTTS(voice, instruct_supported)
+       ↓                        ├─ provider="sovits"    → SoVITSProvider（v5-T1 占位）
+       ↓                        └─ provider="edge"      → EdgeTTS（兜底）
+CosyVoiceTTS._blocking_synthesize:
+  if instruct_supported and emotion ∈ {happy,sad,angry,surprised}:
+      kwargs["instruction"] = "你说话的情感是{emotion}。"   # 系统音色固定格式
+  else:
+      pass   # neutral / 非 instruct 音色 → emotion 字段静默丢弃
+  SpeechSynthesizer(**kwargs).call(text)        # instruction 走构造函数，非 call()
+```
+
+**系统音色 vs 复刻音色的 instruction 能力差异**（DashScope 文档约束）：
+
+| 音色类型 | 来源 | instruction 格式 | 能力 |
+|---|---|---|---|
+| 系统音色（`long*` 家族） | 平台预置 | **必须**严格匹配 `"你说话的情感是{emotion}。"` 等固定模板 | 仅 longanyang / longanhuan / longhuhu_v3 三个支持，emotion 限文档 7 枚举 |
+| 复刻音色（`myvoice-xxx`） | 用户 fine-tune / voice cloning | 自由自然语言（如"温柔地慢慢说"） | 不限固定模板，未来 Phase 2 真主力 |
+
+**关键决策汇总**：详见 `ROADMAP.md` v3-G' 章节"关键决策（知识沉淀）"四条。
 
 ### 📋 阶段六：v4 屏幕感知 + 视觉能力（OLV #4 借鉴）
 

@@ -2,7 +2,7 @@
 
 > Living document. 每完成一个里程碑同步更新 + commit + push。
 >
-> 当前状态（2026-05-06）：v2.7 完整 + v3-A/B/C/D + **v3-E1 (8 commit) + v3-E2 多模型 (9 commit) + v3-G' TTS UI + instruct emotion (5 commit + patch) 完成**（约 v3 整体 90%）。Hiyori / 八重神子 Live2D 端到端正常；TTS provider/voice 两级下拉 + 6 个 cosyvoice 音色 + emotion 真生效（longanhuan 走 instruct）。剩 v3-F' 主动对话 / v3-G 成长系统。
+> 当前状态（2026-05-06）：v2.7 完整 + v3-A/B/C/D + **v3-E1 (8 commit) + v3-E2 多模型 (9 commit) + v3-G' TTS UI + instruct emotion (5 commit + 2 patch) 完成**（约 v3 整体 90%）。Hiyori / 八重神子 Live2D 端到端正常；TTS provider/voice 两级下拉 + 7 个 cosyvoice 音色（含 instruct-aware 男声 longanyang）+ emotion 真生效（instruction 格式严格匹配文档）。剩 v3-F' 主动对话 / v3-G 成长系统。
 
 ---
 
@@ -24,7 +24,7 @@
 | v3-F：语音体验飞跃（打断 ✅ / 并发 ✅ / 预处理 ✅ / 内心独白 ✅） | ✅ 完成 | 100% |
 | **v3-F'：主动对话 + 时间感知（饭点 / 睡前 / 长时无互动）** | 📋 计划中 | 0% |
 | v3-G：生活 & 工具型能力（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 | 0% |
-| **v3-G'：TTS UI 升级 + cosyvoice emotion 走 instruct（chunk 1a SSML 路径已撤回）** | ✅ 主线完成（5 commit + patch，2026-05-06）| 100% |
+| **v3-G'：TTS UI 升级 + cosyvoice emotion 走 instruct（chunk 1a SSML 路径已撤回）** | ✅ 完成（5 commit + 2 patch，2026-05-06）；Phase 2 复刻音色 / SoVITS 训练 📋 PENDING | Phase 1 100% |
 | v4：屏幕感知 + 视觉能力 | 📋 远期 | 0% |
 | **v5-D：autodl 部署 + 子 agent 隔离** | 📋 远期 | 0% |
 | **v5-T1：GPT-SoVITS 后端接通（依赖 v5-D）** | 📋 远期 | 0% |
@@ -314,19 +314,28 @@
 
 **目标**：把现有的 voice_model JSON 文本框升级成生产级 voice picker，**同时让 cosyvoice emotion 真正生效**（当前 emotion 字段被 SDK 忽略，audit 已确认）。
 
-**主线完成清单（5 commit + patch）**：
+**主线完成清单（5 commit + 2 patch）**：
 
 | Hash | 内容 |
 |---|---|
 | `de7ebe2` | ⚠️ chunk 1a：`/api/tts/voices` 接口 + cosyvoice.py SSML emotion 包装。**SSML emotion 路径事后证实是错的**（DashScope SSML 标签没 emotion 属性，被 SDK 静默忽略），但其他改动（API + config 结构）继续生效 |
 | `bd46a80` | chunk 1b：CharacterPanel 两级下拉（provider → voice）+ tts.ts API client + 兼容 badge |
 | `bf21915` | chunk 1c：Momo (id=1) lifespan 默认音色 = `cosyvoice/longyumi_v3` |
-| `b29662c` | patch (a)：撤销 SSML emotion 包装；emotion 真生效改走 **instruct 自然语言指令路径**（`instruction="你说话的情感是 X。"`）；config.yaml 改 6 音色（longyumi_v3 / longfeifei_v3 / longwan_v3 / longqiang_v3 / longxing_v3 / longanhuan） |
+| `b29662c` | patch (a)：撤销 SSML emotion 包装；emotion 真生效改走 **instruct 自然语言指令路径**；config.yaml 改 6 音色（longyumi_v3 / longfeifei_v3 / longwan_v3 / longqiang_v3 / longxing_v3 / longanhuan） |
 | `e73e2bc` | patch (b)：前端 SSML badge 删除；保留 Instruct badge 改名"情感控制 / 纯音色"；下拉选项展示 `{label} · {traits}` |
+| `7efe3e8` | tools：独立测试脚本 `tools/test_cosyvoice_emotion.py`，复刻生产 instruct 调用形态，4 emotion × longanhuan 端到端跑通 |
+| `d05d292` | patch (c)：instruction 字符串去空格（`"你说话的情感是{emotion}。"`，与文档严格匹配）+ 新增 instruct-aware 男声 longanyang；测试脚本同步去空格 + scoped monkeypatch 把 SDK 5s WS 建链超时放宽到 30s（仅测试，生产未动） |
 
 **为什么撤回 SSML**：DashScope 官方 SSML 标签合法属性是 voice / rate / pitch / volume / effect / bgm，**没有 emotion**。chunk 1a 的 `<voice emotion="happy">...</voice>` 是非法 SSML，请求要么被忽略要么返 400。真情感控制走 SDK 的 `instruction` 参数（`speech_synthesizer.py:218-219` audit 证实），**v3-D 起一直就有这条路径**，但仅在音色 `instruct: true` 时启用。chunk 1a 没改正机制，只是在并行加了一条无效的 SSML wrapper。patch (a) 撤销 wrapper + 把 instruct 路径作为 emotion 真生效的唯一通道。
 
-**当前 instruct 支持音色**：
+**关键决策（知识沉淀）**：
+
+1. **DashScope 系统音色全平台仅 3 个支持 Instruct**：`longanyang`（男 · 阳光大男孩）/ `longanhuan`（女 · 欢脱元气女）/ `longhuhu_v3`（女童）。其他系统音色（longyumi_v3 / longfeifei_v3 / longwan_v3 / longqiang_v3 / longxing_v3 等）传 `instruction` 会被服务端拒绝。
+2. **支持的 7 个英文 emotion 枚举**：`neutral` / `fearful` / `angry` / `sad` / `surprised` / `happy` / `disgusted`。当前 LLM prompt 引导 5 个（neutral 不需要 instruction，剩下 4 个：happy / sad / angry / surprised），fearful / disgusted 未引导，instruct 白名单也对应排除。
+3. **系统音色 instruction 字符串必须严格匹配固定格式**：`"你说话的情感是{emotion}。"`——emotion 与"是"之间**不能**有空格，否则系统音色返 `InvalidParameter 428`。chunk 1a → patch (a) 期间因为读了文档示例的 markdown 视觉空白当字符空格，跑过一段时间 happy=neutral 听感差不出来，patch (c) 才 audit 出根因。
+4. **复刻音色（自训 / cosyvoice voice cloning 创建的 myvoice-xxx）支持自由自然语言指令**：不受固定格式限制，可以传 `"温柔地慢慢说"` `"语速加快、带笑意"` 这类自由 prompt。这是后续 Phase 2 复刻音色场景的能力释放点。
+
+**当前 config.yaml 已登记的 cosyvoice 音色**：
 
 | voice | traits | instruct |
 |---|---|---|
@@ -336,14 +345,33 @@
 | longqiang_v3 | 浪漫女 | ❌ |
 | longxing_v3 | 邻家女 | ❌ |
 | **longanhuan** | **欢脱元气女** | **✅** |
+| **longanyang** | **阳光大男孩** | **✅** |
 
-→ 想要 emotion 真生效（开心 / 难过 / 生气 真有差异）必须切到 longanhuan。其他 5 个音色 emotion 字段被静默丢弃，TTS 仍正常播但情感由音色本身固定风格决定。
+→ 想要 emotion 真生效（开心 / 难过 / 生气 真有差异）必须切到 longanhuan / longanyang。其余 5 个音色 emotion 字段被静默丢弃，TTS 仍正常播但情感由音色本身固定风格决定。`longhuhu_v3`（女童）平台支持但暂未登记进 config.yaml，等真有女童角色再加。
 
 **emotion 白名单**：instruct 路径只对 happy / sad / angry / surprised 生效；neutral 等价"不指定"不传 instruction；fearful / disgusted 当前 LLM prompt 未引导，先不实验性派发。
 
 **架构验证（已 done）**：`/api/tts/voices` schema 容纳多 provider，未来 v5-T1 SoVITS 接通时只要后端追加 entry，前端代码 0 改动 ✓。
 
-**估时**：实际 ~1 天（含 audit + patch）。
+**Phase 1 实际工时**：~1.5 天（含两轮 audit + 全部 patch + 独立验证脚本）。
+
+#### Phase 2 📋 PENDING — 复刻 / fine-tune 自定义音色
+
+**目标**：超越 7 个固定系统音色的局限，为每个角色训出专属音色。
+
+**条件门槛**：
+
+- 用户准备好角色参考音频样本（5-10 段，每段 5-30s，干净环境，覆盖目标情感分布）
+- v5-D autodl 部署完成（SoVITS 训练需要 GPU）；CosyVoice 云端 voice cloning 不依赖 v5-D，可独立先行
+
+**两条路径**（详见 v5-T2 章节）：
+
+1. **CosyVoice fine-tune voice cloning**（短路径，云端，~1-2 小时训练）→ 拿到 `myvoice-xyz123` ID → 加进 `config.yaml` `tts.cosyvoice.available_voices` → CharacterPanel 下拉自动多一项；复刻音色 instruction 接受自由自然语言指令，能力比固定格式系统音色强。
+2. **GPT-SoVITS 角色专属训练**（长路径，autodl GPU）→ 多情感参考音频文件 → SoVITSProvider 按 `emotion → ref_audios[emotion]` 路由。
+
+**触发时机**：用户某天主动说"我准备好 Momo 的录音了 / autodl 训完了 SoVITS 模型"——届时把 Phase 2 改 🚧。
+
+**估时（届时）**：CosyVoice 路径 1 天；SoVITS 路径 3-5 天。
 
 ---
 
@@ -499,6 +527,25 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
 ---
 
 ## 技术债（v3-G 后期或 v4 处理）
+
+### cosyvoice provider WS 建链超时增强（v3-G' 衍生 backlog）
+
+**现状**：
+
+- 生产 `backend/tts/cosyvoice.py` 用 SDK 默认 5s WebSocket 建链超时（`venv/.../speech_synthesizer.py:526` 写死 `self.__connect(5)`，无外部参数化入口）
+- 弱网 / 跨境链路 / VPN 抖动场景下 5s 经常不够，会 raise `TimeoutError("websocket connection could not established within 5s")`，单句 TTS 直接失败
+- v3-G' patch (c) 期间 `tools/test_cosyvoice_emotion.py` 已 scoped monkeypatch 把超时放到 30s（仅作用于测试脚本进程），生产路径**未动**
+
+**修复方向**（独立 chunk，不在 v3-G' 范围）：
+
+- 选项 A：生产侧加同等 monkeypatch（最少改动，但 hack 痕迹）
+- 选项 B：cosyvoice.py 增加重试包装（`_blocking_synthesize` 失败后退避重试 1-2 次），同时记录 telemetry
+- 选项 C：升级 dashscope SDK 看上游是否已暴露 timeout 参数 / 重试机制
+- 选项 D：长远迁到 SDK 的 streaming_call + 自管 WebSocket 连接池
+
+**触发时机**：用户在生产环境复现 5s 超时报错（或 telemetry 累计若干次），届时按上面四选一处理。
+
+---
 
 ### characters 双源真相 → 方案 C 统一
 
