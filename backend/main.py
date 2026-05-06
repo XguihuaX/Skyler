@@ -50,6 +50,7 @@ from backend.database.migrations.v3_g_default_voice import (
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
+from backend.routes.capabilities_api import router as capabilities_router
 from backend.routes.characters_api import router as characters_router
 from backend.routes.config_api import router as config_router
 from backend.routes.conversations_api import router as conversations_router
@@ -216,4 +217,5 @@ app.include_router(characters_router,    prefix="/api", tags=["characters"])
 app.include_router(users_router,         prefix="/api", tags=["users"])
 app.include_router(live2d_router,        prefix="/api", tags=["live2d"])
 app.include_router(tts_router,           prefix="/api", tags=["tts"])
+app.include_router(capabilities_router,  prefix="/api", tags=["capabilities"])
 app.include_router(ws_router,                            tags=["websocket"])
