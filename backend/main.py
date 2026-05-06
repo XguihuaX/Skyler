@@ -52,6 +52,10 @@ from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
 from backend.routes.briefing_api import router as briefing_router
 from backend.routes.capabilities_api import router as capabilities_router
+from backend.routes.mcp_api import (
+    mcp_endpoint as _mcp_endpoint,
+    router as mcp_router,
+)
 from backend.routes.characters_api import router as characters_router
 from backend.routes.config_api import router as config_router
 from backend.routes.conversations_api import router as conversations_router
@@ -72,6 +76,7 @@ from backend.scheduler.task import scheduler
 # 加到这里。
 import backend.capabilities.time_capability  # noqa: F401, E402
 import backend.capabilities.calendar         # noqa: F401, E402  v3-G chunk 1
+from backend.mcp import server as mcp_server  # noqa: E402  v3-G chunk 1.5
 
 logging.basicConfig(
     level=logging.INFO,
@@ -214,7 +219,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             # 重复注册时不破坏 lifespan（比如 hot-reload）
             logger.info("Morning briefing cron already registered")
 
-    yield
+    # ── 8. v3-G chunk 1.5 — MCP server SessionManager（必要 lifecycle）──
+    # mcp SDK 的 StreamableHTTPSessionManager 必须在 ``async with .run()``
+    # 上下文里才能 handle_request；run() 内部启 anyio task group 管理所有
+    # SSE 流。退出 with 块即关闭。
+    mcp_cfg = config_yaml.get("mcp_server") or {}
+    if mcp_cfg.get("enabled", False):
+        async with mcp_server.get_session_manager().run():
+            logger.info("MCP server session manager started")
+            yield
+            logger.info("MCP server session manager shutting down")
+    else:
+        yield
 
     await cron_scheduler.shutdown()
     await scheduler.stop()
@@ -250,4 +266,20 @@ app.include_router(capabilities_router,  prefix="/api", tags=["capabilities"])
 app.include_router(integrations_router,  prefix="/api", tags=["integrations"])
 app.include_router(webhooks_router,      prefix="/api", tags=["webhooks"])
 app.include_router(briefing_router,      prefix="/api", tags=["briefing"])
+app.include_router(mcp_router,           prefix="/api", tags=["mcp"])
 app.include_router(ws_router,                            tags=["websocket"])
+
+# v3-G chunk 1.5 — MCP streamable HTTP endpoint。挂在根路径下（不加 /api
+# prefix），与 mcp 标准 ``http://host:port/mcp`` 约定对齐。需要 GET / POST
+# / DELETE 三种方法（GET = 客户端打开 SSE 流，POST = 客户端发请求，DELETE
+# = 终止会话）。
+_mcp_endpoint_path = (
+    (config_yaml.get("mcp_server") or {}).get("endpoint_path") or "/mcp"
+)
+app.add_api_route(
+    _mcp_endpoint_path,
+    _mcp_endpoint,
+    methods=["GET", "POST", "DELETE"],
+    include_in_schema=False,  # 不进 OpenAPI schema —— mcp 协议不是 REST
+    tags=["mcp"],
+)

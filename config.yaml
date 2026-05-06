@@ -79,3 +79,10 @@ briefing:
 # v3-G chunk 0 — APScheduler 单例时区
 scheduler:
   timezone: Asia/Tokyo
+
+# v3-G chunk 1.5 — Skyler 作 MCP server 暴露给外部 LLM 工具
+# 启用后 ``POST /mcp`` 可被 Claude Desktop / Cursor / Claude Code 调用。
+# 鉴权 Bearer token 走 .env 的 MCP_BEARER_TOKEN（不在 yaml 里写明文）。
+mcp_server:
+  enabled: true
+  endpoint_path: /mcp

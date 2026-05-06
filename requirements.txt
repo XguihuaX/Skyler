@@ -20,3 +20,5 @@ google-auth>=2.30
 google-auth-oauthlib>=1.0
 google-api-python-client>=2.100
 tenacity>=8.0
+# v3-G chunk 1.5 — MCP 双向集成（server + client）
+mcp>=1.0

@@ -76,6 +76,12 @@ class Capability:
     user_visible: bool = True
     health_check: Optional[Callable[[], Any]] = None
     parameters_schema: Optional[dict] = field(default=None)
+    # v3-G chunk 1.5：开放给来源 / 暴露策略等运行时元数据。
+    # 已知 key：
+    #   - source_server (str)         运行时注册的 capability 来源（外部 MCP server 名）
+    #   - expose_via_server (bool)    是否通过 Skyler 自己的 MCP server 再暴露出去；
+    #                                 默认 True；仅运行时注册时按 client config 决定
+    metadata: dict = field(default_factory=dict)
 
 
 class CapabilityRegistry:
@@ -155,6 +161,33 @@ class CapabilityRegistry:
             _schemas.pop(name, None)
         self._capabilities.clear()
 
+    # ------------------------------------------------------------------
+    # v3-G chunk 1.5：runtime 注册 / 解注册
+    #
+    # 内置 capability 在 import time 通过 ``@register_capability`` 装饰器登
+    # 记。MCP client 接入时 server 启动后才知道 tool 列表，需要 runtime 注
+    # 册。``register_runtime`` 是 ``register`` 的语义别名 —— 实现完全一致，
+    # 让外部 caller 在代码里清楚这是动态登记的。
+    # ``unregister_runtime`` 给 MCP client 重连 / 断开时清场用，同步清掉
+    # ToolRegistry 里曾注入的 schema 避免悬挂条目。
+    # ------------------------------------------------------------------
+
+    def register_runtime(self, cap: Capability) -> None:
+        """运行时注册（语义同 register，外部 caller 表意更清晰）。"""
+        self.register(cap)
+
+    def unregister_runtime(self, name: str) -> bool:
+        """删除一个 capability + 同步清 ToolRegistry。返回是否真的删了。"""
+        if name not in self._capabilities:
+            return False
+        del self._capabilities[name]
+        # 同步清 ToolRegistry —— 与 register 时的注入对称
+        from backend.tools.registry import _tools, _schemas
+        _tools.pop(name, None)
+        _schemas.pop(name, None)
+        logger.debug("unregistered capability: %s", name)
+        return True
+
 
 # ---------------------------------------------------------------------------
 # decorator
@@ -172,6 +205,7 @@ def register_capability(
     user_visible: bool = True,
     health_check: Optional[Callable[[], Any]] = None,
     parameters_schema: Optional[dict] = None,
+    metadata: Optional[dict] = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """装饰器：把被装饰函数注册成 capability。
 
@@ -192,6 +226,7 @@ def register_capability(
             user_visible=user_visible,
             health_check=health_check,
             parameters_schema=parameters_schema,
+            metadata=dict(metadata or {}),
         )
         CapabilityRegistry().register(cap)
         return func

@@ -14,7 +14,12 @@ import {
   Circle,
   Clock,
   Cloud,
+  Copy,
+  Eye,
+  EyeOff,
+  Globe,
   Image as ImageIcon,
+  Link2,
   Music,
   RefreshCw,
   Tv,
@@ -35,6 +40,10 @@ import {
   triggerTestBriefing,
   type GoogleStatusResponse,
 } from '../lib/integrations';
+import {
+  fetchMcpServerStatus,
+  type MCPServerStatus,
+} from '../lib/mcp';
 
 // ---------------------------------------------------------------------------
 // icon 映射：capability.icon 字符串 → lucide-react 组件。未知 fallback 圆点。
@@ -51,6 +60,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   wand: Wand2,
   image: ImageIcon,
   circle: Circle,
+  // v3-G chunk 1.5 — 外部 MCP capability 默认 icon
+  'link-2': Link2,
 };
 
 function CapabilityIcon({ name }: { name: string }) {
@@ -121,6 +132,138 @@ function Badge({ children }: { children: React.ReactNode }) {
     </span>
   );
 }
+
+// ---------------------------------------------------------------------------
+// v3-G chunk 1.5 — MCP server banner
+//
+// 顶部状态条，告诉用户 Skyler 自身作 MCP server 的 endpoint + Bearer token。
+// token 默认遮蔽，[👁] toggle 显示，[📋] 复制完整 Bearer 头到剪贴板。
+// ---------------------------------------------------------------------------
+
+function MCPServerBanner({ status }: { status: MCPServerStatus | null }) {
+  const [showToken, setShowToken] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  if (!status || !status.enabled) {
+    return null;
+  }
+
+  const token = status.bearer_token;
+  const tokenDisplay = !token
+    ? '⚠️ 未配置 MCP_BEARER_TOKEN'
+    : showToken
+      ? token
+      : '●'.repeat(Math.min(token.length, 20));
+
+  const onCopy = async () => {
+    if (!token) return;
+    try {
+      await navigator.clipboard.writeText(`Bearer ${token}`);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch (e) {
+      console.error('[MCPBanner] clipboard failed:', e);
+    }
+  };
+
+  return (
+    <div
+      className="mb-3 rounded-lg p-3"
+      style={{
+        background: 'color-mix(in srgb, var(--color-accent) 14%, var(--color-bg-surface))',
+        border: '1px solid var(--color-border-subtle)',
+      }}
+    >
+      <div className="flex items-center gap-2 flex-wrap">
+        <Globe size={14} style={{ color: 'var(--color-text-primary)' }} />
+        <span
+          className="text-xs font-medium"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          MCP server 已启用
+        </span>
+        <span
+          className="text-[11px]"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          http://localhost:8000{status.endpoint}
+        </span>
+        <span
+          className="ml-auto text-[10px]"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {status.exposed_tool_count} tools 已暴露
+        </span>
+      </div>
+      <div className="flex items-center gap-2 mt-2">
+        <span
+          className="text-[10px]"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          Token:
+        </span>
+        <code
+          className="text-[10px] px-1.5 py-0.5 rounded font-mono select-all"
+          style={{
+            background: 'var(--color-bg-input)',
+            color: 'var(--color-text-primary)',
+            border: '1px solid var(--color-border-subtle)',
+          }}
+        >
+          {tokenDisplay}
+        </code>
+        {token && (
+          <>
+            <button
+              type="button"
+              onClick={() => setShowToken((v) => !v)}
+              className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80"
+              style={{ color: 'var(--color-text-secondary)' }}
+              title={showToken ? '隐藏' : '显示完整 token'}
+            >
+              {showToken ? <EyeOff size={10} /> : <Eye size={10} />}
+            </button>
+            <button
+              type="button"
+              onClick={() => void onCopy()}
+              className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80"
+              style={{ color: 'var(--color-text-secondary)' }}
+              title="复制 Bearer 头到剪贴板"
+            >
+              <Copy size={10} />
+              {copied ? '已复制' : ''}
+            </button>
+          </>
+        )}
+        <a
+          href="https://github.com/XguihuaX/Skyler/blob/main/docs/mcp-server-setup.md"
+          target="_blank"
+          rel="noreferrer"
+          className="ml-auto text-[10px] hover:opacity-80"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          📖 配置说明
+        </a>
+      </div>
+      {!status.bearer_token_configured && (
+        <p
+          className="mt-2 text-[10px]"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          .env 里 MCP_BEARER_TOKEN 未配置 —— 当前所有调用会被 503 拒绝。生成一个：
+          <code
+            className="mx-1 px-1 rounded"
+            style={{ background: 'var(--color-bg-input)' }}
+          >
+            openssl rand -hex 32
+          </code>
+          填进 .env 后重启后端。
+        </p>
+      )}
+    </div>
+  );
+}
+
 
 // ---------------------------------------------------------------------------
 // 单张卡
@@ -327,6 +470,9 @@ export default function CapabilityPanel() {
   const [googleStatus, setGoogleStatus] = useState<GoogleStatusResponse | null>(null);
   const [googleBusy,   setGoogleBusy]   = useState(false);
 
+  // v3-G chunk 1.5：MCP server 状态。顶部 banner 显示。
+  const [mcpServerStatus, setMcpServerStatus] = useState<MCPServerStatus | null>(null);
+
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -357,10 +503,21 @@ export default function CapabilityPanel() {
     }
   }, []);
 
+  const refreshMcpServerStatus = useCallback(async () => {
+    try {
+      const s = await fetchMcpServerStatus();
+      setMcpServerStatus(s);
+    } catch (e) {
+      console.error('[CapabilityPanel] mcp server status failed:', e);
+      setMcpServerStatus(null);
+    }
+  }, []);
+
   useEffect(() => {
     void loadAll();
     void refreshGoogleStatus();
-  }, [loadAll, refreshGoogleStatus]);
+    void refreshMcpServerStatus();
+  }, [loadAll, refreshGoogleStatus, refreshMcpServerStatus]);
 
   const onCardRefresh = useCallback(async (name: string) => {
     try {
@@ -473,6 +630,9 @@ export default function CapabilityPanel() {
         无 health_check。"谁能调"标记接通方（ChatAgent 主动 / cron 定时 /
         外部 webhook）。
       </p>
+
+      {/* v3-G chunk 1.5 — Skyler 自身作 MCP server 的 banner */}
+      <MCPServerBanner status={mcpServerStatus} />
 
       {loading && items.length === 0 ? (
         <p
