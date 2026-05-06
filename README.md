@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + **v3-E1 (8 commits) + v3-E2 multi-model (9 commits) + v3-G' TTS UI + instruct emotion (5 commits + 2 patches)** done (~90% of v3) · Hiyori / Yae Miko Live2D rendering, seven-voice CosyVoice picker with real emotion control on the two instruct-aware voices (longanhuan / longanyang) · next up: v3-F' proactive dialogue → v3-G growth system.
+> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + **v3-E1 + v3-E2 + v3-G' + v3-G chunk 0 (Capability Registry foundation)** done (~92% of v3) · Hiyori / Yae Miko Live2D rendering, seven-voice CosyVoice picker with real emotion control on the two instruct-aware voices (longanhuan / longanyang), all future tools register through `@register_capability` (Time + n8n webhook receiver shipped) · next up: v3-G chunk 1+ (clipboard / daily briefing / cron NL scheduling) → v3-F' proactive dialogue.
 >
 > *Project formerly known as MomoOS — rebranded to Skyler in 2026-05.*
 
@@ -118,10 +118,19 @@ User input (voice / text)
   → ChatAgent  context assembly + LiteLLM tool calling
                 ├─ memory tools: save / delete / list / compress (LLM-driven)
                 ├─ built-in tools: ToolRegistry (MCP-extensible)
+                ├─ capabilities: @register_capability auto-injects into ToolRegistry
+                │                (v3-G chunk 0; Time + future Calendar / 网易云 / etc)
                 └─ web search: model-native (Qwen Max / DeepSeek)
   → emotion    first sentence parses <emotion>X</emotion> → locks turn emotion
   → TTS        get_tts_engine(voice_model) → CosyVoice / Edge / SoVITS
   → Output:    streamed text chunks + per-sentence audio chunks + asr_result preview
+
+Capability Registry (v3-G chunk 0):
+  @register_capability decorator → CapabilityRegistry singleton
+    ├─ Consumer.CHAT_AGENT  → auto-derived OpenAI schema → ToolRegistry → ChatAgent
+    ├─ Consumer.SCHEDULER   → APScheduler cron / interval triggers
+    └─ Consumer.WEBHOOK     → /api/webhooks/n8n/{trigger} (Bearer + HMAC auth)
+  GET /api/capabilities → frontend CapabilityPanel (cards by category, health dots)
 
 VAD state machine:
   sleep ─ click ─→ active ─ speech ─→ recording ─ silence 1.5s ─→ send → active
@@ -335,6 +344,7 @@ The life & tools agent reference. Borrowed concepts:
 | v3-F': proactive dialogue + time awareness | 📋 planned |
 | v3-G: life & tools layer (clipboard / daily briefing / cron / growth) | 📋 planned |
 | v3-G': TTS UI + cosyvoice instruct emotion | ✅ done (5 commits + 2 patches, 2026-05-06) — SSML reverted, instruct path canonical, instruction string locked to strict no-whitespace format, longanyang male voice added; Phase 2 (custom voice cloning) 📋 pending |
+| v3-G chunk 0: Capability Registry + cron + n8n webhook receiver | ✅ done (3 commits, 2026-05-06) — `@register_capability` is the canonical registration for all future tools; CapabilityPanel renders categorized cards in settings; APScheduler cron runs alongside the existing alarm scheduler; `/api/webhooks/n8n/{trigger_name}` accepts external workflow triggers behind Bearer + HMAC auth |
 | v4: Screen awareness | 📋 planned |
 | v5-D / T1 / T2: autodl + GPT-SoVITS + custom voice training | 📋 long-term |
 | v6+: Multi-device / cloud deployment | 📋 long-term |

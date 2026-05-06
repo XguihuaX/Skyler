@@ -1089,6 +1089,114 @@ v3-E2 chunk 6 给八重 (id=2) 的 `hit_area_map_json` 写好了 8 个 HitAreas 
 
 ---
 
+## 十五之A、Capability Registry 架构（v3-G chunk 0 起）
+
+v3-G chunk 0 引入的统一注册中枢。在原有 v3-C 的 ``ToolRegistry``（仅承载
+LLM tool calling 的 name → callable + OpenAI schema）之上加一层**富 metadata**
+（display_name / category / icon / consumers / trigger_modes / health_check），
+让前端"能力面板" + 后端 cron 调度 + 外部 webhook 三个消费者各看自己关心的字段。
+
+### 三个消费者 + 注册流程
+
+```
+                                   ┌────────────────────────────┐
+                                   │   @register_capability     │
+                                   │   (decorator @ import time)│
+                                   └────────────┬───────────────┘
+                                                │
+                                                ▼
+                              ┌────────────────────────────────┐
+                              │   CapabilityRegistry           │
+                              │   (单例 dict[name, Capability])│
+                              └────┬───────────┬───────────────┘
+                                   │           │
+                                   │           │  if Consumer.CHAT_AGENT in consumers
+                                   │           │  → 派生 OpenAI schema → 同步 ToolRegistry.register
+                                   │           │  → ChatAgent _get_all_tools() 自然捕获，零改 chat.py
+                                   │           ▼
+                                   │       ┌─────────────────┐
+                                   │       │  ToolRegistry   │  (v3-C 起就有)
+                                   │       └────────┬────────┘
+                                   │                │
+                                   │                ▼
+                                   │            ChatAgent ── LiteLLM tool calling
+                                   │
+       ┌───────────────────────────┼─────────────────────────────┐
+       │                           │                             │
+       ▼                           ▼                             ▼
+  Consumer.SCHEDULER          Consumer.WEBHOOK          GET /api/capabilities
+  ↓                           ↓                         ↓
+  cron_scheduler              n8n 等外部触发            前端 CapabilityPanel
+  (APScheduler 单例)          (Bearer + HMAC)           (按 category 卡片)
+  cron_expr / interval        WEBHOOK_HANDLERS          + health_check 状态点
+  schedule_cron()             dict 路由
+```
+
+### 核心数据契约
+
+```python
+# backend/capabilities/registry.py
+class Consumer(str, Enum):
+    CHAT_AGENT = "chat_agent"     # ChatAgent 主动 LLM tool calling
+    SCHEDULER  = "scheduler"       # cron / interval 定时
+    WEBHOOK    = "webhook"          # n8n / 外部事件触发
+
+class TriggerMode(str, Enum):
+    ON_DEMAND     = "on_demand"
+    SCHEDULED     = "scheduled"
+    EVENT_DRIVEN  = "event_driven"
+
+@dataclass
+class Capability:
+    name: str                              # 唯一 ID, e.g. "time.now"
+    display_name: str                      # 中文展示
+    description: str                       # 给 ChatAgent 看的 LLM-tool desc
+    category: str                          # system / calendar / music / media / creative
+    consumers: list[Consumer]
+    trigger_modes: list[TriggerMode]
+    handler: Callable                      # async；必须接受 user_id 或 **_kwargs
+    icon: str = "circle"                   # lucide-react 图标名
+    user_visible: bool = True
+    health_check: Optional[Callable] = None
+    parameters_schema: Optional[dict] = None  # JSON Schema for tool calling
+```
+
+### 路由原则（哪些 tool 给谁）
+
+| capability 类型 | consumers 应包含 | 例子 |
+|---|---|---|
+| 用户问答型（"现在几点 / 帮我搜一下 / 切换角色"） | `CHAT_AGENT` | `time.now` / 网易云 search / 切换角色 |
+| 定时任务型（"每天早上 9 点 / 每 15 分钟检查一次"） | `SCHEDULER` | 每日简报 / 健康提醒 / 角色亲密度衰减 |
+| 外部事件型（"日历事件触发 / 微信消息触发 / Bilibili 新视频"） | `WEBHOOK` | n8n trigger 派发 |
+| 跨界（既能 LLM 主动调，也能 cron 触发） | 多个 | `time.now` 既给 ChatAgent 又给 SCHEDULER 拿权威时间 |
+
+**约定**：
+
+* CHAT_AGENT consumer 必须配 `parameters_schema`（哪怕是空 object schema），
+  让 LLM 知道怎么调；非 CHAT_AGENT consumer 可省。
+* CHAT_AGENT-aware capability handler **必须**接受 `user_id` kwarg（ChatAgent
+  一定注入）。capability 本身不需要时用 `**_kwargs` 兜住。
+* `health_check` 是可选的；返回 ``{"status": "healthy"|"warn"|"error", "error"?}``，
+  也支持简短形态（True / "warn" / 抛异常）。
+
+### n8n / 外部 webhook 集成
+
+* 通道：``POST /api/webhooks/n8n/{trigger_name}``
+* 鉴权：双因子 = Bearer token + HMAC SHA256 over **raw body bytes**
+* trigger_name 注册在 ``backend/routes/webhooks_api.py`` 的 ``WEBHOOK_HANDLERS`` dict
+* handler 异步 dispatch 立即 ack，避免 n8n 30s 超时
+* 详细对接（curl 验证 / n8n credentials 配置）见 ``docs/n8n-integration.md``
+
+### scheduler 双轨
+
+* ``backend/scheduler/task.py`` AlarmScheduler —— 30s 轮询 DB 触发到期 alarm（v2.5 起）
+* ``backend/scheduler/cron.py`` cron_scheduler —— APScheduler 单例，cron / interval 任务
+
+两套 scheduler 各自 lifecycle，main.py lifespan 顺序起停。timezone 共用
+``config.yaml`` 顶层 ``scheduler.timezone``（缺省 Asia/Tokyo）。
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建
@@ -1197,11 +1305,20 @@ pixi-live2d-display 及其所有维护中的 fork（advanced / lipsyncpatch / mu
 - [ ] **TTS 预处理器**（OLV #3）—— 正则剥离 `*动作*` / `(注释)` / `[标记]` 不让 TTS 读出来；同时也要不读 `<emotion>` / `<motion>` / `<thinking>` 残留（双保险）
 - [ ] **AI 内心独白**（OLV #5）—— `<thinking>X</thinking>` 标签解析，不读出但前端显示在 status 区或独立 thoughts 抽屉
 
-#### v3-G：生活 & 工具型能力 📋 计划中（Hermes 借鉴 + DESIGN 原计划）
+#### v3-G chunk 0 ✅ 完成（2026-05-06）—— 地基：Capability Registry + cron + n8n receiver
+- [x] **Capability Registry**（`backend/capabilities/registry.py`）—— 单例，metadata + handler，``@register_capability`` 装饰器
+- [x] **API 路由**（`backend/routes/capabilities_api.py`）—— `GET /api/capabilities` 列表 + 即时 health；`POST /api/capabilities/{name}/healthcheck` 单卡刷新
+- [x] **ChatAgent 集成（零改 chat.py）**：CapabilityRegistry.register 时若 `Consumer.CHAT_AGENT` 在 consumers，自动派生 OpenAI schema 注入 ToolRegistry，ChatAgent 现有 `_get_all_tools()` 自然捕获
+- [x] **APScheduler cron**（`backend/scheduler/cron.py`）—— 与既有 AlarmScheduler 平行；timezone 从 `config.yaml` `scheduler.timezone` 读取（缺省 Asia/Tokyo）
+- [x] **Time capability**（`backend/capabilities/time_capability.py`）—— 第一个内置 capability，`time.now` 返回 `{iso, timezone, human, weekday, is_weekend}`
+- [x] **n8n webhook receiver**（`backend/routes/webhooks_api.py`）—— `POST /api/webhooks/n8n/{trigger_name}`；Bearer + HMAC SHA256 双因子鉴权；handler 异步 dispatch；详见 `docs/n8n-integration.md`
+- [x] **前端 CapabilityPanel**（`frontend/src/components/CapabilityPanel.tsx`）—— 按 category 分组的卡片视图，挂在 SettingsPanel 顶部 Section（spec "tab" → 现有单列布局做 Section 近似）
+
+#### v3-G chunk 1+：生活 & 工具型能力 📋 计划中（Hermes 借鉴 + DESIGN 原计划）
 - [ ] **剪贴板助手** —— Tauri clipboard API 监听变化，AI 可主动评论 / 翻译 / 总结复制内容
 - [ ] **每日简报** —— 自然语言定时任务（"每天早上 9 点说今天日程"）通过 ConnectionManager.push() 主动播报
 - [ ] **智能提醒** —— 比 alarm 更软的提醒，结合 profile_summary 上下文
-- [ ] **自然语言 cron 调度**（Hermes #3 借鉴）—— 扩展现有 scheduler，支持自然语言定义任意定时任务（不只是 alarm）
+- [ ] **自然语言 cron 调度**（Hermes #3 借鉴）—— 复用 chunk 0 的 APScheduler，自然语言定义任意定时任务（不只是 alarm）
 - [ ] **角色状态面板 / 成长系统**（OLV v1.4 + DESIGN 计划合并）—— 当前心情 / 亲密度 / 当前思绪 / 当前正在做什么；与 profile_summary 联动；详见 §十九
 
 #### v3-G'：TTS UI + cosyvoice instruct emotion ✅ 完成（5 commit + 2 patch，2026-05-06）

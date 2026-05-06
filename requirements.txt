@@ -14,3 +14,4 @@ pydantic-settings
 sentence-transformers
 numpy
 pyyaml
+apscheduler>=3.10

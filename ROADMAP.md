@@ -268,6 +268,24 @@
 
 ### v3-G：生活 & 工具型能力
 
+**chunk 0 ✅ 完成（2026-05-06）— 地基：Capability Registry + cron + n8n receiver**
+
+地基层：所有后续 tool（Calendar / 网易云 / Bilibili / Pollinations …）**必须**通过 ``@register_capability`` 注册到 ``backend.capabilities.CapabilityRegistry``，不再走 v3-C 时期"直接 ToolRegistry.register"路径。CapabilityRegistry 多承载了 display_name / category / icon / consumers / trigger_modes / health_check 五项 metadata，使前端 "能力面板" + 后端调度 + 鉴权三个子系统能各自只看自己关心的字段，无需互相耦合。
+
+| Hash | 内容 |
+|---|---|
+| `0549f6c` | feat(capabilities): backend Capability Registry + decorator + `/api/capabilities` 路由 + 单元测试 (18/18 通过) |
+| `54536b7` | feat(capabilities): 前端 CapabilityPanel + `lib/capabilities.ts` API client；挂在 SettingsPanel 顶部（spec 称 "tab"，但 SettingsPanel 是单列 Section 布局 → 当成顶部 Section 渲染） |
+| `<本 commit>` | feat(scheduling): APScheduler cron scheduler (与既有 AlarmScheduler 平行) + Time capability + n8n webhook receiver (Bearer + HMAC 双因子) + `docs/n8n-integration.md` |
+
+**架构决策**：
+
+1. **CapabilityRegistry 不替代 ToolRegistry**：注册时若 ``Consumer.CHAT_AGENT`` 在 consumers，自动派生 OpenAI schema 同步注入 ``ToolRegistry`` —— ``backend/agents/chat.py`` 的 ``_get_all_tools()`` 零改动。
+2. **scheduler 双轨**：``backend/scheduler/task.py`` 保留为 AlarmScheduler（30s 轮询 DB 到期 alarm，v2.5 起就有），``backend/scheduler/cron.py`` 新增 APScheduler 跑 cron / interval。lifespan 顺序起停。
+3. **n8n webhook**：双因子鉴权（Bearer + HMAC SHA256 over raw body bytes），handler 异步 dispatch 立即 ack，避免 n8n 默认 30s 超时。当前注册 `test` trigger 一个，作 echo demo。
+
+**v3-G chunk 1+ 后续顺序**（以下都是建立在 chunk 0 之上）：
+
 **1. 剪贴板助手**
 
 - Tauri 2 plugin-clipboard-manager 注册 clipboard 监听
