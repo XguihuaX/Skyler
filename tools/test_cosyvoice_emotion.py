@@ -16,7 +16,8 @@ v3-G' 收官验收工具。隔离一切上层因素（LLM、WebSocket 路由、e
 * emotion 跑 4 次：happy / sad / angry / neutral
 
 调用形态与生产一致（backend/tts/cosyvoice.py:_blocking_synthesize）：
-  - happy / sad / angry → 传 ``instruction="你说话的情感是 X。"``
+  - happy / sad / angry → 传 ``instruction="你说话的情感是X。"``（无空格，
+    严格匹配 DashScope 系统音色 instruct 文档要求；v3-G' patch 修正）
   - neutral            → 不传 instruction（plain 调用，用作对照基线）
 
 输出
@@ -33,6 +34,26 @@ from pathlib import Path
 import dashscope
 from dashscope.audio.tts_v2 import AudioFormat, SpeechSynthesizer
 from dotenv import load_dotenv
+
+
+# DashScope SDK 内部把 WebSocket 建链超时硬编码为 5s（speech_synthesizer.py:526
+# 写死 ``self.__connect(5)``）。在网络抖动 / 跨境链路 / 弱代理环境下经常不够。
+# 测试脚本里把超时放宽到 30s——只影响这个进程，不动生产路径。生产 cosyvoice.py
+# 出现同样问题应单独评估（重试 / 升级 SDK / 反馈上游），不要简单照抄此 patch。
+def _patch_connect_timeout(seconds: int = 30) -> None:
+    from dashscope.audio.tts_v2 import speech_synthesizer as _ss
+
+    orig = _ss.SpeechSynthesizer._SpeechSynthesizer__connect
+
+    # SDK 在多个 call site 用不同位置参数调用 __connect（line 526 传 5，
+    # line 841/906/916 不传），强制忽略原始 timeout 始终用我们的放宽值。
+    def patched(self, *_args, **_kwargs) -> None:
+        return orig(self, seconds)
+
+    _ss.SpeechSynthesizer._SpeechSynthesizer__connect = patched
+
+
+_patch_connect_timeout(30)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -55,7 +76,7 @@ def _build_kwargs(emotion: str) -> tuple[dict, str | None]:
     }
     # 与生产白名单 _INSTRUCT_EMOTION_WHITELIST 对齐（不含 neutral）
     if emotion in {"happy", "sad", "angry", "surprised"}:
-        instruction = f"你说话的情感是 {emotion}。"
+        instruction = f"你说话的情感是{emotion}。"
         kwargs["instruction"] = instruction
         return kwargs, instruction
     return kwargs, None

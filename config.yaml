@@ -65,3 +65,7 @@ tts:
         label: 龙安欢
         traits: 欢脱元气女
         instruct: true
+      - id: longanyang
+        label: 龙安洋
+        traits: 阳光大男孩
+        instruct: true

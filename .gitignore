@@ -27,6 +27,9 @@ frontend/dist/
 # CC 内部 chunk 报告（每个 chunk 生成一份 markdown，本地工作记录，不进 git）
 .skyler-cc-reports/
 
+# 测试脚本生成的音频样本（独立验证用，体积大、可重复生成，不进 git）
+tools/output/
+
 # ==============================
 # Live2D 角色资产 IP 风险隔离 (v3-E2)
 # ==============================

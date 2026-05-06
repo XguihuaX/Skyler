@@ -27,10 +27,13 @@ instruct 调用形态（venv 已 audit，不靠印象）：
   ``speech_synthesizer.py:218-219`` 调用时 ``cmd["payload"]["parameters"]
       ["instruction"] = self.instruction``，进入 WebSocket payload。
 
-我们传的字符串是自然语言指令： ``"你说话的情感是 {emotion}。"``（结尾必
-须有句号；前导空格按 DashScope 文档示例保留）。emotion 用文档列出的 7
-个英文枚举：``neutral / fearful / angry / sad / surprised / happy /
-disgusted``。
+我们传的字符串是自然语言指令： ``"你说话的情感是{emotion}。"``。系统音色
+（含 longanhuan / longanyang）的 instruction **必须严格匹配文档列出的固定
+格式**，emotion 与"是"之间**不能**有空格——曾经按"前导空格"误读文档示
+例，结果 longanhuan 用不严格格式时会被服务端返 ``InvalidParameter 428``。
+参考：https://help.aliyun.com/zh/model-studio/cosyvoice-voice-list 中
+longanhuan 段的 Instruct 设置。emotion 用文档列出的 7 个英文枚举：
+``neutral / fearful / angry / sad / surprised / happy / disgusted``。
 
 硬约束：**只有 instruct-aware 音色支持此路径**（即 config.yaml 标
 ``instruct: true`` 的音色，目前只有 ``longanhuan``）。其他音色传 instruction
@@ -126,7 +129,7 @@ class CosyVoiceTTS(TTSBase):
 
         emotion 路由：
           - 音色 ``instruct_supported=True`` 且 emotion 在白名单 → 传
-            ``instruction="你说话的情感是 X。"`` 走真情感引导
+            ``instruction="你说话的情感是X。"`` 走真情感引导
           - 否则（音色不支持 / emotion 未引导 / neutral）→ plain text，emotion
             字段静默丢弃（SDK 没渠道接收，不报错）
         """
@@ -141,9 +144,10 @@ class CosyVoiceTTS(TTSBase):
             and emotion_en in _INSTRUCT_EMOTION_WHITELIST
         )
         if emotion_active:
-            # 文档示例的 instruction 形态："你说话的情感是 {emotion}。"
-            # 前导空格 + 句号都按 DashScope CosyVoice instruct 文档保留。
-            instruction = f"你说话的情感是 {emotion_en}。"
+            # 文档严格格式："你说话的情感是{emotion}。"
+            # 注意：emotion 与"是"之间**不能**有空格，否则系统音色会返
+            # InvalidParameter 428（v3-G' patch 修正）。
+            instruction = f"你说话的情感是{emotion_en}。"
             kwargs["instruction"] = instruction
             logger.debug(
                 '[CosyVoice instruct] voice=%s emotion=%s instruction="%s"',
