@@ -15,3 +15,8 @@ sentence-transformers
 numpy
 pyyaml
 apscheduler>=3.10
+# v3-G chunk 1 — Google Calendar OAuth + API client + retry
+google-auth>=2.30
+google-auth-oauthlib>=1.0
+google-api-python-client>=2.100
+tenacity>=8.0
