@@ -268,6 +268,33 @@
 
 ### v3-G：生活 & 工具型能力
 
+**chunk 1.5 ✅ 完成（2026-05-07）— 双向 MCP 集成（暴露 server + 调用外部 client）**
+
+让 Skyler 同时是 MCP server（把 capability 自动派生暴露给 Claude Desktop / Cursor / Claude Code 等外部 LLM 工具）和 MCP client（连接外部 MCP server，反向把对方 tool 注册成 capability）。**统一抽象**：一份 CapabilityRegistry，三种来源：(1) 内置 Python decorator；(2) 外部 MCP server 派生（runtime 注册）；(3) 内部 → 外部暴露（自动从 1+2 派生，按 `expose_via_server` 过滤）。
+
+| Hash | 内容 |
+|---|---|
+| `6714374` | feat(mcp): expose capability registry as mcp server —— `backend/mcp/server.py` 用 `mcp.server.lowlevel.Server` + `@list_tools/@call_tool` 装饰器从 CapabilityRegistry 实时派生 tool；`StreamableHTTPSessionManager` 走 SSE 流；FastAPI mount `/mcp` + Bearer auth；CapabilityRegistry 加 `metadata` 字段 + `register_runtime` / `unregister_runtime`；前端 banner 显示 endpoint + 遮蔽 token + [👁][📋] 按钮 + 配置链接 |
+| `7544df5` | feat(mcp): connect external mcp servers as capabilities —— `backend/mcp/client.py` 支持 stdio + streamable HTTP transport；环境变量插值（`${HOME}` / `${BRAVE_API_KEY}`）；closure 默认参数固化 tool name 解决循环捕获；外部 capability metadata 带 `source_server` + `expose_via_server`；MCP server 派生层按 `expose_via_server` 过滤；启动失败**不阻塞**主流程；`/api/mcp/clients/status` + `/{name}/reconnect`；前端外部 servers 状态条 + `[ext · server]` 卡片徽章 |
+| `<本 commit>` | docs(mcp): bidirectional setup guides —— `docs/mcp-server-setup.md`（Claude Desktop / Cursor / Claude Code / mcp inspector 配置）+ `docs/mcp-client-setup.md`（filesystem 与 brave-search 完整示例 + expose_via_server 取舍 + 故障排查 + 命名空间约定 `ext.<server>.<tool>`） |
+
+**架构验证**：
+
+* CapabilityRegistry 现在同时支持 import-time decorator（chunk 0）+ runtime register（chunk 1.5）—— 两条路径 API 一致，`metadata` 字段是关键扩展点
+* ChatAgent `_get_all_tools()` 路径**零改动**：runtime 注册的外部 capability 自动同步到 ToolRegistry → ChatAgent 看见
+* 内部 capability + 外部 reverse-registered capability + Skyler 自身的 MCP server expose **三个消费者共用同一份 CapabilityRegistry** —— 这是统一抽象的核心
+* 外部 server 启动失败仅 log warning，主进程继续；UI 显示红点 + last_error，可手动 [重连]
+
+**测试覆盖**：109/109 个 case 全过（capability_registry 18 + cron_time_webhook 20 + google_calendar 21 + briefing 11 + mcp_server 22 + mcp_client 28，跨 6 个测试套件）
+
+**Backlog**：
+
+* OAuth-protected MCP server（用 mcp SDK 内置 OAuth provider 替代 Bearer）—— 当 Skyler 部署到远程 / 多用户场景时
+* 外部 server tool list 变更监听（当前 init 时拉一次；外部 hot-add tool 需要 reconnect）
+* Resource / Prompt 类型的派生（当前只暴露 tool；MCP 标准还有 resources / prompts 两类）
+
+---
+
 **chunk 1 ✅ 完成（2026-05-07）— Google Calendar 接入 + 起床简报 v0.1**
 
 第一个真实第三方 tool 落地，验证 capability 抽象层在真实场景能撑住整套链路（OAuth + 重试 + 健康检查 + 前端授权 UI + cron + 简报生成）。chunk 0 的 4 行 pattern 在 calendar.py 里得到验证：

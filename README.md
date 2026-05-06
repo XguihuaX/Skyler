@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + **v3-E1 + v3-E2 + v3-G' + v3-G chunk 0 (Capability Registry) + v3-G chunk 1 (Google Calendar + morning briefing v0.1)** done (~93% of v3) · Hiyori / Yae Miko Live2D rendering, seven-voice CosyVoice picker with real emotion control, all tools register through `@register_capability`, Google Calendar wired in via two-layer integrations/capabilities split, template-based morning briefing scheduled daily · next up: v3-G chunk 2 (briefing intelligence + proactive audio) → clipboard / cron NL scheduling.
+> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + v3-E1/E2 + v3-G' + **v3-G chunks 0 + 1 + 1.5** done (~94% of v3) · Live2D + seven-voice CosyVoice + Capability Registry + Google Calendar + morning briefing + **bi-directional MCP integration** (Skyler exposes its capabilities as an MCP server *and* connects to external MCP servers like filesystem / brave-search, all via the same registry) · next up: v3-G chunk 2 (briefing intelligence + proactive audio) → clipboard / cron NL scheduling.
 >
 > *Project formerly known as MomoOS — rebranded to Skyler in 2026-05.*
 
@@ -137,6 +137,26 @@ Two-layer integrations (v3-G chunk 1):
   backend/capabilities/<service>.py     5-line @register_capability per action
   First service wired in: Google Calendar (today_events + upcoming_events)
   Morning briefing cron @ 09:00 → template v0.1 → ConnectionManager.push notify + Momo wav
+
+Bidirectional MCP (v3-G chunk 1.5):
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  CapabilityRegistry  ←  decorator  | runtime  | aggregator      │
+  │                                                                 │
+  │  Source 1: @register_capability    (built-in: time / calendar) │
+  │  Source 2: register_runtime        (external MCP → ext.*.*)    │
+  │  Source 3: list_for_consumer       (CHAT_AGENT subset to expose)│
+  └──────┬──────────────────┬─────────────────────────┬─────────────┘
+         │                  │                         │
+         ▼                  ▼                         ▼
+  Internal ChatAgent   APScheduler / Webhook    POST /mcp (Bearer)
+  (LiteLLM tools)      (cron / event-driven)    Claude Desktop / Cursor
+                                                 ↑
+                                                 │ (also: Skyler-as-client)
+                                                 │ stdio_client / streamablehttp_client
+                                                 │ → reverse-register external tools
+                                                 │   as ext.<server>.<tool>
+  Per-capability `metadata.expose_via_server` controls whether external
+  MCP servers' tools get re-exposed via Skyler's own /mcp.
 
 VAD state machine:
   sleep ─ click ─→ active ─ speech ─→ recording ─ silence 1.5s ─→ send → active
@@ -352,6 +372,7 @@ The life & tools agent reference. Borrowed concepts:
 | v3-G': TTS UI + cosyvoice instruct emotion | ✅ done (5 commits + 2 patches, 2026-05-06) — SSML reverted, instruct path canonical, instruction string locked to strict no-whitespace format, longanyang male voice added; Phase 2 (custom voice cloning) 📋 pending |
 | v3-G chunk 0: Capability Registry + cron + n8n webhook receiver | ✅ done (3 commits, 2026-05-06) — `@register_capability` is the canonical registration for all future tools; CapabilityPanel renders categorized cards in settings; APScheduler cron runs alongside the existing alarm scheduler; `/api/webhooks/n8n/{trigger_name}` accepts external workflow triggers behind Bearer + HMAC auth |
 | v3-G chunk 1: Google Calendar + morning briefing v0.1 | ✅ done (3 commits, 2026-05-07) — `backend/integrations/` (low-level client) and `backend/capabilities/` (decorator layer) split established; Google Calendar OAuth desktop flow with auto-refresh + tenacity retry + health check that degrades to warn on transient network errors (China-friendly); two calendar capabilities (today / upcoming) auto-injected into ChatAgent tools; CapabilityPanel calendar cards expose [Connect Google] / [Re-authorize] buttons; morning briefing cron at 09:00 (template v0.1, ChatAgent intelligence in chunk 2); `[🧪 测试今日简报]` test button in panel; setup guide in `docs/google-calendar-setup.md` |
+| v3-G chunk 1.5: Bidirectional MCP integration | ✅ done (3 commits, 2026-05-07) — Skyler exposes CapabilityRegistry as a streamable HTTP MCP server (`POST /mcp` with Bearer auth), so Claude Desktop / Cursor / Claude Code can call `time.now`, `calendar.*`, etc.; Skyler also acts as an MCP client connecting to external servers (e.g. Anthropic's filesystem / brave-search) via stdio or HTTP, reverse-registering their tools as `ext.<server>.<tool>` capabilities that ChatAgent picks up automatically; per-server `expose_via_skyler_server` toggle prevents API-quota leakage; CapabilityRegistry now supports both decorator-time and runtime registration with shared `metadata` field; setup guides in `docs/mcp-{server,client}-setup.md` |
 | v4: Screen awareness | 📋 planned |
 | v5-D / T1 / T2: autodl + GPT-SoVITS + custom voice training | 📋 long-term |
 | v6+: Multi-device / cloud deployment | 📋 long-term |

@@ -1248,6 +1248,56 @@ backend/capabilities/<service>.py        ──┐
 scope 升级（如未来要加创建事件能力）必须先 revoke 当前 token，再重新 OAuth flow，
 否则 Google API 会返 403 insufficient scope。
 
+### MCP 双向架构（v3-G chunk 1.5 起）
+
+CapabilityRegistry 是统一抽象核心，三种来源 + 三种消费者形成完整的 MCP 双
+向网格：
+
+```
+                            ┌──────────────────────────────────────────────┐
+                            │           CapabilityRegistry                 │
+                            │   单例 dict[str, Capability]                  │
+                            │   metadata: source_server / expose_via_server│
+                            └────┬────────────────┬───────────────────┬────┘
+                                 │                │                   │
+        ┌────────────────────────┘                │                   └─────────────────────────────────┐
+        │  来源 1：import-time                    │  来源 2：runtime               来源 3：聚合（无新数据）  │
+        │  @register_capability                   │  register_runtime               list_for_consumer       │
+        │  decorator @ python import              │  外部 MCP server 派生           CHAT_AGENT 子集          │
+        │  内置 capability                        │  ext.<server>.<tool>           + expose_via_server 过滤  │
+        │  (time.now / calendar.* / …)            │  (filesystem / brave-search …)                          │
+        ▼                                         ▼                                                         ▼
+                                  ┌──────────────────────────────────────────┐
+                                  │             ToolRegistry                 │
+                                  │  ChatAgent.acompletion(tools=...)        │
+                                  └──────────────────────────────────────────┘
+                                                  ▲
+                                                  │ ChatAgent 主动 LLM tool calling
+                                                  │
+                                  ┌──────────────────────────────────────────┐
+                                  │             ChatAgent                    │
+                                  └──────────────────────────────────────────┘
+
+  消费者 1：内部 ChatAgent（已有 chunk 0）
+  消费者 2：外部 MCP server (POST /mcp)  ← Skyler 自身 server.py 暴露 ←─ 按 expose_via_server 过滤
+  消费者 3：APScheduler / Webhook（chunk 0 已有）
+
+  外部 LLM 工具 (Claude Desktop / Cursor / Claude Code) → POST /mcp + Bearer →
+  Skyler.MCP server.list_tools() → 派生 list[Tool] → 返还给上游 LLM 看见的 tools
+  上游调 → POST /mcp → Skyler.MCP server.call_tool() → 路由到 capability.handler
+
+  Skyler 内部 ChatAgent 调外部 MCP server tool：
+  ChatAgent → ToolRegistry.call("ext.fs.read_file", ...) → capability.handler （即 closure）
+  → ClientSession.call_tool("read_file", args) → JSON-RPC over stdio → 子进程响应
+```
+
+**为什么"统一抽象"很关键**：
+
+* 加新能力的成本极低 —— 不论来源是 Python 函数、外部 MCP server、还是其他 SDK 内置工具，写一份 capability metadata 即可被 ChatAgent / Scheduler / 外部 LLM 三方同时看见
+* 命名空间隔离：内置 = `category.action`（time.now / calendar.today_events），外部 = `ext.<server>.<tool>`，永不撞名
+* 暴露策略集中在 `metadata.expose_via_server` 一个字段 —— 默认全暴露，需要时候按 server 关掉（防 API 配额泄露 / 防代理混乱）
+* health check / category / icon 等 UI 元数据不改 capability handler 接口
+
 ---
 
 ## 十六、开发进度
@@ -1357,6 +1407,23 @@ pixi-live2d-display 及其所有维护中的 fork（advanced / lipsyncpatch / mu
 - [ ] **TTS 多段并发合成**（OLV #2）—— 当前是 sentence-by-sentence 串行，改为并发合成 + 顺序播放，砍首句到末句的等待时间
 - [ ] **TTS 预处理器**（OLV #3）—— 正则剥离 `*动作*` / `(注释)` / `[标记]` 不让 TTS 读出来；同时也要不读 `<emotion>` / `<motion>` / `<thinking>` 残留（双保险）
 - [ ] **AI 内心独白**（OLV #5）—— `<thinking>X</thinking>` 标签解析，不读出但前端显示在 status 区或独立 thoughts 抽屉
+
+#### v3-G chunk 1.5 ✅ 完成（2026-05-07）—— 双向 MCP 集成
+- [x] **`backend/mcp/server.py`** —— `Server` (lowlevel) + `@list_tools`/`@call_tool` 装饰器从 CapabilityRegistry 实时派生；`StreamableHTTPSessionManager(stateless=True, json_response=False)` 提供 SSE 流；mount `/mcp` 经 FastAPI raw ASGI 通道；Bearer 鉴权在 mount 前 middleware-style
+- [x] **`backend/mcp/client.py`** —— 支持 stdio (`mcp.client.stdio.stdio_client`) + streamable HTTP (`mcp.client.streamable_http.streamablehttp_client`) 两种 transport；外部 tool 反向注册成 `ext.<server>.<tool>` 命名空间 capability；closure 默认参数固化 tool name；启动失败**不阻塞** lifespan
+- [x] **CapabilityRegistry 扩展** —— 加 `metadata` 字段（`source_server` / `expose_via_server` 两个语义 key）+ `register_runtime` / `unregister_runtime`（与 `register` 一致 + 同步清 ToolRegistry）
+- [x] **`backend/routes/mcp_api.py`** —— `GET /api/mcp/server/status` + `GET /api/mcp/clients/status` + `POST /api/mcp/clients/{name}/reconnect`；`/mcp` endpoint 鉴权 → SessionManager.handle_request 接管 ASGI
+- [x] **`backend/main.py` lifespan**：步骤 8 起 SessionManager (`async with .run()`)，步骤 9 init_clients_from_config（失败仅 log warning），yield 后反向 shutdown
+- [x] **前端 CapabilityPanel banner + 外部 servers 状态条** —— banner 显示 endpoint + 遮蔽 token + [👁]/[📋] 按钮；外部 servers 红/绿/灰圆点 + tool 数 + last_error + [重连] 按钮；外部 capability 卡片加 `[ext · server]` 徽章
+- [x] **`docs/mcp-server-setup.md` + `docs/mcp-client-setup.md`** —— Claude Desktop / Cursor / Claude Code / mcp inspector 配置；filesystem + Brave Search 完整示例；`expose_via_server` 取舍；故障排查表
+
+**关键决策**：
+
+1. **CapabilityRegistry 是统一抽象核心**：runtime 注册 + decorator 注册走同一 `register()` 实现，仅语义别名 `register_runtime` 区分意图。三种来源（内置 / 外部反向 / 自身暴露）共用同一份 registry。
+2. **服务端 `/mcp` 走 raw ASGI 而非 FastAPI body parsing**：mcp SDK 的 SessionManager 直接接 scope/receive/send（流式 SSE），不能走 `@router.post` 路径。`add_api_route` 注册 GET / POST / DELETE 三方法到自定义 endpoint 函数。
+3. **closure 默认参数固化 tool name**：循环里 `def handler(...): return session.call_tool(tool.name, ...)` 会让所有 handler 共享最后一次循环的 `tool.name`。`def make_handler(_session=session, _tname=tool.name): ...` 默认参数在 def 时求值，正确隔离。
+4. **`expose_via_server` 双向语义**：内部 capability 默认 True；外部 reverse-registered 按 `mcp_clients.<name>.expose_via_skyler_server` 配置。MCP server 派生 tool 列表时统一按此过滤，避免 Brave search 这类带 API 配额的外部 server 被多级转发。
+5. **外部 server 失败不阻塞主进程**：`init_clients_from_config` 内 `try/except` 包每个 client，失败 → `last_error` 标记 + UI 红点。Skyler 主功能（聊天 / 内置 capability / MCP server 暴露）不受影响。
 
 #### v3-G chunk 1 ✅ 完成（2026-05-07）—— Google Calendar 接入 + 起床简报 v0.1
 - [x] **`backend/integrations/google_calendar.py`** —— OAuth 2.0 desktop flow（`run_local_server`） + token.json 自动 refresh + `googleapiclient.discovery.build` 单例懒加载 + tenacity 重试（3 次指数退避，触发 OSError / HttpError / TimeoutError）+ `health_check` 三档（healthy / warn / error，网络异常降级 warn 不刷红）；凭证路径 `~/.skyler/google_credentials.json` + token `~/.skyler/google_token.json`；scope `calendar.readonly`
