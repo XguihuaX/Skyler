@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + **v3-E1 + v3-E2 + v3-G' + v3-G chunk 0 (Capability Registry foundation)** done (~92% of v3) · Hiyori / Yae Miko Live2D rendering, seven-voice CosyVoice picker with real emotion control on the two instruct-aware voices (longanhuan / longanyang), all future tools register through `@register_capability` (Time + n8n webhook receiver shipped) · next up: v3-G chunk 1+ (clipboard / daily briefing / cron NL scheduling) → v3-F' proactive dialogue.
+> **Status (May 2026)**: v2.7 backend & UI complete · v3-A/B/C/D + **v3-E1 + v3-E2 + v3-G' + v3-G chunk 0 (Capability Registry) + v3-G chunk 1 (Google Calendar + morning briefing v0.1)** done (~93% of v3) · Hiyori / Yae Miko Live2D rendering, seven-voice CosyVoice picker with real emotion control, all tools register through `@register_capability`, Google Calendar wired in via two-layer integrations/capabilities split, template-based morning briefing scheduled daily · next up: v3-G chunk 2 (briefing intelligence + proactive audio) → clipboard / cron NL scheduling.
 >
 > *Project formerly known as MomoOS — rebranded to Skyler in 2026-05.*
 
@@ -131,6 +131,12 @@ Capability Registry (v3-G chunk 0):
     ├─ Consumer.SCHEDULER   → APScheduler cron / interval triggers
     └─ Consumer.WEBHOOK     → /api/webhooks/n8n/{trigger} (Bearer + HMAC auth)
   GET /api/capabilities → frontend CapabilityPanel (cards by category, health dots)
+
+Two-layer integrations (v3-G chunk 1):
+  backend/integrations/<service>.py     low-level client (OAuth, retry, health)
+  backend/capabilities/<service>.py     5-line @register_capability per action
+  First service wired in: Google Calendar (today_events + upcoming_events)
+  Morning briefing cron @ 09:00 → template v0.1 → ConnectionManager.push notify + Momo wav
 
 VAD state machine:
   sleep ─ click ─→ active ─ speech ─→ recording ─ silence 1.5s ─→ send → active
@@ -345,6 +351,7 @@ The life & tools agent reference. Borrowed concepts:
 | v3-G: life & tools layer (clipboard / daily briefing / cron / growth) | 📋 planned |
 | v3-G': TTS UI + cosyvoice instruct emotion | ✅ done (5 commits + 2 patches, 2026-05-06) — SSML reverted, instruct path canonical, instruction string locked to strict no-whitespace format, longanyang male voice added; Phase 2 (custom voice cloning) 📋 pending |
 | v3-G chunk 0: Capability Registry + cron + n8n webhook receiver | ✅ done (3 commits, 2026-05-06) — `@register_capability` is the canonical registration for all future tools; CapabilityPanel renders categorized cards in settings; APScheduler cron runs alongside the existing alarm scheduler; `/api/webhooks/n8n/{trigger_name}` accepts external workflow triggers behind Bearer + HMAC auth |
+| v3-G chunk 1: Google Calendar + morning briefing v0.1 | ✅ done (3 commits, 2026-05-07) — `backend/integrations/` (low-level client) and `backend/capabilities/` (decorator layer) split established; Google Calendar OAuth desktop flow with auto-refresh + tenacity retry + health check that degrades to warn on transient network errors (China-friendly); two calendar capabilities (today / upcoming) auto-injected into ChatAgent tools; CapabilityPanel calendar cards expose [Connect Google] / [Re-authorize] buttons; morning briefing cron at 09:00 (template v0.1, ChatAgent intelligence in chunk 2); `[🧪 测试今日简报]` test button in panel; setup guide in `docs/google-calendar-setup.md` |
 | v4: Screen awareness | 📋 planned |
 | v5-D / T1 / T2: autodl + GPT-SoVITS + custom voice training | 📋 long-term |
 | v6+: Multi-device / cloud deployment | 📋 long-term |

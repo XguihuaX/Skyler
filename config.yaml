@@ -69,3 +69,13 @@ tts:
         label: 龙安洋
         traits: 阳光大男孩
         instruct: true
+
+# v3-G chunk 1 — 起床简报（v0.1：模板拼接，chunk 2 升级 ChatAgent 智能版）
+briefing:
+  enabled: true
+  cron: "0 9 * * *"     # 默认本地时区 09:00；时区按 scheduler.timezone（默认 Asia/Tokyo）
+  voice: null            # null = 用 Momo (id=1) 当前 voice_model；后续可填具体 voice JSON
+
+# v3-G chunk 0 — APScheduler 单例时区
+scheduler:
+  timezone: Asia/Tokyo

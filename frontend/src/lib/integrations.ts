@@ -40,3 +40,22 @@ export async function revokeGoogleAuth(): Promise<GoogleAuthResponse> {
   if (!res.ok) throw new Error(`google revoke failed: ${res.status}`);
   return (await res.json()) as GoogleAuthResponse;
 }
+
+// ---------------------------------------------------------------------------
+// v3-G chunk 1 — 起床简报测试触发
+// ---------------------------------------------------------------------------
+
+export interface BriefingTestResponse {
+  text: string;
+  audio_path: string | null;
+  audio_bytes: number;
+  voice_model: string | null;
+}
+
+export async function triggerTestBriefing(): Promise<BriefingTestResponse> {
+  const res = await fetch(`${BACKEND_BASE}/api/briefing/test`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`briefing test failed: ${res.status}`);
+  return (await res.json()) as BriefingTestResponse;
+}

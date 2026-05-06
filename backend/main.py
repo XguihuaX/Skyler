@@ -50,6 +50,7 @@ from backend.database.migrations.v3_g_default_voice import (
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
+from backend.routes.briefing_api import router as briefing_router
 from backend.routes.capabilities_api import router as capabilities_router
 from backend.routes.characters_api import router as characters_router
 from backend.routes.config_api import router as config_router
@@ -199,6 +200,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── 6. v3-G chunk 0 — Cron scheduler (APScheduler) ──────────────────────
     await cron_scheduler.start()
 
+    # ── 7. v3-G chunk 1 — Morning briefing cron（如启用）─────────────────
+    briefing_cfg = config_yaml.get("briefing") or {}
+    if briefing_cfg.get("enabled", False):
+        from backend.scheduler.briefing import deliver_morning_briefing
+        cron_expr = str(briefing_cfg.get("cron") or "0 9 * * *")
+        try:
+            cron_scheduler.schedule_cron(
+                "morning_briefing", cron_expr, deliver_morning_briefing,
+            )
+            logger.info("Morning briefing cron registered: %s", cron_expr)
+        except ValueError:
+            # 重复注册时不破坏 lifespan（比如 hot-reload）
+            logger.info("Morning briefing cron already registered")
+
     yield
 
     await cron_scheduler.shutdown()
@@ -234,4 +249,5 @@ app.include_router(tts_router,           prefix="/api", tags=["tts"])
 app.include_router(capabilities_router,  prefix="/api", tags=["capabilities"])
 app.include_router(integrations_router,  prefix="/api", tags=["integrations"])
 app.include_router(webhooks_router,      prefix="/api", tags=["webhooks"])
+app.include_router(briefing_router,      prefix="/api", tags=["briefing"])
 app.include_router(ws_router,                            tags=["websocket"])

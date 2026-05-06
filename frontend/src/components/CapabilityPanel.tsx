@@ -32,6 +32,7 @@ import {
   fetchGoogleStatus,
   revokeGoogleAuth,
   startGoogleAuth,
+  triggerTestBriefing,
   type GoogleStatusResponse,
 } from '../lib/integrations';
 
@@ -401,6 +402,30 @@ export default function CapabilityPanel() {
     }
   }, [loadAll, refreshGoogleStatus]);
 
+  // v3-G chunk 1：起床简报测试。后端 deliver_morning_briefing 会推 notify
+  // 到 ws → 前端弹 toast；同时返回 metadata（含合成的 wav 路径），这里把
+  // 文本展示出来给用户即时反馈，audio_path 进 console 方便用 afplay 验。
+  const [briefingBusy,    setBriefingBusy]    = useState(false);
+  const [briefingPreview, setBriefingPreview] = useState<string | null>(null);
+
+  const onTestBriefing = useCallback(async () => {
+    setBriefingBusy(true);
+    setBriefingPreview(null);
+    try {
+      const res = await triggerTestBriefing();
+      setBriefingPreview(res.text);
+      console.info(
+        '[briefing test] text=%s audio_path=%s audio_bytes=%d voice_model=%s',
+        res.text, res.audio_path, res.audio_bytes, res.voice_model,
+      );
+    } catch (e) {
+      console.error('[CapabilityPanel] briefing test failed:', e);
+      setBriefingPreview(`触发失败：${(e as Error).message}`);
+    } finally {
+      setBriefingBusy(false);
+    }
+  }, []);
+
   // 按 category 分组（用 useMemo 避免每次渲染重排）。
   const grouped = useMemo(() => {
     const out: Record<string, CapabilityDTO[]> = {};
@@ -474,12 +499,44 @@ export default function CapabilityPanel() {
         <div className="space-y-4">
           {categories.map((cat) => (
             <div key={cat}>
-              <h4
-                className="text-[11px] mb-2 uppercase tracking-wide"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                {cat}
-              </h4>
+              <div className="flex items-center justify-between mb-2">
+                <h4
+                  className="text-[11px] uppercase tracking-wide"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  {cat}
+                </h4>
+                {/* v3-G chunk 1：calendar 类目右侧加测试简报按钮 */}
+                {cat === 'calendar' && (
+                  <button
+                    type="button"
+                    onClick={() => void onTestBriefing()}
+                    disabled={briefingBusy}
+                    className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+                    style={{
+                      background: 'var(--color-bg-elevated)',
+                      color: 'var(--color-text-primary)',
+                      border: '1px solid var(--color-border-subtle)',
+                    }}
+                    title="立刻触发一次起床简报（v0.1 模板版）"
+                  >
+                    🧪 {briefingBusy ? '生成中…' : '测试今日简报'}
+                  </button>
+                )}
+              </div>
+              {/* 简报触发后，把生成的文本预览出来 */}
+              {cat === 'calendar' && briefingPreview && (
+                <p
+                  className="text-[11px] mb-2 px-2 py-1 rounded"
+                  style={{
+                    background: 'var(--color-bg-elevated)',
+                    color: 'var(--color-text-primary)',
+                    border: '1px solid var(--color-border-subtle)',
+                  }}
+                >
+                  {briefingPreview}
+                </p>
+              )}
               <div className="space-y-2">
                 {grouped[cat].map((cap) => (
                   <CapabilityCard

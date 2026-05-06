@@ -1191,9 +1191,62 @@ class Capability:
 
 * ``backend/scheduler/task.py`` AlarmScheduler —— 30s 轮询 DB 触发到期 alarm（v2.5 起）
 * ``backend/scheduler/cron.py`` cron_scheduler —— APScheduler 单例，cron / interval 任务
+* ``backend/scheduler/briefing.py`` —— 起床简报 cron 任务（v3-G chunk 1 起）
 
 两套 scheduler 各自 lifecycle，main.py lifespan 顺序起停。timezone 共用
 ``config.yaml`` 顶层 ``scheduler.timezone``（缺省 Asia/Tokyo）。
+
+### 两层架构：integrations vs capabilities（v3-G chunk 1 起）
+
+接入第三方服务时严格走两层：
+
+```
+backend/integrations/<service>.py        ──┐
+  - OAuth flow / token refresh             │  底层 client：认证 + 重试 + 健康检查
+  - API call wrappers                      │  **不带** @register_capability
+  - tenacity 重试                          │  纯 Python module，可独立 mock 测
+  - health_check() 函数                   ──┘
+        ▲
+        │ 被调用
+        │
+backend/capabilities/<service>.py        ──┐
+  @register_capability(...)                │  上层 capability：5 行装饰器即接入
+  async def some_action(**_kwargs):        │  category / consumers / trigger_modes
+      return await client.some_call(...)   │  parameters_schema / icon / health_check
+                                          ──┘
+```
+
+**第一次落地**（v3-G chunk 1）：``backend/integrations/google_calendar.py`` 是底
+层 client；``backend/capabilities/calendar.py`` 注册 ``calendar.today_events`` /
+``calendar.upcoming_events`` 两个 capability，handler 仅 1-3 行，调底层 list_events_in_range。
+
+**好处**：
+
+* 底层 client 改实现（换 SDK、加重试策略、调 scope）不动 capability metadata
+* capability 增减 / 改 description 不动 client
+* 单元测试在 integrations 层 mock SDK；capability 层只测 metadata 注册和参数 clamping
+* 后续接入 网易云 / Bilibili / Pollinations 都按这个 pattern：先底层 client，再装饰器
+
+### Google Calendar OAuth flow
+
+```
+1. 用户在 Google Cloud Console 下载 OAuth desktop client.json
+2. 手工放到 ~/.skyler/google_credentials.json
+3. 前端能力面板点 [连接 Google] → POST /api/integrations/google/auth
+4. 后端 asyncio.to_thread(run_oauth_flow):
+   - InstalledAppFlow.from_client_secrets_file(...)
+   - flow.run_local_server(port=0)        ← 启动本地 HTTP server，浏览器自动打开
+   - 用户在 Google 页面同意
+   - Google redirect 到本地 server，flow 拿到 token
+   - _save_credentials() 写 ~/.skyler/google_token.json
+5. 之后所有 list_events_in_range 调用：
+   - _load_credentials() 读 token.json，过期就 refresh，仍失败返 None
+   - googleapiclient.discovery.build("calendar", "v3", credentials=creds)
+6. 健康检查：测试拉 next 24h 事件；网络/API 错都降级成 warn（国内常态）
+```
+
+scope 升级（如未来要加创建事件能力）必须先 revoke 当前 token，再重新 OAuth flow，
+否则 Google API 会返 403 insufficient scope。
 
 ---
 
@@ -1304,6 +1357,16 @@ pixi-live2d-display 及其所有维护中的 fork（advanced / lipsyncpatch / mu
 - [ ] **TTS 多段并发合成**（OLV #2）—— 当前是 sentence-by-sentence 串行，改为并发合成 + 顺序播放，砍首句到末句的等待时间
 - [ ] **TTS 预处理器**（OLV #3）—— 正则剥离 `*动作*` / `(注释)` / `[标记]` 不让 TTS 读出来；同时也要不读 `<emotion>` / `<motion>` / `<thinking>` 残留（双保险）
 - [ ] **AI 内心独白**（OLV #5）—— `<thinking>X</thinking>` 标签解析，不读出但前端显示在 status 区或独立 thoughts 抽屉
+
+#### v3-G chunk 1 ✅ 完成（2026-05-07）—— Google Calendar 接入 + 起床简报 v0.1
+- [x] **`backend/integrations/google_calendar.py`** —— OAuth 2.0 desktop flow（`run_local_server`） + token.json 自动 refresh + `googleapiclient.discovery.build` 单例懒加载 + tenacity 重试（3 次指数退避，触发 OSError / HttpError / TimeoutError）+ `health_check` 三档（healthy / warn / error，网络异常降级 warn 不刷红）；凭证路径 `~/.skyler/google_credentials.json` + token `~/.skyler/google_token.json`；scope `calendar.readonly`
+- [x] **`backend/capabilities/calendar.py`** —— `calendar.today_events`（CHAT_AGENT + SCHEDULER）+ `calendar.upcoming_events`（CHAT_AGENT，参数 days_ahead 1-30）；时区共用 `config.scheduler.timezone`
+- [x] **`backend/routes/integrations_api.py`** —— `GET /api/integrations/google/status` + `POST /api/integrations/google/auth`（`asyncio.to_thread` 包同步 OAuth flow）+ `POST /api/integrations/google/revoke`
+- [x] **`backend/scheduler/briefing.py` + `backend/routes/briefing_api.py`** —— v0.1 模板拼接生成 + cron 注册（默认 `0 9 * * *` Asia/Tokyo）+ `POST /api/briefing/test` 立刻触发；delivery = ConnectionManager push notify + Momo 音色合成 wav 落 `~/.skyler/last_briefing.wav`
+- [x] **前端 CapabilityPanel** —— calendar 卡 footer 显示授权状态 + [连接 Google] / [重新授权] 按钮；calendar 类目右侧 [🧪 测试今日简报] 按钮 + 文本 preview
+- [x] **`docs/google-calendar-setup.md`** —— Google Cloud Console 完整配置流程（含 Test users 必加自己 + 国内代理 caveat + Skyler home 路径约定）
+
+**Backlog（chunk 2 一起做）**：简报模板 → ChatAgent 智能生成（含联网新闻 / 天气 / 个性化语气）；proactive 实时音频播放路径（当前只落盘）；OAuth 长 polling 优化；多 calendar 支持。
 
 #### v3-G chunk 0 ✅ 完成（2026-05-06）—— 地基：Capability Registry + cron + n8n receiver
 - [x] **Capability Registry**（`backend/capabilities/registry.py`）—— 单例，metadata + handler，``@register_capability`` 装饰器

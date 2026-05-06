@@ -268,6 +268,31 @@
 
 ### v3-G：生活 & 工具型能力
 
+**chunk 1 ✅ 完成（2026-05-07）— Google Calendar 接入 + 起床简报 v0.1**
+
+第一个真实第三方 tool 落地，验证 capability 抽象层在真实场景能撑住整套链路（OAuth + 重试 + 健康检查 + 前端授权 UI + cron + 简报生成）。chunk 0 的 4 行 pattern 在 calendar.py 里得到验证：
+
+| Hash | 内容 |
+|---|---|
+| `61d6231` | feat(integrations): Google Calendar OAuth + API client（**底层**，不带 `@register_capability`，只作 client）+ tenacity 重试（3 次指数退避，OSError/HttpError/TimeoutError）+ 健康检查（网络异常一律降级 warn 不刷红 —— 国内常态而非真故障）+ `~/.skyler/` 凭证存储 + `docs/google-calendar-setup.md` Console 配置指南（含国内代理 caveat）；mock 单元测试 21/21 通过 |
+| `12852f2` | feat(capabilities): `calendar.today_events` + `calendar.upcoming_events` 两个 capability（前者也给 SCHEDULER 用）；`/api/integrations/google/{status,auth,revoke}` 路由（`run_local_server` 走 `asyncio.to_thread` 不堵 event loop）；CapabilityPanel 增强：calendar 卡 footer 显示授权状态 + [连接 Google] / [重新授权] 按钮 |
+| `<本 commit>` | feat(scheduler): 起床简报 v0.1 模板拼接 + cron 注册（默认 0 9 * * * Asia/Tokyo）+ `POST /api/briefing/test` 立刻触发 + CapabilityPanel calendar 类目右侧 [🧪 测试今日简报] 按钮；delivery v0.1 = ConnectionManager 推 notify text + Momo 音色合成 wav 落 `~/.skyler/last_briefing.wav` 离线验证（proactive 实时音频播放路径属 chunk 2 智能简报上线时再做） |
+
+**架构验证 payoff**：
+
+* `backend/integrations/` 与 `backend/capabilities/` 两层分离正确 —— 底层 client 完全可独立测（mock 21/21），上层 capability 调底层加 5 行装饰器即接入。
+* `Consumer.CHAT_AGENT` 自动同步到 ToolRegistry 在 calendar 上**第二次得到验证**（time.now 之后），证明 chunk 0 的零改 chat.py 结论可复用。
+* `health_check` 三档区分（healthy / warn / error）在真实集成里证明价值：未配 credentials / 未授权 / 网络超时全归 warn，UI 黄点不打扰，跟红色 error 形成对比。
+
+**Backlog 标记**：
+
+* **简报智能版**（v3-G chunk 2）：当前是模板拼接，下个 chunk 升级为 ChatAgent 智能生成（含联网新闻 / 天气 / 个性化语气）。chunk 1 的 cron + delivery + 测试入口直接复用。
+* **Proactive 音频播放路径**（v3-G chunk 2 一起）：当前 wav 只落盘不播放；要让简报真正"早上响起来"需要把 `audio_chunk` 推送到前端的逻辑从 chat turn 解耦，由 ConnectionManager 触发 audio queue 入队。
+* **OAuth 长 polling**：当前 `POST /api/integrations/google/auth` 阻塞到用户在浏览器完成。v0.1 接受这个 UX；优化路径（独立 polling endpoint / SSE 进度推送）等用户实际反馈再做。
+* **多 calendar 支持**：当前固定 `calendarId=primary`，后续要支持工作日历 / 个人日历分开拉时再加。
+
+---
+
 **chunk 0 ✅ 完成（2026-05-06）— 地基：Capability Registry + cron + n8n receiver**
 
 地基层：所有后续 tool（Calendar / 网易云 / Bilibili / Pollinations …）**必须**通过 ``@register_capability`` 注册到 ``backend.capabilities.CapabilityRegistry``，不再走 v3-C 时期"直接 ToolRegistry.register"路径。CapabilityRegistry 多承载了 display_name / category / icon / consumers / trigger_modes / health_check 五项 metadata，使前端 "能力面板" + 后端调度 + 鉴权三个子系统能各自只看自己关心的字段，无需互相耦合。
