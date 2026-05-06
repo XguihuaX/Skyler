@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore, type ThemeKey } from '../store';
 import { setConfigField } from '../lib/window';
+import CapabilityPanel from './CapabilityPanel';
 import MemoryManagerDrawer from './MemoryManagerDrawer';
 
 const BACKEND_BASE = 'http://127.0.0.1:8000';
@@ -659,6 +660,13 @@ export default function SettingsPanel() {
     <div className="flex-1 overflow-y-auto px-6 py-4 relative">
       {/* v3-A — UI 风格选择，置顶 */}
       <ThemeSection />
+
+      {/* v3-G chunk 0 — 能力总览（spec 称"tab"，但 SettingsPanel 是单列
+          Section 布局，无 tab 容器；放成顶部 Section 是与现有 UX 最一致
+          的近似，详见 chunk 0 报告偏离决定）*/}
+      <div className="mb-4">
+        <CapabilityPanel />
+      </div>
 
       <Section title="Memory">
         <Toggle
