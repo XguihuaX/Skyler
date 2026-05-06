@@ -28,6 +28,12 @@ import {
   type CapabilityDTO,
   type CapabilityHealth,
 } from '../lib/capabilities';
+import {
+  fetchGoogleStatus,
+  revokeGoogleAuth,
+  startGoogleAuth,
+  type GoogleStatusResponse,
+} from '../lib/integrations';
 
 // ---------------------------------------------------------------------------
 // icon 映射：capability.icon 字符串 → lucide-react 组件。未知 fallback 圆点。
@@ -122,9 +128,21 @@ function Badge({ children }: { children: React.ReactNode }) {
 interface CardProps {
   cap: CapabilityDTO;
   onRefresh: (name: string) => Promise<void>;
+  // v3-G chunk 1：Google 集成状态 + 操作回调。仅 calendar.* capability 用。
+  googleStatus?: GoogleStatusResponse | null;
+  onGoogleAuth?: () => Promise<void>;
+  onGoogleRevoke?: () => Promise<void>;
+  googleBusy?: boolean;
 }
 
-function CapabilityCard({ cap, onRefresh }: CardProps) {
+function CapabilityCard({
+  cap,
+  onRefresh,
+  googleStatus,
+  onGoogleAuth,
+  onGoogleRevoke,
+  googleBusy,
+}: CardProps) {
   const [refreshing, setRefreshing] = useState(false);
 
   const handleRefresh = async () => {
@@ -135,6 +153,10 @@ function CapabilityCard({ cap, onRefresh }: CardProps) {
       setRefreshing(false);
     }
   };
+
+  // calendar 类 capability 才挂 Google 授权 UI。判别用 category，避免依赖
+  // capability name 字符串前缀。
+  const isCalendar = cap.category === 'calendar' && !!googleStatus;
 
   return (
     <div
@@ -217,6 +239,56 @@ function CapabilityCard({ cap, onRefresh }: CardProps) {
             </p>
           )}
 
+          {/* v3-G chunk 1：calendar 卡 Google 授权 footer */}
+          {isCalendar && googleStatus && (
+            <div
+              className="mt-3 pt-2 flex items-center justify-between gap-2"
+              style={{ borderTop: '1px solid var(--color-border-subtle)' }}
+            >
+              <span
+                className="text-[10px]"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                {!googleStatus.credentials_present
+                  ? 'credentials.json 未放置 — 见 docs/google-calendar-setup.md'
+                  : googleStatus.authorized
+                    ? `已授权${googleStatus.account_hint ? ' · ' + googleStatus.account_hint.slice(0, 24) : ''}`
+                    : '未授权 Google 账号'}
+              </span>
+              {googleStatus.credentials_present && (
+                googleStatus.authorized ? (
+                  <button
+                    type="button"
+                    onClick={() => onGoogleRevoke && void onGoogleRevoke()}
+                    disabled={googleBusy}
+                    className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+                    style={{
+                      background: 'var(--color-bg-elevated)',
+                      color: 'var(--color-text-primary)',
+                      border: '1px solid var(--color-border-subtle)',
+                    }}
+                  >
+                    重新授权
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onGoogleAuth && void onGoogleAuth()}
+                    disabled={googleBusy}
+                    className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+                    style={{
+                      background: 'var(--color-accent)',
+                      color: 'var(--color-bubble-user-text)',
+                    }}
+                    title="弹出浏览器完成 Google OAuth"
+                  >
+                    {googleBusy ? '授权中…' : '连接 Google'}
+                  </button>
+                )
+              )}
+            </div>
+          )}
+
           {cap.has_health_check && (
             <div className="flex justify-end mt-2">
               <button
@@ -250,6 +322,10 @@ export default function CapabilityPanel() {
   const [loading, setLoading]   = useState(false);
   const [error,   setError]     = useState<string | null>(null);
 
+  // v3-G chunk 1：Google 集成状态。仅给 calendar.* 卡片渲染授权 UI 用。
+  const [googleStatus, setGoogleStatus] = useState<GoogleStatusResponse | null>(null);
+  const [googleBusy,   setGoogleBusy]   = useState(false);
+
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -265,9 +341,25 @@ export default function CapabilityPanel() {
     }
   }, []);
 
+  const refreshGoogleStatus = useCallback(async () => {
+    try {
+      const s = await fetchGoogleStatus();
+      setGoogleStatus(s);
+    } catch (e) {
+      console.error('[CapabilityPanel] google status failed:', e);
+      // 放空对象避免 calendar 卡片彻底无 footer；UI 文案兜底"credentials 未放置"
+      setGoogleStatus({
+        credentials_present: false,
+        authorized: false,
+        account_hint: null,
+      });
+    }
+  }, []);
+
   useEffect(() => {
     void loadAll();
-  }, [loadAll]);
+    void refreshGoogleStatus();
+  }, [loadAll, refreshGoogleStatus]);
 
   const onCardRefresh = useCallback(async (name: string) => {
     try {
@@ -279,6 +371,35 @@ export default function CapabilityPanel() {
       console.error('[CapabilityPanel] healthcheck failed:', e);
     }
   }, []);
+
+  // v3-G chunk 1：触发 OAuth flow。后端 run_local_server 阻塞等浏览器完成。
+  // 期间前端把所有 calendar 卡的 [连接 Google] 按钮 disable，避免重复触发。
+  const onGoogleAuth = useCallback(async () => {
+    setGoogleBusy(true);
+    try {
+      await startGoogleAuth();
+      await refreshGoogleStatus();
+      // 授权成功 → 触发整列 health 重检（calendar 卡会从 warn 变 healthy）
+      await loadAll();
+    } catch (e) {
+      console.error('[CapabilityPanel] google auth failed:', e);
+    } finally {
+      setGoogleBusy(false);
+    }
+  }, [loadAll, refreshGoogleStatus]);
+
+  const onGoogleRevoke = useCallback(async () => {
+    setGoogleBusy(true);
+    try {
+      await revokeGoogleAuth();
+      await refreshGoogleStatus();
+      await loadAll();
+    } catch (e) {
+      console.error('[CapabilityPanel] google revoke failed:', e);
+    } finally {
+      setGoogleBusy(false);
+    }
+  }, [loadAll, refreshGoogleStatus]);
 
   // 按 category 分组（用 useMemo 避免每次渲染重排）。
   const grouped = useMemo(() => {
@@ -365,6 +486,10 @@ export default function CapabilityPanel() {
                     key={cap.name}
                     cap={cap}
                     onRefresh={onCardRefresh}
+                    googleStatus={googleStatus}
+                    onGoogleAuth={onGoogleAuth}
+                    onGoogleRevoke={onGoogleRevoke}
+                    googleBusy={googleBusy}
                   />
                 ))}
               </div>

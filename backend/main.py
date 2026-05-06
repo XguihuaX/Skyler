@@ -55,6 +55,7 @@ from backend.routes.characters_api import router as characters_router
 from backend.routes.config_api import router as config_router
 from backend.routes.conversations_api import router as conversations_router
 from backend.routes.health_api import app_state, router as health_router
+from backend.routes.integrations_api import router as integrations_router
 from backend.routes.live2d_api import router as live2d_router
 from backend.routes.memory_api import router as memory_router
 from backend.routes.tts_api import router as tts_router
@@ -64,11 +65,12 @@ from backend.routes.ws import router as ws_router
 from backend.scheduler import cron as cron_scheduler
 from backend.scheduler.task import scheduler
 
-# v3-G chunk 0 — 触发 capability decorator 副作用注册到 CapabilityRegistry +
+# v3-G chunk 0+ — 触发 capability decorator 副作用注册到 CapabilityRegistry +
 # ToolRegistry。必须在 FastAPI app 构造前 import，使 ChatAgent 在第一次
 # acompletion 调用时就能看到所有 capability。新增 capability 时把 import
 # 加到这里。
 import backend.capabilities.time_capability  # noqa: F401, E402
+import backend.capabilities.calendar         # noqa: F401, E402  v3-G chunk 1
 
 logging.basicConfig(
     level=logging.INFO,
@@ -230,5 +232,6 @@ app.include_router(users_router,         prefix="/api", tags=["users"])
 app.include_router(live2d_router,        prefix="/api", tags=["live2d"])
 app.include_router(tts_router,           prefix="/api", tags=["tts"])
 app.include_router(capabilities_router,  prefix="/api", tags=["capabilities"])
+app.include_router(integrations_router,  prefix="/api", tags=["integrations"])
 app.include_router(webhooks_router,      prefix="/api", tags=["webhooks"])
 app.include_router(ws_router,                            tags=["websocket"])
