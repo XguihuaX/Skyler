@@ -83,6 +83,7 @@ import backend.capabilities.apple_calendar    # noqa: F401, E402  v3-G chunk 1.6
 import backend.capabilities.google_calendar   # noqa: F401, E402  v3-G chunk 1.6 (renamed from chunk 1)
 import backend.capabilities.calendar          # noqa: F401, E402  v3-G chunk 1.6 router
 import backend.capabilities.netease_music     # noqa: F401, E402  v3-H chunk 1
+import backend.capabilities.media_control     # noqa: F401, E402  v3-H chunk 1
 from backend.mcp import server as mcp_server  # noqa: E402  v3-G chunk 1.5
 
 logging.basicConfig(
