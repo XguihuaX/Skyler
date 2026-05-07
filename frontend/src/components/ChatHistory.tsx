@@ -2,10 +2,11 @@ import { memo, useEffect, useRef } from 'react';
 import { useAppStore, type ChatMessage } from '../store';
 import { stripThinking } from '../lib/textFilters';
 
-// v3-G chunk 2: proactive trigger.name -> 灰字前缀 label。后续加 trigger 时
-// 在这里 append 即可。映射不到 → 通用兜底 "（主动陪伴）"。
+// v3-G chunk 2 / 2.6: proactive trigger.name -> 灰字前缀 label。后续加 trigger
+// 时在这里 append 即可。映射不到 → 通用兜底 "（主动陪伴）"。
 const PROACTIVE_PREFIX: Record<string, string> = {
   morning_briefing: '🌅（早安简报）',
+  wake_call: '🌅（叫早）',
 };
 
 const Bubble = memo(function Bubble({ m }: { m: ChatMessage }) {

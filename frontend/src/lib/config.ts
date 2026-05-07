@@ -16,18 +16,31 @@ export interface AppConfig {
   tts: {
     enabled: boolean;
   };
-  // v3-G chunk 2: 主动陪伴（proactive engine）配置。前端 SettingsPanel
+  // v3-G chunk 2 / 2.6: 主动陪伴（proactive engine）配置。前端 SettingsPanel
   // 主动陪伴 section 镜像它，写回经 setConfigField + /api/config/reload。
   proactive: {
     enabled: boolean;
+    // chunk 2.6: mode 互斥决定哪个 trigger 上 cron
+    // 'wake_call' = 模式 B 邀请对话（推荐）
+    // 'morning_briefing' = 模式 A 单方面播报
+    // 'off' = 不注册任何 cron
+    mode: 'wake_call' | 'morning_briefing' | 'off';
     character_id_override: number | null;
     morning_briefing: {
       enabled: boolean;
       cron: string;
       city: string;
     };
+    wake_call_briefing: {
+      cron: string;
+      pending_ttl_minutes: number;
+      default_snooze_minutes: number;
+      city: string;
+    };
   };
 }
+
+export type ProactiveMode = 'wake_call' | 'morning_briefing' | 'off';
 
 export async function fetchConfig(): Promise<AppConfig> {
   const res = await fetch(`${BACKEND_BASE}/api/config`);

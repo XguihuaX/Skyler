@@ -27,9 +27,10 @@ interface WsMessage {
   proactive_trigger?: string;
 }
 
-// v3-G chunk 2: trigger.name -> toast 标题。后续加 trigger 时只在这里 append。
+// v3-G chunk 2 / 2.6: trigger.name -> toast 标题。后续加 trigger 时只在这里 append。
 const PROACTIVE_TOAST_LABEL: Record<string, string> = {
   morning_briefing: '🌅 早安简报',
+  wake_call: '🌅 早安',
 };
 
 interface UseWebSocketReturn {

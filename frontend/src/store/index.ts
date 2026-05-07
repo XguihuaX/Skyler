@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AppConfig, CharacterRow, ChatKind, ConversationRow } from '../lib/config';
+import type { AppConfig, CharacterRow, ChatKind, ConversationRow, ProactiveMode } from '../lib/config';
 import type { Live2DModel } from '../lib/live2d';
 import type { TtsProvider } from '../lib/tts';
 
@@ -221,11 +221,13 @@ interface AppState {
   enableSearch: boolean;
   setEnableSearch: (v: boolean) => void;
 
-  // v3-G chunk 2 — 主动陪伴 (proactive engine) 配置镜像。SettingsPanel
+  // v3-G chunk 2 / 2.6 — 主动陪伴 (proactive engine) 配置镜像。SettingsPanel
   // [主动陪伴] section 写回经 setConfigField；/api/config GET 时由
   // syncFromConfig 拉回填。
   proactiveEnabled: boolean;
   setProactiveEnabled: (v: boolean) => void;
+  proactiveMode: ProactiveMode;
+  setProactiveMode: (v: ProactiveMode) => void;
   proactiveCharOverride: number | null;
   setProactiveCharOverride: (v: number | null) => void;
   morningBriefingEnabled: boolean;
@@ -234,6 +236,14 @@ interface AppState {
   setMorningBriefingCron: (v: string) => void;
   morningBriefingCity: string;
   setMorningBriefingCity: (v: string) => void;
+  wakeCallCron: string;
+  setWakeCallCron: (v: string) => void;
+  wakeCallPendingTtlMinutes: number;
+  setWakeCallPendingTtlMinutes: (v: number) => void;
+  wakeCallDefaultSnoozeMinutes: number;
+  setWakeCallDefaultSnoozeMinutes: (v: number) => void;
+  wakeCallCity: string;
+  setWakeCallCity: (v: string) => void;
 
   // V2.5-C — characters / conversations / chat history
   characters: CharacterRow[];
@@ -370,6 +380,8 @@ export const useAppStore = create<AppState>((set) => ({
 
   proactiveEnabled: true,
   setProactiveEnabled: (proactiveEnabled) => set({ proactiveEnabled }),
+  proactiveMode: 'wake_call',
+  setProactiveMode: (proactiveMode) => set({ proactiveMode }),
   proactiveCharOverride: null,
   setProactiveCharOverride: (proactiveCharOverride) => set({ proactiveCharOverride }),
   morningBriefingEnabled: true,
@@ -378,6 +390,15 @@ export const useAppStore = create<AppState>((set) => ({
   setMorningBriefingCron: (morningBriefingCron) => set({ morningBriefingCron }),
   morningBriefingCity: '东京',
   setMorningBriefingCity: (morningBriefingCity) => set({ morningBriefingCity }),
+  wakeCallCron: '0 8 * * *',
+  setWakeCallCron: (wakeCallCron) => set({ wakeCallCron }),
+  wakeCallPendingTtlMinutes: 30,
+  setWakeCallPendingTtlMinutes: (wakeCallPendingTtlMinutes) => set({ wakeCallPendingTtlMinutes }),
+  wakeCallDefaultSnoozeMinutes: 30,
+  setWakeCallDefaultSnoozeMinutes: (wakeCallDefaultSnoozeMinutes) =>
+    set({ wakeCallDefaultSnoozeMinutes }),
+  wakeCallCity: '东京',
+  setWakeCallCity: (wakeCallCity) => set({ wakeCallCity }),
 
   characters: [],
   setCharacters: (characters) => set({ characters }),
@@ -443,9 +464,16 @@ export const useAppStore = create<AppState>((set) => ({
       enableSearch: c.search.enable_search,
       ttsEnabled: c.tts.enabled,
       proactiveEnabled: c.proactive?.enabled ?? true,
+      proactiveMode: c.proactive?.mode ?? 'wake_call',
       proactiveCharOverride: c.proactive?.character_id_override ?? null,
       morningBriefingEnabled: c.proactive?.morning_briefing?.enabled ?? true,
       morningBriefingCron: c.proactive?.morning_briefing?.cron ?? '0 9 * * *',
       morningBriefingCity: c.proactive?.morning_briefing?.city ?? '东京',
+      wakeCallCron: c.proactive?.wake_call_briefing?.cron ?? '0 8 * * *',
+      wakeCallPendingTtlMinutes:
+        c.proactive?.wake_call_briefing?.pending_ttl_minutes ?? 30,
+      wakeCallDefaultSnoozeMinutes:
+        c.proactive?.wake_call_briefing?.default_snooze_minutes ?? 30,
+      wakeCallCity: c.proactive?.wake_call_briefing?.city ?? '东京',
     }),
 }));

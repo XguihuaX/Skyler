@@ -52,10 +52,11 @@ export interface BriefingTestResponse {
   voice_model: string | null;
 }
 
-export async function triggerTestBriefing(): Promise<BriefingTestResponse> {
-  const res = await fetch(`${BACKEND_BASE}/api/briefing/test`, {
-    method: 'POST',
-  });
+export async function triggerTestBriefing(
+  mode: 'auto' | 'wake_call' | 'morning' = 'auto',
+): Promise<BriefingTestResponse> {
+  const url = `${BACKEND_BASE}/api/briefing/test?mode=${encodeURIComponent(mode)}`;
+  const res = await fetch(url, { method: 'POST' });
   if (!res.ok) throw new Error(`briefing test failed: ${res.status}`);
   return (await res.json()) as BriefingTestResponse;
 }

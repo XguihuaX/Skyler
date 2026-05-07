@@ -167,33 +167,103 @@ interface ToastInfo {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// v3-G chunk 2 — 主动陪伴 (Proactive Companionship) section
+// v3-G chunk 2 / 2.6 — 主动陪伴 (Proactive Companionship) section
 // ---------------------------------------------------------------------------
+//
+// chunk 2.6: mode 三选一 radio (wake_call / morning_briefing / off)。下方
+// 根据选中模式条件渲染该模式的参数。test 按钮按当前模式路由到对应 trigger。
 
 interface ProactiveSectionProps {
   showToast: (text: string) => void;
 }
 
+interface ModeRadioProps {
+  value: ProactiveModeAlias;
+  onChange: (next: ProactiveModeAlias) => void;
+}
+
+type ProactiveModeAlias = 'wake_call' | 'morning_briefing' | 'off';
+
+function ModeRadio({ value, onChange }: ModeRadioProps) {
+  const opts: { id: ProactiveModeAlias; title: string; desc: string }[] = [
+    { id: 'wake_call',        title: '叫醒模式（推荐）',  desc: 'cron 短问候，你回应后才告诉你今日要事' },
+    { id: 'morning_briefing', title: '整段播报模式',      desc: 'cron 自动播 200-300 字简报' },
+    { id: 'off',              title: '关闭',              desc: '不主动开口' },
+  ];
+  return (
+    <div className="py-2 space-y-2">
+      {opts.map((o) => {
+        const active = value === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => onChange(o.id)}
+            className="w-full text-left px-3 py-2 rounded transition-colors"
+            style={{
+              background: active
+                ? 'color-mix(in srgb, var(--color-accent) 15%, transparent)'
+                : 'var(--color-bg-input)',
+              border: `1px solid ${active ? 'var(--color-accent)' : 'var(--color-border)'}`,
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className="inline-block w-3 h-3 rounded-full"
+                style={{
+                  background: active ? 'var(--color-accent)' : 'transparent',
+                  border: '1px solid var(--color-accent)',
+                }}
+              />
+              <span className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
+                {o.title}
+              </span>
+            </div>
+            <div className="text-xs ml-5 mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
+              {o.desc}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ProactiveSection({ showToast }: ProactiveSectionProps) {
   const proactiveEnabled        = useAppStore((s) => s.proactiveEnabled);
   const setProactiveEnabled     = useAppStore((s) => s.setProactiveEnabled);
-  const morningBriefingEnabled  = useAppStore((s) => s.morningBriefingEnabled);
-  const setMorningBriefingEnabled = useAppStore((s) => s.setMorningBriefingEnabled);
+  const proactiveMode           = useAppStore((s) => s.proactiveMode);
+  const setProactiveMode        = useAppStore((s) => s.setProactiveMode);
   const morningBriefingCron     = useAppStore((s) => s.morningBriefingCron);
   const setMorningBriefingCron  = useAppStore((s) => s.setMorningBriefingCron);
   const morningBriefingCity     = useAppStore((s) => s.morningBriefingCity);
   const setMorningBriefingCity  = useAppStore((s) => s.setMorningBriefingCity);
+  const wakeCallCron            = useAppStore((s) => s.wakeCallCron);
+  const setWakeCallCron         = useAppStore((s) => s.setWakeCallCron);
+  const wakeCallPendingTtl      = useAppStore((s) => s.wakeCallPendingTtlMinutes);
+  const setWakeCallPendingTtl   = useAppStore((s) => s.setWakeCallPendingTtlMinutes);
+  const wakeCallSnoozeMin       = useAppStore((s) => s.wakeCallDefaultSnoozeMinutes);
+  const setWakeCallSnoozeMin    = useAppStore((s) => s.setWakeCallDefaultSnoozeMinutes);
+  const wakeCallCity            = useAppStore((s) => s.wakeCallCity);
+  const setWakeCallCity         = useAppStore((s) => s.setWakeCallCity);
   const proactiveCharOverride   = useAppStore((s) => s.proactiveCharOverride);
   const setProactiveCharOverride = useAppStore((s) => s.setProactiveCharOverride);
   const characters              = useAppStore((s) => s.characters);
 
-  const [cronDraft, setCronDraft] = useState<string>(morningBriefingCron);
-  const [cityDraft, setCityDraft] = useState<string>(morningBriefingCity);
+  const [morningCronDraft, setMorningCronDraft] = useState<string>(morningBriefingCron);
+  const [morningCityDraft, setMorningCityDraft] = useState<string>(morningBriefingCity);
+  const [wakeCronDraft,    setWakeCronDraft]    = useState<string>(wakeCallCron);
+  const [wakeCityDraft,    setWakeCityDraft]    = useState<string>(wakeCallCity);
+  const [wakeTtlDraft,     setWakeTtlDraft]     = useState<string>(String(wakeCallPendingTtl));
+  const [wakeSnoozeDraft,  setWakeSnoozeDraft]  = useState<string>(String(wakeCallSnoozeMin));
   const [busyTesting, setBusyTesting] = useState(false);
 
-  // store 拉到新值时同步本地 draft（首次加载 / 外部 reload）
-  useEffect(() => { setCronDraft(morningBriefingCron); }, [morningBriefingCron]);
-  useEffect(() => { setCityDraft(morningBriefingCity); }, [morningBriefingCity]);
+  useEffect(() => { setMorningCronDraft(morningBriefingCron); }, [morningBriefingCron]);
+  useEffect(() => { setMorningCityDraft(morningBriefingCity); }, [morningBriefingCity]);
+  useEffect(() => { setWakeCronDraft(wakeCallCron); }, [wakeCallCron]);
+  useEffect(() => { setWakeCityDraft(wakeCallCity); }, [wakeCallCity]);
+  useEffect(() => { setWakeTtlDraft(String(wakeCallPendingTtl)); }, [wakeCallPendingTtl]);
+  useEffect(() => { setWakeSnoozeDraft(String(wakeCallSnoozeMin)); }, [wakeCallSnoozeMin]);
 
   const writeField = useCallback(
     (keyPath: string, value: unknown, label: string, rollback: () => void) => {
@@ -212,42 +282,40 @@ function ProactiveSection({ showToast }: ProactiveSectionProps) {
     writeField('proactive.enabled', next, '主动陪伴总开关', () => setProactiveEnabled(prev));
   };
 
-  const onToggleMorning = (next: boolean) => {
-    const prev = morningBriefingEnabled;
-    setMorningBriefingEnabled(next);
-    writeField(
-      'proactive.morning_briefing.enabled', next, '早晨简报',
-      () => setMorningBriefingEnabled(prev),
-    );
+  const onChangeMode = (next: ProactiveModeAlias) => {
+    if (next === proactiveMode) return;
+    const prev = proactiveMode;
+    setProactiveMode(next);
+    writeField('proactive.mode', next, '主动陪伴模式', () => setProactiveMode(prev));
   };
 
-  const onCommitCron = () => {
-    const value = cronDraft.trim();
-    if (!value) {
-      setCronDraft(morningBriefingCron);
-      return;
-    }
-    if (value === morningBriefingCron) return;
-    const prev = morningBriefingCron;
-    setMorningBriefingCron(value);
-    writeField(
-      'proactive.morning_briefing.cron', value, 'Cron 表达式',
-      () => { setMorningBriefingCron(prev); setCronDraft(prev); },
-    );
+  const commitTextField = (
+    draft: string, current: string,
+    setStore: (v: string) => void, setDraft: (v: string) => void,
+    keyPath: string, label: string,
+  ) => {
+    const value = draft.trim();
+    if (!value || value === current) { setDraft(current); return; }
+    const prev = current;
+    setStore(value);
+    writeField(keyPath, value, label, () => { setStore(prev); setDraft(prev); });
   };
 
-  const onCommitCity = () => {
-    const value = cityDraft.trim();
-    if (!value || value === morningBriefingCity) {
-      setCityDraft(morningBriefingCity);
+  const commitIntField = (
+    draft: string, current: number, minVal: number, maxVal: number,
+    setStore: (v: number) => void, setDraft: (v: string) => void,
+    keyPath: string, label: string,
+  ) => {
+    const parsed = parseInt(draft, 10);
+    if (!Number.isFinite(parsed) || parsed < minVal || parsed > maxVal) {
+      setDraft(String(current));
+      showToast(`${label} 必须在 ${minVal}-${maxVal} 之间`);
       return;
     }
-    const prev = morningBriefingCity;
-    setMorningBriefingCity(value);
-    writeField(
-      'proactive.morning_briefing.city', value, '城市',
-      () => { setMorningBriefingCity(prev); setCityDraft(prev); },
-    );
+    if (parsed === current) return;
+    const prev = current;
+    setStore(parsed);
+    writeField(keyPath, parsed, label, () => { setStore(prev); setDraft(String(prev)); });
   };
 
   const onCharOverride = (raw: string) => {
@@ -264,15 +332,25 @@ function ProactiveSection({ showToast }: ProactiveSectionProps) {
     if (busyTesting) return;
     setBusyTesting(true);
     try {
-      const r = await triggerTestBriefing();
+      const apiMode = proactiveMode === 'wake_call' ? 'wake_call'
+                    : proactiveMode === 'morning_briefing' ? 'morning'
+                    : 'auto';
+      const r = await triggerTestBriefing(apiMode);
       const preview = (r.text || '').slice(0, 40);
-      showToast(`简报触发成功：${preview}${r.text.length > 40 ? '…' : ''}`);
+      showToast(`触发成功：${preview}${r.text.length > 40 ? '…' : ''}`);
     } catch (e) {
-      showToast(`简报触发失败：${(e as Error).message}`);
+      showToast(`触发失败：${(e as Error).message}`);
     } finally {
       setBusyTesting(false);
     }
   };
+
+  const inputCls = 'w-full px-2 py-1.5 text-xs rounded font-mono';
+  const inputStyle = {
+    background: 'var(--color-bg-input)',
+    border: '1px solid var(--color-border)',
+    color: 'var(--color-text-primary)',
+  } as const;
 
   return (
     <Section title="主动陪伴">
@@ -281,74 +359,142 @@ function ProactiveSection({ showToast }: ProactiveSectionProps) {
         value={proactiveEnabled}
         onChange={onToggleProactive}
       />
-      <Toggle
-        label="早晨简报"
-        value={morningBriefingEnabled}
-        onChange={onToggleMorning}
-      />
+
+      <ModeRadio value={proactiveMode} onChange={onChangeMode} />
+
+      {proactiveMode === 'wake_call' && (
+        <>
+          <div className="py-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>叫醒 Cron</span>
+              <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                {wakeCallCron === '0 8 * * *' ? '每天 8:00' : '自定义'}
+              </span>
+            </div>
+            <input
+              type="text" value={wakeCronDraft} placeholder="0 8 * * *"
+              onChange={(e) => setWakeCronDraft(e.target.value)}
+              onBlur={() => commitTextField(
+                wakeCronDraft, wakeCallCron, setWakeCallCron, setWakeCronDraft,
+                'proactive.wake_call_briefing.cron', '叫醒 Cron',
+              )}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              className={inputCls} style={inputStyle}
+            />
+          </div>
+          <div className="py-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
+                城市（stage 2 天气查询）
+              </span>
+            </div>
+            <input
+              type="text" value={wakeCityDraft} placeholder="东京"
+              onChange={(e) => setWakeCityDraft(e.target.value)}
+              onBlur={() => commitTextField(
+                wakeCityDraft, wakeCallCity, setWakeCallCity, setWakeCityDraft,
+                'proactive.wake_call_briefing.city', '城市',
+              )}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              className="w-full px-2 py-1.5 text-xs rounded" style={inputStyle}
+            />
+          </div>
+          <div className="py-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
+                Pending TTL（分钟）
+              </span>
+              <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                叫醒后多久内回应触发简报
+              </span>
+            </div>
+            <input
+              type="text" value={wakeTtlDraft} placeholder="30"
+              onChange={(e) => setWakeTtlDraft(e.target.value)}
+              onBlur={() => commitIntField(
+                wakeTtlDraft, wakeCallPendingTtl, 5, 240,
+                setWakeCallPendingTtl, setWakeTtlDraft,
+                'proactive.wake_call_briefing.pending_ttl_minutes', 'Pending TTL',
+              )}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              className={inputCls} style={inputStyle}
+            />
+          </div>
+          <div className="py-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
+                Snooze 默认（分钟）
+              </span>
+              <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                用户说"再睡"未指定时长时
+              </span>
+            </div>
+            <input
+              type="text" value={wakeSnoozeDraft} placeholder="30"
+              onChange={(e) => setWakeSnoozeDraft(e.target.value)}
+              onBlur={() => commitIntField(
+                wakeSnoozeDraft, wakeCallSnoozeMin, 5, 120,
+                setWakeCallSnoozeMin, setWakeSnoozeDraft,
+                'proactive.wake_call_briefing.default_snooze_minutes', 'Snooze 默认',
+              )}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              className={inputCls} style={inputStyle}
+            />
+          </div>
+        </>
+      )}
+
+      {proactiveMode === 'morning_briefing' && (
+        <>
+          <div className="py-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>简报 Cron</span>
+              <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                {morningBriefingCron === '0 9 * * *' ? '每天 9:00' : '自定义'}
+              </span>
+            </div>
+            <input
+              type="text" value={morningCronDraft} placeholder="0 9 * * *"
+              onChange={(e) => setMorningCronDraft(e.target.value)}
+              onBlur={() => commitTextField(
+                morningCronDraft, morningBriefingCron,
+                setMorningBriefingCron, setMorningCronDraft,
+                'proactive.morning_briefing.cron', '简报 Cron',
+              )}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              className={inputCls} style={inputStyle}
+            />
+          </div>
+          <div className="py-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
+                城市（用于天气查询）
+              </span>
+            </div>
+            <input
+              type="text" value={morningCityDraft} placeholder="东京"
+              onChange={(e) => setMorningCityDraft(e.target.value)}
+              onBlur={() => commitTextField(
+                morningCityDraft, morningBriefingCity,
+                setMorningBriefingCity, setMorningCityDraft,
+                'proactive.morning_briefing.city', '城市',
+              )}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              className="w-full px-2 py-1.5 text-xs rounded" style={inputStyle}
+            />
+          </div>
+        </>
+      )}
+
       <div className="py-2">
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-            Cron 表达式
-          </span>
-          <span
-            className="text-xs"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            {morningBriefingCron === '0 9 * * *' ? '每天 9:00' : '自定义'}
-          </span>
-        </div>
-        <input
-          type="text"
-          value={cronDraft}
-          placeholder="0 9 * * *"
-          onChange={(e) => setCronDraft(e.target.value)}
-          onBlur={onCommitCron}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-          className="w-full px-2 py-1.5 text-xs rounded font-mono"
-          style={{
-            background: 'var(--color-bg-input)',
-            border: '1px solid var(--color-border)',
-            color: 'var(--color-text-primary)',
-          }}
-        />
-      </div>
-      <div className="py-2">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-            城市（用于天气查询）
-          </span>
-        </div>
-        <input
-          type="text"
-          value={cityDraft}
-          placeholder="东京"
-          onChange={(e) => setCityDraft(e.target.value)}
-          onBlur={onCommitCity}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-          className="w-full px-2 py-1.5 text-xs rounded"
-          style={{
-            background: 'var(--color-bg-input)',
-            border: '1px solid var(--color-border)',
-            color: 'var(--color-text-primary)',
-          }}
-        />
-      </div>
-      <div className="py-2">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-            角色覆盖
-          </span>
+          <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>角色覆盖</span>
         </div>
         <select
           value={proactiveCharOverride === null ? '' : String(proactiveCharOverride)}
           onChange={(e) => onCharOverride(e.target.value)}
           className="w-full px-2 py-1.5 text-xs rounded"
-          style={{
-            background: 'var(--color-bg-input)',
-            border: '1px solid var(--color-border)',
-            color: 'var(--color-text-primary)',
-          }}
+          style={inputStyle}
         >
           <option value="">自动跟随最近活跃</option>
           {characters.map((c) => (
@@ -356,19 +502,20 @@ function ProactiveSection({ showToast }: ProactiveSectionProps) {
           ))}
         </select>
       </div>
+
       <div className="py-2 flex justify-end">
         <button
           type="button"
           onClick={onTestBriefing}
-          disabled={busyTesting}
+          disabled={busyTesting || proactiveMode === 'off'}
           className="text-xs px-3 py-1.5 rounded transition-colors"
           style={{
             background: 'var(--color-accent)',
             color: 'var(--color-bubble-user-text)',
-            opacity: busyTesting ? 0.5 : 1,
+            opacity: busyTesting || proactiveMode === 'off' ? 0.5 : 1,
           }}
         >
-          🧪 立即测试简报
+          🧪 立即测试{proactiveMode === 'wake_call' ? '叫醒' : '简报'}
         </button>
       </div>
     </Section>
