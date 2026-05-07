@@ -51,6 +51,57 @@ async def _open_url(url: str) -> bool:
     return proc.returncode == 0
 
 
+# v3-H chunk 1 patch — autoplay 兜底
+#
+# 上一版 patch 把 URL 改成 ``orpheus://{kind}/<id>/play`` 期望网易云 App
+# 自动播放，用户实测发现仍只跳转不开播。Audit 网易云 macOS App 包：
+#   * 无 .sdef 文件、Info.plist 无 ``OSAScriptingDefinition`` ⇒ **没有 AppleScript
+#     scripting dictionary**。``tell application "NeteaseMusic" to play`` 这条
+#     命令会被 osascript 拒绝（"doesn't understand"）—— 本路径不可行。
+#   * 中文名 ``"网易云音乐"`` 不被 AppleScript 解析（``running`` 返 false）；
+#     只有 CFBundleName ``"NeteaseMusic"`` 可解析，但仅 activate / running 等
+#     NSWorkspace 通用命令可用。
+#
+# 改用 ``nowplaying-cli play``：
+#   * 路由经 macOS MediaRemote framework（系统级，跨来源）—— 跟 media.* 同条路径
+#   * **idempotent**：已在播则 no-op，不会"toggle 错"
+#   * 不抢焦点、不弹 Accessibility / Automation 权限框
+#   * timeout=2s；缺失 / 失败一律 log warning 不抛
+#
+# personalFM URL Scheme 自带 autoplay 语义（验证后仍工作），不走兜底。
+_NCM_PLAY_DELAY_SEC = 1.5  # 等 NCM App 启动 + 加载 UI + 注册 MediaRemote 源
+
+
+async def _trigger_ncm_play() -> bool:
+    """``open`` 唤起 NCM 后调用，触发自动播放。
+
+    Best-effort：任何步骤失败都 log warning 后返 False，不抛异常——主流程
+    （open URL）已经成功，"没自动播"是退化体验，不应让 capability 整体失败。
+    """
+    if shutil.which("nowplaying-cli") is None:
+        logger.warning(
+            "[netease] nowplaying-cli 未安装；无法触发自动播放。"
+            "请 `brew install nowplaying-cli`",
+        )
+        return False
+    await asyncio.sleep(_NCM_PLAY_DELAY_SEC)
+    try:
+        proc = await asyncio.to_thread(
+            subprocess.run, ["nowplaying-cli", "play"],
+            capture_output=True, text=True, timeout=2,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("[netease] nowplaying-cli play timed out")
+        return False
+    if proc.returncode != 0:
+        logger.warning(
+            "[netease] nowplaying-cli play rc=%d stderr=%s",
+            proc.returncode, (proc.stderr or "").strip(),
+        )
+        return False
+    return True
+
+
 def _client() -> nm.NeteaseClient:
     return nm.get_client()
 
@@ -82,7 +133,8 @@ async def daily_recommend(**_kwargs) -> dict:
     first = songs[0]
     url = nm.NeteaseClient.play_url_scheme("song", int(first["id"]))
     opened = await _open_url(url)
-    return {"opened": opened, "first_song": first, "songs": songs[:5]}
+    autoplay = await _trigger_ncm_play() if opened else False
+    return {"opened": opened, "autoplay": autoplay, "first_song": first, "songs": songs[:5]}
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +201,8 @@ async def play_song(keyword: str, **_kwargs) -> dict:
     song = songs[0]
     url = nm.NeteaseClient.play_url_scheme("song", int(song["id"]))
     opened = await _open_url(url)
-    return {"opened": opened, "song": song, "alternatives": songs[1:]}
+    autoplay = await _trigger_ncm_play() if opened else False
+    return {"opened": opened, "autoplay": autoplay, "song": song, "alternatives": songs[1:]}
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +270,8 @@ async def play_playlist_by_id(playlist_id: int, **_kwargs) -> dict:
     pid = int(playlist_id)
     url = nm.NeteaseClient.play_url_scheme("playlist", pid)
     opened = await _open_url(url)
-    return {"opened": opened, "playlist_id": pid, "url": url}
+    autoplay = await _trigger_ncm_play() if opened else False
+    return {"opened": opened, "autoplay": autoplay, "playlist_id": pid, "url": url}
 
 
 # ---------------------------------------------------------------------------

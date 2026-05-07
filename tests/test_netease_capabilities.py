@@ -101,35 +101,48 @@ class _FakeClient:
 
 
 async def test_daily_recommend_opens_first():
-    print("\n[netease caps — daily_recommend opens first song scheme]")
+    print("\n[netease caps — daily_recommend opens first song + triggers autoplay]")
     fake = _FakeClient()
     opened_urls = []
+    trigger_calls = []
 
     async def fake_open(url):
         opened_urls.append(url)
         return True
 
+    async def fake_trigger():
+        trigger_calls.append(True)
+        return True
+
     with patch.object(nm, "get_client", return_value=fake), \
-         patch.object(caps, "_open_url", side_effect=fake_open):
+         patch.object(caps, "_open_url", side_effect=fake_open), \
+         patch.object(caps, "_trigger_ncm_play", side_effect=fake_trigger):
         out = await caps.daily_recommend()
     check("opened True", out["opened"] is True)
     check("opened first song URL with /play", opened_urls == ["orpheus://song/100/play"])
     check("first_song id=100", out["first_song"]["id"] == 100)
     check("songs sample limited to 5", len(out["songs"]) == 2)
+    check("autoplay triggered", out.get("autoplay") is True)
+    check("trigger called exactly once", len(trigger_calls) == 1)
 
 
 async def test_daily_recommend_empty_returns_error():
-    print("\n[netease caps — daily empty returns error not opens]")
+    print("\n[netease caps — daily empty returns error, no open, no trigger]")
     fake = _FakeClient()
     fake.daily_recs = []
     opened_urls = []
+    trigger_calls = []
     async def fake_open(url):
         opened_urls.append(url); return True
+    async def fake_trigger():
+        trigger_calls.append(True); return True
     with patch.object(nm, "get_client", return_value=fake), \
-         patch.object(caps, "_open_url", side_effect=fake_open):
+         patch.object(caps, "_open_url", side_effect=fake_open), \
+         patch.object(caps, "_trigger_ncm_play", side_effect=fake_trigger):
         out = await caps.daily_recommend()
     check("opened False", out["opened"] is False)
     check("no open called", opened_urls == [])
+    check("no trigger called (gated on opened)", trigger_calls == [])
     check("error present", "日推" in (out.get("error") or ""))
 
 
@@ -138,19 +151,24 @@ async def test_daily_recommend_empty_returns_error():
 # ---------------------------------------------------------------------------
 
 async def test_personal_fm_uses_fm_scheme():
-    print("\n[netease caps — personal_fm tries orpheus://personalFM first]")
+    print("\n[netease caps — personal_fm uses orpheus://personalFM, NO autoplay trigger]")
     fake = _FakeClient()
     opened_urls = []
+    trigger_calls = []
     async def fake_open(url):
         opened_urls.append(url); return True
+    async def fake_trigger():
+        trigger_calls.append(True); return True
     with patch.object(nm, "get_client", return_value=fake), \
-         patch.object(caps, "_open_url", side_effect=fake_open):
+         patch.object(caps, "_open_url", side_effect=fake_open), \
+         patch.object(caps, "_trigger_ncm_play", side_effect=fake_trigger):
         out = await caps.personal_fm()
     check("opened True", out["opened"] is True)
     check(
         "first call orpheus://personalFM (community canonical form)",
         opened_urls[0] == "orpheus://personalFM",
     )
+    check("personal_fm does NOT trigger nowplaying-cli (URL自带 autoplay)", trigger_calls == [])
 
 
 # ---------------------------------------------------------------------------
@@ -158,17 +176,23 @@ async def test_personal_fm_uses_fm_scheme():
 # ---------------------------------------------------------------------------
 
 async def test_play_song_searches_and_opens():
-    print("\n[netease caps — play_song searches then opens]")
+    print("\n[netease caps — play_song search → open → trigger autoplay]")
     fake = _FakeClient()
     opened_urls = []
+    trigger_calls = []
     async def fake_open(url):
         opened_urls.append(url); return True
+    async def fake_trigger():
+        trigger_calls.append(True); return True
     with patch.object(nm, "get_client", return_value=fake), \
-         patch.object(caps, "_open_url", side_effect=fake_open):
+         patch.object(caps, "_open_url", side_effect=fake_open), \
+         patch.object(caps, "_trigger_ncm_play", side_effect=fake_trigger):
         out = await caps.play_song(keyword="夜空")
     check("opened True", out["opened"] is True)
     check("opened song URL with /play", opened_urls == ["orpheus://song/999/play"])
     check("song id=999", out["song"]["id"] == 999)
+    check("autoplay triggered", out.get("autoplay") is True)
+    check("trigger called once", len(trigger_calls) == 1)
     # search call sent
     search_calls = [c for c in fake.calls if c[0] == "search"]
     check("search called", len(search_calls) == 1)
@@ -176,17 +200,22 @@ async def test_play_song_searches_and_opens():
 
 
 async def test_play_song_no_results():
-    print("\n[netease caps — play_song with no search results]")
+    print("\n[netease caps — play_song with no search results, no trigger]")
     fake = _FakeClient()
     fake.search_results = []
     opened_urls = []
+    trigger_calls = []
     async def fake_open(url):
         opened_urls.append(url); return True
+    async def fake_trigger():
+        trigger_calls.append(True); return True
     with patch.object(nm, "get_client", return_value=fake), \
-         patch.object(caps, "_open_url", side_effect=fake_open):
+         patch.object(caps, "_open_url", side_effect=fake_open), \
+         patch.object(caps, "_trigger_ncm_play", side_effect=fake_trigger):
         out = await caps.play_song(keyword="xxxxxxxxxxxx不存在")
     check("opened False", out["opened"] is False)
     check("no open called", opened_urls == [])
+    check("no trigger called", trigger_calls == [])
     check("song None", out["song"] is None)
 
 
@@ -210,15 +239,21 @@ async def test_play_playlist_lists_only():
 
 
 async def test_play_playlist_by_id_opens():
-    print("\n[netease caps — play_playlist_by_id opens correct URL]")
+    print("\n[netease caps — play_playlist_by_id open + trigger autoplay]")
     opened_urls = []
+    trigger_calls = []
     async def fake_open(url):
         opened_urls.append(url); return True
-    with patch.object(caps, "_open_url", side_effect=fake_open):
+    async def fake_trigger():
+        trigger_calls.append(True); return True
+    with patch.object(caps, "_open_url", side_effect=fake_open), \
+         patch.object(caps, "_trigger_ncm_play", side_effect=fake_trigger):
         out = await caps.play_playlist_by_id(playlist_id=42)
     check("opened True", out["opened"] is True)
     check("URL = orpheus://playlist/42/play", opened_urls == ["orpheus://playlist/42/play"])
     check("playlist_id echoed", out["playlist_id"] == 42)
+    check("autoplay triggered", out.get("autoplay") is True)
+    check("trigger called once", len(trigger_calls) == 1)
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +307,67 @@ async def test_search_returns_shape():
 # main
 # ---------------------------------------------------------------------------
 
+async def test_trigger_ncm_play_calls_nowplaying_cli():
+    print("\n[netease caps — _trigger_ncm_play invokes nowplaying-cli play]")
+    captured: dict = {"cmd": None, "slept": None}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        m = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return m
+
+    async def fake_sleep(secs):
+        captured["slept"] = secs
+
+    with patch.object(caps.shutil, "which", return_value="/opt/homebrew/bin/nowplaying-cli"), \
+         patch.object(caps.subprocess, "run", side_effect=fake_run), \
+         patch.object(caps.asyncio, "sleep", side_effect=fake_sleep):
+        ok = await caps._trigger_ncm_play()
+    check("trigger ok=True", ok is True)
+    check("cmd = nowplaying-cli play", captured["cmd"] == ["nowplaying-cli", "play"])
+    check("slept ~1.5s", captured["slept"] == caps._NCM_PLAY_DELAY_SEC)
+
+
+async def test_trigger_ncm_play_handles_missing_cli():
+    print("\n[netease caps — _trigger_ncm_play handles nowplaying-cli missing]")
+    sleep_called = {"v": False}
+    async def fake_sleep(secs):
+        sleep_called["v"] = True
+    with patch.object(caps.shutil, "which", return_value=None), \
+         patch.object(caps.asyncio, "sleep", side_effect=fake_sleep):
+        ok = await caps._trigger_ncm_play()
+    check("returns False when cli missing", ok is False)
+    check("does NOT sleep when cli missing (early return)", sleep_called["v"] is False)
+
+
+async def test_trigger_ncm_play_handles_timeout():
+    print("\n[netease caps — _trigger_ncm_play handles subprocess timeout]")
+    import subprocess as sp
+    def boom(cmd, **kwargs):
+        raise sp.TimeoutExpired(cmd=cmd, timeout=2)
+    async def fake_sleep(secs):
+        pass
+    with patch.object(caps.shutil, "which", return_value="/opt/homebrew/bin/nowplaying-cli"), \
+         patch.object(caps.subprocess, "run", side_effect=boom), \
+         patch.object(caps.asyncio, "sleep", side_effect=fake_sleep):
+        ok = await caps._trigger_ncm_play()
+    check("returns False on timeout", ok is False)
+
+
+async def test_trigger_ncm_play_handles_nonzero_rc():
+    print("\n[netease caps — _trigger_ncm_play handles non-zero exit]")
+    def fake_run(cmd, **kwargs):
+        m = type("R", (), {"returncode": 1, "stdout": "", "stderr": "error"})()
+        return m
+    async def fake_sleep(secs):
+        pass
+    with patch.object(caps.shutil, "which", return_value="/opt/homebrew/bin/nowplaying-cli"), \
+         patch.object(caps.subprocess, "run", side_effect=fake_run), \
+         patch.object(caps.asyncio, "sleep", side_effect=fake_sleep):
+        ok = await caps._trigger_ncm_play()
+    check("returns False on rc!=0", ok is False)
+
+
 async def main():
     test_caps_registered()
     await test_daily_recommend_opens_first()
@@ -284,6 +380,10 @@ async def main():
     await test_like_current_searches_then_likes()
     await test_like_current_not_found()
     await test_search_returns_shape()
+    await test_trigger_ncm_play_calls_nowplaying_cli()
+    await test_trigger_ncm_play_handles_missing_cli()
+    await test_trigger_ncm_play_handles_timeout()
+    await test_trigger_ncm_play_handles_nonzero_rc()
 
     total = len(results)
     passed = sum(1 for _, ok in results if ok)
