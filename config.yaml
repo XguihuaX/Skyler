@@ -1,19 +1,15 @@
 default_model: openai/qwen3.6-plus
 planner_model: openai/qwen-turbo
 default_user_id: default
-
-# v3-G chunk 1.7 — 可切换 LLM 模型清单
-# default_model 必须是 id 之一；GET /api/settings/model 直接返此列表
-# tier=preview 在前端用 badge 标识"实验性可能不稳"
 available_models:
-  - id: openai/qwen3.6-plus
-    display_name: Qwen3.6 Plus
-    description: 稳定平衡，日常推荐
-    tier: stable
-  - id: openai/qwen3.6-max-preview
-    display_name: Qwen3.6 Max
-    description: 最强能力，preview 期可能偶发不稳
-    tier: preview
+- id: openai/qwen3.6-plus
+  display_name: Qwen3.6 Plus
+  description: 稳定平衡，日常推荐
+  tier: stable
+- id: openai/qwen3.6-max-preview
+  display_name: Qwen3.6 Max
+  description: 最强能力，preview 期可能偶发不稳
+  tier: preview
 base_instruction: 回复简短克制，通常不超过3句话，除非用户明确需要详细解释。不总结、不复述用户说的话。不用"当然"、"没问题"、"好的"等开场白。不在句尾加多余的关心语。像真实的人一样说话，不像客服或AI助手。
 memory:
   long_term_enabled: true
@@ -37,106 +33,77 @@ tts:
   - surprised
   - fearful
   - disgusted
-  # v3-G' patch（撤销 chunk 1a SSML 错误后定型）：可用音色目录，GET
-  # /api/tts/voices 直接返回。加新音色直接 append 此处，前端 CharacterPanel
-  # 下拉自动多一项；不需要改前端 / router 代码。
-  #
-  # 字段说明：
-  #   id       音色标识，写入 character.voice_model JSON 的 voice 字段
-  #   label    中文显示名
-  #   traits   人物气质 / 风格提示，CharacterPanel 下拉显示
-  #   instruct true=支持 instruct 自然语言情感引导（cosyvoice.py 走
-  #            "你说话的情感是 {emotion}。"路径让 happy/sad/angry/surprised
-  #            真生效）；false=不支持，emotion 字段被丢弃但 plain TTS 仍正常
-  #
-  # SSML 字段在 chunk 1a 错误地用作"emotion 真生效"标记 —— DashScope SSML
-  # 实际不接受 emotion 属性，撤销该字段。未来若用 SSML 控制 rate/pitch/
-  # volume/effect/bgm 等真实属性时再加 ssml: true。
   available_voices:
     cosyvoice:
-      - id: longyumi_v3
-        label: 龙裕米 v3
-        traits: 正经青年女
-        instruct: false
-      - id: longfeifei_v3
-        label: 龙菲菲 v3
-        traits: 甜美娇气女
-        instruct: false
-      - id: longwan_v3
-        label: 龙婉 v3
-        traits: 柔声女
-        instruct: false
-      - id: longqiang_v3
-        label: 龙强 v3
-        traits: 浪漫女
-        instruct: false
-      - id: longxing_v3
-        label: 龙星 v3
-        traits: 邻家女
-        instruct: false
-      - id: longanhuan
-        label: 龙安欢
-        traits: 欢脱元气女
-        instruct: true
-      - id: longanyang
-        label: 龙安洋
-        traits: 阳光大男孩
-        instruct: true
-
-# v3-G chunk 1.6 — 日历多 source 路由
-# calendar.today_events / calendar.upcoming_events 是 LLM 看到的统一入口，
-# 按 default_source 路由到 apple 或 google。改这一行重启即生效，
-# briefing / chat 自动跟随。
+    - id: longyumi_v3
+      label: 龙裕米 v3
+      traits: 正经青年女
+      instruct: false
+    - id: longfeifei_v3
+      label: 龙菲菲 v3
+      traits: 甜美娇气女
+      instruct: false
+    - id: longwan_v3
+      label: 龙婉 v3
+      traits: 柔声女
+      instruct: false
+    - id: longqiang_v3
+      label: 龙强 v3
+      traits: 浪漫女
+      instruct: false
+    - id: longxing_v3
+      label: 龙星 v3
+      traits: 邻家女
+      instruct: false
+    - id: longanhuan
+      label: 龙安欢
+      traits: 欢脱元气女
+      instruct: true
+    - id: longanyang
+      label: 龙安洋
+      traits: 阳光大男孩
+      instruct: true
 calendar:
-  default_source: apple   # apple | google
-
-# v3-G chunk 1.6 — Apple Calendar (macOS EventKit) 集成
-# 仅 macOS 实际工作。第一次调用日历相关 capability 会弹系统权限框，详见
-# docs/apple-calendar-setup.md
+  default_source: apple
 apple_calendar:
   enabled: true
-
-# v3-G chunk 1 — Google Calendar 集成（chunk 1.6 起默认禁用）
-# 启用前需要按 docs/google-calendar-setup.md 完成 OAuth desktop client 配置
 google_calendar:
   enabled: false
-
-# v3-G chunk 1 — 起床简报（v0.1：模板拼接，chunk 2 升级 ChatAgent 智能版）
 briefing:
   enabled: true
-  cron: "0 9 * * *"     # 默认本地时区 09:00；时区按 scheduler.timezone（默认 Asia/Tokyo）
-  voice: null            # null = 用 Momo (id=1) 当前 voice_model；后续可填具体 voice JSON
-
-# v3-G chunk 0 — APScheduler 单例时区
+  cron: 0 9 * * *
+  voice: null
+proactive:
+  enabled: true
+  character_id_override: null
+  morning_briefing:
+    enabled: true
+    cron: 0 9 * * *
+    city: 东京
 scheduler:
   timezone: Asia/Tokyo
-
-# v3-G chunk 1.5 — Skyler 作 MCP server 暴露给外部 LLM 工具
-# 启用后 ``POST /mcp`` 可被 Claude Desktop / Cursor / Claude Code 调用。
-# 鉴权 Bearer token 走 .env 的 MCP_BEARER_TOKEN（不在 yaml 里写明文）。
 mcp_server:
   enabled: true
   endpoint_path: /mcp
-
-# v3-G chunk 1.5 — Skyler 作 MCP client 连接外部 server，反向注册为 capability
-# 默认全部 enabled: false（避免开箱即跑就拉起子进程占资源）。用户按需开启。
-# 详细配置：docs/mcp-client-setup.md
-# 环境变量插值：${HOME} / ${BRAVE_API_KEY} 等用 os.path.expandvars。
 mcp_clients:
   filesystem:
-    description: "本地文件读取（Anthropic 官方 server）"
+    description: 本地文件读取（Anthropic 官方 server）
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "${HOME}/Documents"]
+    args:
+    - -y
+    - '@modelcontextprotocol/server-filesystem'
+    - ${HOME}/Documents
     enabled: false
-    expose_via_skyler_server: true   # 代理给外部 LLM 工具，让 Claude Desktop 等也能用
-
+    expose_via_skyler_server: true
   brave-search:
-    description: "Brave 搜索（需要 BRAVE_API_KEY）"
+    description: Brave 搜索（需要 BRAVE_API_KEY）
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-brave-search"]
+    args:
+    - -y
+    - '@modelcontextprotocol/server-brave-search'
     env:
-      BRAVE_API_KEY: "${BRAVE_API_KEY}"
+      BRAVE_API_KEY: ${BRAVE_API_KEY}
     enabled: false
-    expose_via_skyler_server: false   # 不代理 —— 防止 Brave API 配额被多级转发耗尽
+    expose_via_skyler_server: false

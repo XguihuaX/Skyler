@@ -400,6 +400,7 @@ async def add_chat_history(
     character_id: Optional[int] = None,
     interrupted_at: Optional[datetime] = None,
     kind: str = "normal",
+    proactive_trigger: Optional[str] = None,
 ) -> ChatHistory:
     """Append a message to the persistent chat history for the given user.
 
@@ -416,11 +417,17 @@ async def add_chat_history(
         kind:            v3-E1 Step Z.2. 'normal' (default) / 'touch' /
                          'proactive'. Unknown values silently coerced to
                          'normal' so a typo upstream never blocks persistence.
+        proactive_trigger: v3-G chunk 2. Trigger name when kind='proactive'
+                         (e.g. 'morning_briefing'). NULL otherwise. Coerced
+                         to NULL when kind != 'proactive' so callers can
+                         pass it unconditionally without polluting normal rows.
 
     Returns the persisted ChatHistory instance.
     """
     if kind not in _VALID_CHAT_KINDS:
         kind = "normal"
+    if kind != "proactive":
+        proactive_trigger = None
     message = ChatHistory(
         user_id=user_id,
         role=role,
@@ -429,6 +436,7 @@ async def add_chat_history(
         character_id=character_id,
         interrupted_at=interrupted_at,
         kind=kind,
+        proactive_trigger=proactive_trigger,
     )
     session.add(message)
     await session.commit()

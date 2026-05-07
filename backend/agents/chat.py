@@ -363,7 +363,12 @@ _TOOL_PROMPT_ADDENDUM = (
     "→ 先调 time.now 拿当前时间锚点，再调 apple_calendar.create_event；\n"
     "  - 用户问\"今天/明天/这周有什么事\" → 调 calendar.today_events 或 calendar.upcoming_events；\n"
     "  - 用户说\"删除X日程\" → 先 calendar.today_events / upcoming_events 找事件 id，"
-    "再调 apple_calendar.delete_event。\n\n"
+    "再调 apple_calendar.delete_event。\n"
+    "【日程录入】（v3-G chunk 2.5）用户说\"提醒我明天 10 点 X\"/\"下周三下午 X 开会\""
+    "等含时间词的命令：\n"
+    "  - 先调 time.now 拿当前 ISO 基准；\n"
+    "  - 再调 apple_calendar.create_event（默认走 calendar router 默认 source）；\n"
+    "  - 时长缺省 1 小时，可询问；地点 / 备注从用户原话提取，没有就留空。\n\n"
     "【时间类】：\n"
     "  - 用户问\"现在几点\"/\"今天星期几\"/\"今天X月X日吗\" → 调 time.now；\n"
     "  - 任何涉及相对时间（明天 / 后天 / 下周 / N 小时后）的请求，先 time.now 拿基准再继续。\n\n"
@@ -831,6 +836,12 @@ class ChatAgent(IAgent):
           3. When the round ends with finish_reason == "tool_calls",
              execute each tool, append assistant + tool messages, loop again.
           4. Otherwise flush remaining text and return.
+
+        v3-G chunk 2: ``context.enable_search`` (bool) 控制本轮是否启用
+        LiteLLM model-native web search（qwen → enable_search=True；deepseek
+        → tools 加 web_search_preview）。proactive 简报触发用 True。普通对话
+        默认 False —— 历史路径不动；config.yaml 的全局 enable_search 仍由
+        前端 settings 控，但走的是 prompt-time 注入而非 LiteLLM 参数。
         """
         payload = message.get("payload", {})
         user_id: str = payload.get("user_id", "")
@@ -838,6 +849,7 @@ class ChatAgent(IAgent):
         context = payload.get("context") or {}
         tool_result: str | None = context.get("tool_result")
         extra_system: str | None = context.get("extra_system")
+        enable_search: bool = bool(context.get("enable_search", False))
         raw_char = payload.get("character_id")
         character_id: Optional[int] = (
             int(raw_char) if isinstance(raw_char, (int, str)) and str(raw_char).strip() else None
@@ -878,6 +890,7 @@ class ChatAgent(IAgent):
                     messages,
                     stream=True,
                     tools=_get_all_tools(),
+                    enable_search=enable_search,
                 )
             except LLMError as exc:
                 logger.error("ChatAgent LLM error: %s", exc)

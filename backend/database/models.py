@@ -139,5 +139,9 @@ class ChatHistory(Base):
         default="normal",
         server_default="normal",
     )
+    # v3-G chunk 2：当 kind='proactive' 时记录是哪个 trigger 拉起的
+    # （如 'morning_briefing'）；其他 kind 该列 NULL。详见
+    # migrations/v3_g_chunk2_proactive.py。
+    proactive_trigger = Column(String(64), nullable=True)
 
     user = relationship("User", back_populates="chat_history")

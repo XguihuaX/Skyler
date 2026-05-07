@@ -47,6 +47,9 @@ from backend.database.migrations.v3_f import run_migration as migrate_v3_f
 from backend.database.migrations.v3_g_default_voice import (
     run_migration as migrate_v3_g_default_voice,
 )
+from backend.database.migrations.v3_g_chunk2_proactive import (
+    run_migration as migrate_v3_g_chunk2_proactive,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -131,6 +134,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── 1b9. V3-G' chunk 1c: Momo (id=1) 默认 voice_model = cosyvoice/longyumi_v3 ─
     await migrate_v3_g_default_voice()
 
+    # ── 1b10. V3-G chunk 2: chat_history.proactive_trigger 列（idempotent）─
+    await migrate_v3_g_chunk2_proactive()
+
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
     from sqlalchemy import text
@@ -213,19 +219,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── 6. v3-G chunk 0 — Cron scheduler (APScheduler) ──────────────────────
     await cron_scheduler.start()
 
-    # ── 7. v3-G chunk 1 — Morning briefing cron（如启用）─────────────────
-    briefing_cfg = config_yaml.get("briefing") or {}
-    if briefing_cfg.get("enabled", False):
+    # ── 7. v3-G chunk 2 — Proactive engine triggers cron 注册 ────────────
+    # 通用 proactive engine 接管：每个 trigger 自带 cron_expr；engine 路径
+    # 统一调 run_trigger(trigger, user_id)。chunk 1 的 ``briefing.enabled``
+    # config 节已废弃 —— 现按 ``proactive.morning_briefing.enabled`` 启停。
+    proactive_cfg = config_yaml.get("proactive") or {}
+    if proactive_cfg.get("enabled", False):
+        from backend.proactive.triggers.morning_briefing import (
+            MorningBriefingTrigger,
+            _briefing_enabled as _morning_enabled,
+        )
         from backend.scheduler.briefing import deliver_morning_briefing
-        cron_expr = str(briefing_cfg.get("cron") or "0 9 * * *")
-        try:
-            cron_scheduler.schedule_cron(
-                "morning_briefing", cron_expr, deliver_morning_briefing,
-            )
-            logger.info("Morning briefing cron registered: %s", cron_expr)
-        except ValueError:
-            # 重复注册时不破坏 lifespan（比如 hot-reload）
-            logger.info("Morning briefing cron already registered")
+
+        if _morning_enabled():
+            trigger = MorningBriefingTrigger()
+            try:
+                cron_scheduler.schedule_cron(
+                    trigger.name, trigger.cron_expr, deliver_morning_briefing,
+                )
+                logger.info(
+                    "Proactive morning_briefing cron registered: %s",
+                    trigger.cron_expr,
+                )
+            except ValueError:
+                logger.info("Proactive morning_briefing cron already registered")
+        else:
+            logger.info("Proactive enabled but morning_briefing.enabled=false; skipping cron")
 
     # ── 8. v3-G chunk 1.5 — MCP server SessionManager（必要 lifecycle）──
     # mcp SDK 的 StreamableHTTPSessionManager 必须在 ``async with .run()``

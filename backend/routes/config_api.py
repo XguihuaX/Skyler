@@ -42,6 +42,18 @@ class TtsConfig(BaseModel):
     enabled: bool = True
 
 
+class MorningBriefingConfig(BaseModel):
+    enabled: bool = True
+    cron: str = "0 9 * * *"
+    city: str = "东京"
+
+
+class ProactiveConfig(BaseModel):
+    enabled: bool = True
+    character_id_override: int | None = None
+    morning_briefing: MorningBriefingConfig = MorningBriefingConfig()
+
+
 class ConfigResponse(BaseModel):
     default_model: str = "deepseek/deepseek-chat"
     default_user_id: str = "default"
@@ -49,6 +61,7 @@ class ConfigResponse(BaseModel):
     search: SearchConfig = SearchConfig()
     cache: CacheConfig = CacheConfig()
     tts: TtsConfig = TtsConfig()
+    proactive: ProactiveConfig = ProactiveConfig()
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +74,12 @@ def _build_config_response() -> ConfigResponse:
     search_raw: dict = config_yaml.get("search") or {}
     cache_raw: dict = config_yaml.get("cache") or {}
     tts_raw: dict = config_yaml.get("tts") or {}
+    proactive_raw: dict = config_yaml.get("proactive") or {}
+    morning_raw: dict = proactive_raw.get("morning_briefing") or {}
+
+    char_override = proactive_raw.get("character_id_override")
+    if not isinstance(char_override, int):
+        char_override = None
 
     return ConfigResponse(
         default_model=config_yaml.get("default_model", "deepseek/deepseek-chat"),
@@ -77,6 +96,15 @@ def _build_config_response() -> ConfigResponse:
         ),
         tts=TtsConfig(
             enabled=tts_raw.get("enabled", True),
+        ),
+        proactive=ProactiveConfig(
+            enabled=bool(proactive_raw.get("enabled", True)),
+            character_id_override=char_override,
+            morning_briefing=MorningBriefingConfig(
+                enabled=bool(morning_raw.get("enabled", True)),
+                cron=str(morning_raw.get("cron") or "0 9 * * *"),
+                city=str(morning_raw.get("city") or "东京"),
+            ),
         ),
     )
 
