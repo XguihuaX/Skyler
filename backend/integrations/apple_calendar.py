@@ -91,15 +91,22 @@ def _reset_store_cache() -> None:
 # 权限申请（macOS 14+ 新 API + 旧版兜底）
 # ---------------------------------------------------------------------------
 
+# EKAuthorizationStatus values (Apple EventKit):
+#   0 NotDetermined / 1 Restricted / 2 Denied
+#   3 Authorized   — legacy, returned by macOS 13 及以下 API 路径
+#   4 WriteOnly    — macOS 14+，只能写不能读，体验差，**不**算完全授权
+#   5 FullAccess   — macOS 14+ 新 API 完整授权
+AUTHORIZED_STATUSES = {3, 5}
+
+
 def _is_authorized_sync() -> bool:
-    """同步看当前授权状态。FullAccess (3) / Authorized (3) 都算授权通过。"""
+    """同步看当前授权状态。3 (legacy Authorized) 与 5 (FullAccess) 都算通过。"""
     if EventKit is None:
         return False
     status = EventKit.EKEventStore.authorizationStatusForEntityType_(
         EventKit.EKEntityTypeEvent
     )
-    # macOS 14+ FullAccess = 3；旧版 Authorized = 3。两个常量值相同，直接比 3。
-    return status == 3
+    return status in AUTHORIZED_STATUSES
 
 
 def _request_access_blocking(timeout: float = 30.0) -> bool:

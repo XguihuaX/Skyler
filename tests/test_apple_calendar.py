@@ -58,22 +58,45 @@ async def test_health_check_unauthorized_warn():
     check("授权 hint 文案", "未授权" in (h.get("error") or ""))
 
 
-async def test_health_check_authorized_healthy():
-    print("\n[apple_calendar — health: authorized + cals available → healthy]")
+async def _run_health_with_status(status_value: int, macos_major: int = 14) -> dict:
     fake_ek = MagicMock()
     fake_ek.EKEntityTypeEvent = 0
-    fake_ek.EKEventStore.authorizationStatusForEntityType_.return_value = 3  # FullAccess
+    fake_ek.EKEventStore.authorizationStatusForEntityType_.return_value = status_value
     fake_store = MagicMock()
     fake_store.calendarsForEntityType_.return_value = [MagicMock(), MagicMock(), MagicMock()]
     fake_ek.EKEventStore.alloc.return_value.init.return_value = fake_store
 
     with patch.object(ac, "IS_MACOS", True), \
          patch.object(ac, "EventKit", fake_ek), \
-         patch.object(ac, "_macos_major", 14), \
+         patch.object(ac, "_macos_major", macos_major), \
          patch.object(ac, "_store", None):
-        h = await ac.health_check()
-    check("authorized + cals → healthy", h["status"] == "healthy", f"got {h}")
+        return await ac.health_check()
+
+
+async def test_health_check_authorized_healthy():
+    print("\n[apple_calendar — health: FullAccess (5, macOS 14+) → healthy]")
+    h = await _run_health_with_status(5)
+    check("status=5 FullAccess → healthy", h["status"] == "healthy", f"got {h}")
     check("calendar_count = 3", h.get("calendar_count") == 3)
+
+
+async def test_health_check_legacy_authorized_healthy():
+    print("\n[apple_calendar — health: legacy Authorized (3, macOS 13-) → healthy]")
+    h = await _run_health_with_status(3, macos_major=13)
+    check("status=3 legacy Authorized → healthy", h["status"] == "healthy", f"got {h}")
+
+
+async def test_health_check_write_only_warn():
+    print("\n[apple_calendar — health: WriteOnly (4) → warn]")
+    h = await _run_health_with_status(4)
+    check("status=4 WriteOnly → warn", h["status"] == "warn", f"got {h}")
+    check("WriteOnly hint mentions 未授权", "未授权" in (h.get("error") or ""))
+
+
+async def test_health_check_denied_warn():
+    print("\n[apple_calendar — health: Denied (2) → warn]")
+    h = await _run_health_with_status(2)
+    check("status=2 Denied → warn", h["status"] == "warn", f"got {h}")
 
 
 async def test_health_check_old_macos_warn():
@@ -251,6 +274,9 @@ async def main():
     await test_health_check_eventkit_missing()
     await test_health_check_unauthorized_warn()
     await test_health_check_authorized_healthy()
+    await test_health_check_legacy_authorized_healthy()
+    await test_health_check_write_only_warn()
+    await test_health_check_denied_warn()
     await test_health_check_old_macos_warn()
     await test_event_normalisation()
     await test_event_fallback_no_title()
