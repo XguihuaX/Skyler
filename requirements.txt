@@ -22,3 +22,5 @@ google-api-python-client>=2.100
 tenacity>=8.0
 # v3-G chunk 1.5 — MCP 双向集成（server + client）
 mcp>=1.0
+# v3-G chunk 1.6 — Apple Calendar via macOS EventKit（仅 macOS 实际加载）
+pyobjc-framework-EventKit>=10.0; sys_platform == "darwin"

@@ -76,6 +76,7 @@ from backend.scheduler.task import scheduler
 # 加到这里。
 import backend.capabilities.time_capability  # noqa: F401, E402
 import backend.capabilities.calendar         # noqa: F401, E402  v3-G chunk 1
+import backend.capabilities.apple_calendar   # noqa: F401, E402  v3-G chunk 1.6
 from backend.mcp import server as mcp_server  # noqa: E402  v3-G chunk 1.5
 
 logging.basicConfig(
