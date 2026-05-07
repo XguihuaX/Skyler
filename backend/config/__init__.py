@@ -79,6 +79,20 @@ def get_planner_model() -> str:
     return get_default_model()
 
 
+def get_available_models() -> list[dict]:
+    """v3-G chunk 1.7 — 返回 ``available_models`` 列表，给前端 model 切换器。
+
+    每项形如 ``{"id": "openai/qwen3.6-plus", "display_name": "...",
+    "description": "...", "tier": "stable" | "preview"}``。
+
+    每次读最新值；POST /api/settings/model 写回 yaml 后立即生效。
+    """
+    val = config_yaml.get("available_models")
+    if isinstance(val, list):
+        return val
+    return []
+
+
 def get_tts_enabled() -> bool:
     """每次读最新值，无缓存"""
     return config_yaml.get("tts", {}).get("enabled", True)

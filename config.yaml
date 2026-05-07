@@ -1,6 +1,19 @@
-default_model: openai/qwen-plus
+default_model: openai/qwen3.6-plus
 planner_model: openai/qwen-turbo
 default_user_id: default
+
+# v3-G chunk 1.7 — 可切换 LLM 模型清单
+# default_model 必须是 id 之一；GET /api/settings/model 直接返此列表
+# tier=preview 在前端用 badge 标识"实验性可能不稳"
+available_models:
+  - id: openai/qwen3.6-plus
+    display_name: Qwen3.6 Plus
+    description: 稳定平衡，日常推荐
+    tier: stable
+  - id: openai/qwen3.6-max-preview
+    display_name: Qwen3.6 Max
+    description: 最强能力，preview 期可能偶发不稳
+    tier: preview
 base_instruction: 回复简短克制，通常不超过3句话，除非用户明确需要详细解释。不总结、不复述用户说的话。不用"当然"、"没问题"、"好的"等开场白。不在句尾加多余的关心语。像真实的人一样说话，不像客服或AI助手。
 memory:
   long_term_enabled: true
