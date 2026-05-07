@@ -1073,6 +1073,18 @@ v3-E2 chunk 6 给八重 (id=2) 的 `hit_area_map_json` 写好了 8 个 HitAreas 
 
 ---
 
+## 十四之C、Architectural Decisions
+
+### 网易云音乐自动播放——封存
+
+**决策**：v3-H chunk 1 已实现 weapi client + 12 capability（数据查询 + 媒体控制），但自动播放链路（orpheus URL Scheme + nowplaying-cli）在测试环境不稳定，封存待重新设计。
+
+**架构遗产**：
+- weapi 加密层、cookie 配置、capability 抽象全部保留
+- 任何后续音乐方案（自解码 / 客户端 hook / 第三方播放器）都可复用
+
+---
+
 ## 十五、MCP 工具扩展
 
 ```
@@ -1515,6 +1527,8 @@ pixi-live2d-display 及其所有维护中的 fork（advanced / lipsyncpatch / mu
 - [x] **Time capability**（`backend/capabilities/time_capability.py`）—— 第一个内置 capability，`time.now` 返回 `{iso, timezone, human, weekday, is_weekend}`
 - [x] **n8n webhook receiver**（`backend/routes/webhooks_api.py`）—— `POST /api/webhooks/n8n/{trigger_name}`；Bearer + HMAC SHA256 双因子鉴权；handler 异步 dispatch；详见 `docs/n8n-integration.md`
 - [x] **前端 CapabilityPanel**（`frontend/src/components/CapabilityPanel.tsx`）—— 按 category 分组的卡片视图，挂在 SettingsPanel 顶部 Section（spec "tab" → 现有单列布局做 Section 近似）
+
+v3-H chunk 1 完成时，CapabilityRegistry 已支撑 30+ capability 的注册，ChatAgent 自始至终零代码改动。
 
 #### v3-G chunk 1+：生活 & 工具型能力 📋 计划中（Hermes 借鉴 + DESIGN 原计划）
 - [ ] **剪贴板助手** —— Tauri clipboard API 监听变化，AI 可主动评论 / 翻译 / 总结复制内容

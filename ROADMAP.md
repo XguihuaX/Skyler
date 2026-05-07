@@ -25,7 +25,7 @@
 | **v3-F'：主动对话 + 时间感知（饭点 / 睡前 / 长时无互动）** | 📋 计划中 | 0% |
 | v3-G：生活 & 工具型能力（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 | 0% |
 | **v3-G'：TTS UI 升级 + cosyvoice emotion 走 instruct（chunk 1a SSML 路径已撤回）** | ✅ 完成（5 commit + 2 patch，2026-05-06）；Phase 2 复刻音色 / SoVITS 训练 📋 PENDING | Phase 1 100% |
-| **v3-H：媒体接入（网易云内置 / 媒体控制 / B站）** | 🚧 chunk 1 ✅ 完成（网易云 + nowplaying-cli，2026-05-08）；B 站 📋 TODO | 65% |
+| **v3-H：媒体接入（网易云内置 / 媒体控制 / B站）** | 🚧 chunk 1 🟡 PARTIAL（数据查询 + 媒体控制可用；NCM 自动播放封存待 chunk 2 重做，2026-05-08）；B 站 📋 TODO | 50% |
 | v4：屏幕感知 + 视觉能力 | 📋 远期 | 0% |
 | **v5-D：autodl 部署 + 子 agent 隔离** | 📋 远期 | 0% |
 | **v5-T1：GPT-SoVITS 后端接通（依赖 v5-D）** | 📋 远期 | 0% |
@@ -481,11 +481,28 @@
 
 | 子任务 | 状态 | 路径要点 |
 |---|---|---|
-| 网易云内置接入 | ✅ chunk 1 完成（2026-05-08）| 后端直接调网易云 web API（weapi 加密）+ orpheus URL scheme 唤起本地 App |
+| 网易云内置接入 | 🟡 chunk 1 PARTIAL（2026-05-08）| 数据查询 + 唤起 NCM 可用；自动播放封存待 chunk 2 重做 |
 | 媒体控制（nowplaying-cli）| ✅ chunk 1 完成（2026-05-08）| `brew install nowplaying-cli` + 5 个 capability，跨来源播控 |
 | B 站接入 | 📋 TODO | 独立链路；MCP client 或直接 integrations/bilibili.py |
 
-#### chunk 1 ✅ 完成（2026-05-08）— 网易云内置接入 + macOS 媒体控制
+### v3-H chunk 1 — 网易云音乐接入 🟡 PARTIAL
+
+**已交付**：
+- 网易云 web API client（weapi 加密）
+- 7 个 netease.* capabilities（日推/歌单/搜歌/加红心/私人 FM 等数据查询）
+- 5 个 media.* capabilities（基于 nowplaying-cli）
+- macOS 媒体控制基础设施（独立可复用）
+
+**已知限制**：
+- 自动播放功能不稳定（NCM macOS 客户端的 orpheus:// URL Scheme 对路由/播放命令支持不完整，与版本相关）
+- 当前可作为「数据查询 + 唤起 NCM」使用，最终播放需用户手动点击
+
+**后续 v3-H chunk 2 备选方向**（自决，不阻塞主线）：
+- 方向 A：fork NCM URL Scheme handler 找其他 hook 点
+- 方向 B：Skyler 自己解码音频（song/url API + afplay/mpv），完全可控但失去 NCM 客户端的歌词/动画
+- 方向 C：纯查询模式（Momo 告诉你播什么，你手动点）
+
+#### chunk 1 交付详情（2026-05-08）— 网易云内置接入 + macOS 媒体控制
 
 **关键决策：放弃 cloud-music-mcp，自己写 weapi**
 
@@ -660,6 +677,34 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
 - ❌ 系统操作 agent（鼠标键盘控制）—— DESIGN 里曾提过，但跨平台 + 安全代价太高
 - ❌ **Settings 全局 TTS 开关** —— TTS 配置只在 CharacterPanel 上 per-character 提供，避免双层配置带来的认知负担
 - ❌ TTS UI 提前堆假选项 —— 下拉只显示真实可用的 voices，新 provider 接通后自动出现
+
+---
+
+## Tech Debt & Backlog
+
+### 性能
+- ⚠️ `_build_messages` 性能退化：chunk 1.6 实测 4ms，v3-H chunk 1 实测 4487ms（1000x）。嫌疑路径：某个新 capability 在 prompt 注入时做昂贵 IO（同步 health_check 远程 API？）。修复时间窗：v3-G 主线封盘前 audit。
+
+### 数据架构
+- Characters 双源技术债：`characters.yaml` 与 DB `characters` 表两套数据源不一致。当前 Scheme B（DB 主 + YAML fallback）。计划 Scheme C（v3-G 末或 v4）：删 yaml、DB 单源、写迁移脚本、`switch_character` 工具改 DB query、`prompt_manager` 改 DB-backed。
+
+### 角色
+- Momo (id=1) 当前是 Yae Miko 临时占位人设（chunk 1.6 时为绑 Hiyori 模型设的）。v3-E2 多 Live2D 模型扩展完成后，恢复 `characters.yaml` default 条目里的原 ChatAgent 人设。
+
+### Live2D
+- Hiyori motionMap 完整语义已用户验证（Flick=轻挥、FlickDown=手藏背后、FlickUp=举手欢呼、Flick@Body=组合）。Hiyori 缺挥手 hello / 点头 / 鞠躬等动作。v3-E2 切换其他模型时全表重写。
+- v3-E3 emotion 视觉绑定阻塞于 `.exp3.json` 模型资产（外部依赖）。
+
+### 音色
+- v3-G' Phase 2 自训音色（SoVITS / 微调 cosyvoice3）等用户训练完成后接入。
+
+### 工具链
+- skyler CLI 工具（thin client 调 backend HTTP）：替代 MCP 作为对外接口的更轻方案。v3-G 封盘后做。
+- MCP server 暴露层（chunk 1.5 已建）作为标准化备选保留，默认 disabled，按需启用。
+
+### 媒体接入
+- 网易云音乐自动播放重做（v3-H chunk 1 partial）
+- B 站 / Pollinations 表情包 / OpenClaw 等其他媒体源（v3-H 后续）
 
 ---
 

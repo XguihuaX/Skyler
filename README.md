@@ -97,8 +97,8 @@ All components use `var(--color-*)` from `styles/themes.css` (no hardcoded Tailw
 - **Settings panel** — 4 sections (Memory / Basic / Character / UI 风格)
 - **Mouse click-through for widget mode**
 
-### 🎵 Music & Media (v3-H chunk 1, May 2026)
-- **网易云音乐内置接入** — 后端直接调网易云 web API（weapi 加密自实现，零外部 SDK），唤起本地官方 App 播放。7 capability：日推 / 私人 FM / 按名字放歌 / 红心歌单 / 模糊匹配自定义歌单 / 给当前在播加红心 / 搜索。配置走 `.env` 的 `MUSIC_U` cookie，详见 [`docs/netease-music-setup.md`](./docs/netease-music-setup.md)
+### 🎵 Music & Media (v3-H chunk 1 🟡 PARTIAL, May 2026)
+- **网易云音乐数据接入** — 后端 weapi client + 7 capability（日推 / 私人 FM / 搜歌 / 歌单 / 加红心 / 搜索 …），唤起本地 NCM App。**自动播放链路封存待 chunk 2 重做**（orpheus:// URL Scheme 对路由/播放命令支持不完整）；当前作为「数据查询 + 唤起 NCM」使用，最终播放需手动点击。配置走 `.env` 的 `MUSIC_U` cookie，详见 [`docs/netease-music-setup.md`](./docs/netease-music-setup.md)
 - **跨来源系统级播控** — `nowplaying-cli` 包装 5 capability：上一首 / 下一首 / 播放暂停 / 当前在播 / 系统音量。不限来源——网易云 / Apple Music / Spotify / YouTube / B 站网页都能控。详见 [`docs/media-control-setup.md`](./docs/media-control-setup.md)
 
 ### 👁 Screen Awareness *(v4, planned)*
