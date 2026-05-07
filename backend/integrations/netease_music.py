@@ -297,12 +297,21 @@ class NeteaseClient:
     def play_url_scheme(kind: str, item_id: int) -> str:
         """拼装 ``orpheus://`` URL scheme。
 
-        kind ∈ {song, playlist, album, artist}。daily/fm 不走 ID，由 capability
-        层直接拼 ``orpheus://daily`` / ``orpheus://fm`` 字符串。
+        autoplay 语义（社区共识，多个 NCM-launcher 整合一致）：
+
+        * ``orpheus://{song,playlist,album}/<id>``        —— 导航到该页，**不**自动播放
+        * ``orpheus://{song,playlist,album}/<id>/play``   —— 导航 + 立即播放（推荐）
+        * ``orpheus://artist/<id>``                       —— 仅导航（艺人页没有"播放整页"语义）
+        * ``orpheus://personalFM``                        —— 直接进 FM 模式，本身即触发播放
+
+        本 chunk 1 patch 把 song/playlist/album 默认走 /play 后缀（chunk 1 验证后
+        发现仅导航不播放，需用户手动点播放键）。
         """
         if kind not in {"song", "playlist", "album", "artist"}:
             raise ValueError(f"unsupported kind: {kind!r}")
-        return f"orpheus://{kind}/{int(item_id)}"
+        if kind == "artist":
+            return f"orpheus://artist/{int(item_id)}"
+        return f"orpheus://{kind}/{int(item_id)}/play"
 
 
 # ---------------------------------------------------------------------------

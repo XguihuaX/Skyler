@@ -236,14 +236,22 @@ def test_daily_recommend_uses_dailySongs_path():
 # ---------------------------------------------------------------------------
 
 def test_url_scheme():
-    print("\n[netease — orpheus URL scheme builder]")
+    print("\n[netease — orpheus URL scheme builder + /play autoplay]")
     check(
-        "song scheme",
-        nm.NeteaseClient.play_url_scheme("song", 12345) == "orpheus://song/12345",
+        "song scheme has /play suffix",
+        nm.NeteaseClient.play_url_scheme("song", 12345) == "orpheus://song/12345/play",
     )
     check(
-        "playlist scheme",
-        nm.NeteaseClient.play_url_scheme("playlist", 999) == "orpheus://playlist/999",
+        "playlist scheme has /play suffix",
+        nm.NeteaseClient.play_url_scheme("playlist", 999) == "orpheus://playlist/999/play",
+    )
+    check(
+        "album scheme has /play suffix",
+        nm.NeteaseClient.play_url_scheme("album", 42) == "orpheus://album/42/play",
+    )
+    check(
+        "artist scheme stays bare (no /play semantic)",
+        nm.NeteaseClient.play_url_scheme("artist", 7) == "orpheus://artist/7",
     )
     raised = False
     try:

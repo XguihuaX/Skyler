@@ -106,8 +106,9 @@ async def daily_recommend(**_kwargs) -> dict:
 )
 async def personal_fm(**_kwargs) -> dict:
     songs = await asyncio.to_thread(_client().personal_fm)
-    # orpheus://fm 直接唤起私人 FM 入口（无需 song id）
-    opened = await _open_url("orpheus://fm")
+    # orpheus://personalFM 直接进入私人 FM 模式（社区 canonical 形式；
+    # 进入 FM 即触发播放，不需要 /play 后缀，详见 play_url_scheme docstring）
+    opened = await _open_url("orpheus://personalFM")
     if not opened and songs:
         opened = await _open_url(nm.NeteaseClient.play_url_scheme("song", int(songs[0]["id"])))
     return {"opened": opened, "songs": songs[:5]}

@@ -113,7 +113,7 @@ async def test_daily_recommend_opens_first():
          patch.object(caps, "_open_url", side_effect=fake_open):
         out = await caps.daily_recommend()
     check("opened True", out["opened"] is True)
-    check("opened first song URL", opened_urls == ["orpheus://song/100"])
+    check("opened first song URL with /play", opened_urls == ["orpheus://song/100/play"])
     check("first_song id=100", out["first_song"]["id"] == 100)
     check("songs sample limited to 5", len(out["songs"]) == 2)
 
@@ -138,7 +138,7 @@ async def test_daily_recommend_empty_returns_error():
 # ---------------------------------------------------------------------------
 
 async def test_personal_fm_uses_fm_scheme():
-    print("\n[netease caps — personal_fm tries orpheus://fm first]")
+    print("\n[netease caps — personal_fm tries orpheus://personalFM first]")
     fake = _FakeClient()
     opened_urls = []
     async def fake_open(url):
@@ -147,7 +147,10 @@ async def test_personal_fm_uses_fm_scheme():
          patch.object(caps, "_open_url", side_effect=fake_open):
         out = await caps.personal_fm()
     check("opened True", out["opened"] is True)
-    check("first call orpheus://fm", opened_urls[0] == "orpheus://fm")
+    check(
+        "first call orpheus://personalFM (community canonical form)",
+        opened_urls[0] == "orpheus://personalFM",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +167,7 @@ async def test_play_song_searches_and_opens():
          patch.object(caps, "_open_url", side_effect=fake_open):
         out = await caps.play_song(keyword="夜空")
     check("opened True", out["opened"] is True)
-    check("opened song URL", opened_urls == ["orpheus://song/999"])
+    check("opened song URL with /play", opened_urls == ["orpheus://song/999/play"])
     check("song id=999", out["song"]["id"] == 999)
     # search call sent
     search_calls = [c for c in fake.calls if c[0] == "search"]
@@ -214,7 +217,7 @@ async def test_play_playlist_by_id_opens():
     with patch.object(caps, "_open_url", side_effect=fake_open):
         out = await caps.play_playlist_by_id(playlist_id=42)
     check("opened True", out["opened"] is True)
-    check("URL = orpheus://playlist/42", opened_urls == ["orpheus://playlist/42"])
+    check("URL = orpheus://playlist/42/play", opened_urls == ["orpheus://playlist/42/play"])
     check("playlist_id echoed", out["playlist_id"] == 42)
 
 
