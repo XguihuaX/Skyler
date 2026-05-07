@@ -22,8 +22,8 @@
 | **v3-E2：多模型 Live2D 接入（runtime 抽象层 + per-character maps）** | ✅ 完成（9 commit，2026-05-06）| 95%（IP license / 加藤惠 Cubism 4 重制版 / hit-area 路由 backlog 不阻塞）|
 | **v3-E3：emotion 视觉绑定真上线** | 🚧 代码路径已接通，等有 `.exp3.json` 的模型 | 90%（运营任务）|
 | v3-F：语音体验飞跃（打断 ✅ / 并发 ✅ / 预处理 ✅ / 内心独白 ✅） | ✅ 完成 | 100% |
-| **v3-F'：主动对话 + 时间感知（饭点 / 睡前 / 长时无互动）** | 📋 计划中 | 0% |
-| v3-G：生活 & 工具型能力（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 | 0% |
+| **v3-F'：主动对话 + 时间感知（饭点 / 睡前 / 长时无互动）** | 🟡 engine 已就位（v3-G chunk 2），剩余工作 = 写 N 个 trigger 配置 | 25% |
+| v3-G：生活 & 工具型能力（剪贴板 / 简报 / cron / 成长系统） | 🚧 chunk 0 ✅ + chunk 1 ✅ + chunk 1.5 ✅ + chunk 1.6 ✅ + chunk 1.7 ✅ + chunk 2 ✅ 智能简报 + proactive engine（2026-05-08） | 80% |
 | **v3-G'：TTS UI 升级 + cosyvoice emotion 走 instruct（chunk 1a SSML 路径已撤回）** | ✅ 完成（5 commit + 2 patch，2026-05-06）；Phase 2 复刻音色 / SoVITS 训练 📋 PENDING | Phase 1 100% |
 | **v3-H：媒体接入（网易云内置 / 媒体控制 / B站）** | 🚧 chunk 1 🟡 PARTIAL（数据查询 + 媒体控制可用；NCM 自动播放封存待 chunk 2 重做，2026-05-08）；B 站 📋 TODO | 50% |
 | v4：屏幕感知 + 视觉能力 | 📋 远期 | 0% |
@@ -254,16 +254,29 @@
 
 让 Momo 不只是被动回应，而是主动开启对话（饭点 / 睡前 / 长时间无互动等情境）。
 
-**清单**：
+**🎯 当前状态（2026-05-08）：通用 proactive engine 已就位（v3-G chunk 2），剩余工作 = 写 N 个 trigger 配置**。
+engine 流水线 `trigger → aggregate → ChatAgent → WS push` 完整跑通；新增触发器只需新建一个文件实现 `ProactiveTrigger` 抽象（详见 DESIGN §十五之B）。
+首个 trigger `MorningBriefingTrigger` 已上线（智能简报）；下面是 v3-F' 真正的 trigger pack：
 
-- [ ] 后端定时调度器（cron / scheduler，复用 v3-G 自然语言 cron 基础设施）
-- [ ] 触发场景：午饭 / 晚饭点 / 睡前 / 长时间无互动 / 用户日历事件前
-- [ ] LLM 主动生成 prompt（非用户输入触发，从 profile_summary + chat_history 拉上下文）
-- [ ] chat_history 标 `kind='proactive'`（跟 v3-E1 Step Z [touch] 加 kind 字段同设计，profile rewrite 一并跳过）
-- [ ] 用户当前 active 状态判断（Tauri 是否在前台 / 是否最近有交互）—— 用户离开时不打扰
+| trigger | 调度 | system prompt 关注点 |
+|---|---|---|
+| ✅ `morning_briefing` | cron 09:00 | 天气 / 日程 / 待办 / 闲笔 / 开放话头 |
+| ⬜ `meal_lunch` / `meal_dinner` | cron 12:00 / 18:00 | 关心吃了什么；调 `list_memories` 拿口味偏好 |
+| ⬜ `evening_wind_down` | cron 22:00 | 一天总结 + 睡前关心；调 `calendar.today_events` 复盘 |
+| ⬜ `long_idle` | interval 30min（条件：last user turn > 2h） | 主动开口；话题源自 profile_summary |
+
+**剩余任务清单**：
+
+- [x] 后端定时调度器（chunk 0 APScheduler 已建）
+- [x] 通用 proactive engine（chunk 2）：trigger 抽象 + character 解析 + WS proactive 协议
+- [x] `chat_history.kind='proactive'` + `proactive_trigger` 字段（profile_summary 已自动排除）
+- [x] 首个 trigger 上线（morning_briefing）
+- [ ] 多 trigger 并发的 audio / emotion 状态隔离验证
+- [ ] 用户当前 active 状态判断（Tauri 是否在前台 / 最近有交互）—— 离开时不打扰
 - [ ] 频率限制（不能太烦，profile_summary 里记下用户偏好）
+- [ ] 实现上面表里 3 个剩余 trigger
 
-**估时**：1-2 天。
+**估时**：每个 trigger ~半天；并发 / active 检测 / 频率限制各 ~半天。
 
 ---
 
@@ -322,6 +335,41 @@
 * OAuth-protected MCP server（用 mcp SDK 内置 OAuth provider 替代 Bearer）—— 当 Skyler 部署到远程 / 多用户场景时
 * 外部 server tool list 变更监听（当前 init 时拉一次；外部 hot-add tool 需要 reconnect）
 * Resource / Prompt 类型的派生（当前只暴露 tool；MCP 标准还有 resources / prompts 两类）
+
+---
+
+**chunk 2 ✅ 完成（2026-05-08）— 通用 proactive engine + 智能早晨简报 + chunk 2.5 NL 日程录入**
+
+把 chunk 1 的"模板简报 v0.1"升级为 ChatAgent 智能生成，并**抽象出通用 proactive engine**——同一条流水线 `trigger → aggregate → ChatAgent → WS push` 服务所有未来主动陪伴场景。v3-F' 多 trigger 路线在本 chunk 之后变成"写若干个 trigger 配置文件"而非工程项目（详见 DESIGN §十五之B）。
+
+| Hash | 内容 |
+|---|---|
+| `<本 commit>` | feat(proactive): generic engine + morning_briefing trigger + DB migration + chunk 2.5 prompt addendum + frontend WS proactive handling + SettingsPanel section + tests + docs |
+
+**架构关键点**：
+
+1. **`ProactiveTrigger` ABC**（`backend/proactive/engine.py`）：`name` / `cron_expr|interval_seconds|event_source` 三选一调度 / `enable_search` / `build_system_prompt(character)` / `resolve_capabilities()`。子类是纯配置加少量 system prompt 文本。
+2. **`run_trigger(trigger, user_id)`**：统一聚合 + 流式 + 持久化路径。**character 解析三档**：override > 最近活跃用户 turn > Momo fallback。**对话**：拉最新或新建 title='主动陪伴'。
+3. **WS 协议向后兼容**：`text_chunk` / `audio_chunk` / `done` 加 `proactive=true` + `proactive_trigger=<name>` 字段；老前端忽略未知字段照常工作。
+4. **`chat_history.kind='proactive'` + `proactive_trigger`**：profile_summary 重写白名单 `kinds=['normal']` 已自动排除 proactive 行（v3-E1 Step Z.2 落地，本 chunk 零改动证明老抽象支撑住了新需求）。
+5. **`enable_search` 真接通到 ChatAgent.stream**：通过 `payload.context.enable_search` 透到 `call_llm(enable_search=True)`，qwen → DashScope `enable_search=true`，deepseek → `web_search_preview` tool。
+6. **briefing.py 缩成薄包装**：`deliver_morning_briefing()` 现在就是 `run_trigger(MorningBriefingTrigger(), user_id)` + 返回字典补 chunk 1 兼容字段（`audio_path` / `voice_model`）。`POST /api/briefing/test` 路由零改动。
+7. **chunk 2.5 NL 日程录入**：`_TOOL_PROMPT_ADDENDUM` 加【日程录入】verbatim 段，明确"先 time.now → 再 apple_calendar.create_event；时长缺省 1 小时；地点 / 备注从原话提取"。
+8. **前端**：`useWebSocket.ts` 识别 proactive chunk → 流式气泡 `kind='proactive'` + 推 toast "🌅 早安简报"；`ChatHistory.tsx` 渲染灰字前缀；`SettingsPanel` 新增 [主动陪伴] section（enabled 总开关 / 早晨简报 / cron / 城市 / 角色覆盖 / 🧪 立即测试简报）。
+
+**测试覆盖**：3 个新测试套件（`test_proactive_engine.py` 21/21 + `test_morning_briefing.py` 30/30 + `test_briefing.py` 重写 14/14）；旧 `_format_event_for_briefing` / `generate_morning_briefing` 测试随 chunk 1 模板生成器一并删除（chunk 2 走 LLM 路径，单元测 mock-LLM 不再有 template-text 断言意义）；`test_calendar_router.py` import 测试更新为 chunk 2 薄包装。**总计 65 个新 case 全过 + 0 回归**。
+
+**Footgun audit / pivots**：
+
+* **chat_history.kind 已存在**：v3-E1 Step Z.2 已加，spec 让"加 kind 字段"可跳过。**只新增 `proactive_trigger`**。commit message 写明。
+* **profile_summary 白名单已生效**：v3-E1 Step Z.2 已实现 `kinds=['normal']` 白名单 ⇒ proactive 行自动排除。**零额外改动**。回归测试加断言验证。
+* **frontend `ChatKind` 已含 'proactive'**：v3-E1 Step Z.2 也提前预留。直接复用。
+* **`enable_search` 未通到 ChatAgent.stream**：发现 `call_llm(enable_search=...)` 已支持但 ChatAgent.stream 没透。本 chunk 加 `payload.context.enable_search` 通道。
+* **`resolve_capabilities` 不裁剪 ToolRegistry**：spec 说"空 = 全 CHAT_AGENT 集合"——为减小 chat.py 改动面，**当前实现走 prompt-time hint 而非硬裁剪**。LLM 仍可见所有 capability，trigger 在 system prompt 里说"推荐调用 A/B/C"。后续若需硬裁剪再扩 ChatAgent 接 `tool_subset` 参数。已在 DESIGN backlog 标。
+* **briefing.py 改写后旧 test 接口失效**：旧 `_format_event_for_briefing` / `generate_morning_briefing` 已删，`tests/test_briefing.py` 重写覆盖薄包装语义；`tests/test_calendar_router.py` 内的 chunk 1 兼容测试更新。
+* **测试 DB 不自动跑 migration**：发现 `init_db` 只 `create_all`，不增列。在测试 setup 显式调 migrations 链。
+
+**v3-F' payoff**：v3-F'（饭点 / 睡前 / 长闲）在本 chunk 之后从"工程项目"降级为"配置工程"——每个 trigger ~半天，engine 零改动。详见上面 v3-F' 章节表。
 
 ---
 

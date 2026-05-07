@@ -194,22 +194,21 @@ async def test_google_disabled_health_check():
 
 
 # ---------------------------------------------------------------------------
-# 5. briefing 模块仍正常 import calendar.today_events
+# 5. briefing 模块薄包装仍能导入 + delegates to proactive engine
+#    （chunk 2 起不再做 template 文本生成，旧 generate_morning_briefing 已删）
 # ---------------------------------------------------------------------------
 
 async def test_briefing_import_still_works():
-    print("\n[briefing — import calendar.today_events still works]")
-    from backend.scheduler.briefing import generate_morning_briefing
-    fake_yaml = {"calendar": {"default_source": "apple"}, "scheduler": {"timezone": "Asia/Tokyo"}}
-
-    async def fake_apple_today(**_kw):
-        return []  # no events → 应触发 "今天没有日程" friendly text
-
-    with patch.object(cal_router, "config_yaml", fake_yaml), \
-         patch("backend.capabilities.apple_calendar.today_events", fake_apple_today):
-        text = await generate_morning_briefing()
-    check("briefing generates text", isinstance(text, str) and len(text) > 0)
-    check("正确选 apple → 没有日程文案（route worked）", "没有日程" in text, f"got: {text!r}")
+    print("\n[briefing — chunk 2 thin wrapper still imports + delegates]")
+    from backend.scheduler import briefing as briefing_module
+    check("deliver_morning_briefing exists",
+          callable(getattr(briefing_module, "deliver_morning_briefing", None)))
+    # MorningBriefingTrigger 是 chunk 2 真正的简报"内容"载体；
+    # generate_morning_briefing 已删（template 生成逻辑没了）
+    from backend.proactive.triggers.morning_briefing import MorningBriefingTrigger
+    check("MorningBriefingTrigger imports", MorningBriefingTrigger is not None)
+    t = MorningBriefingTrigger()
+    check("trigger.name = morning_briefing", t.name == "morning_briefing")
 
 
 # ---------------------------------------------------------------------------

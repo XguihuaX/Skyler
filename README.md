@@ -82,6 +82,14 @@ All components use `var(--color-*)` from `styles/themes.css` (no hardcoded Tailw
 - **Todo management** — agent-created and user-created tasks tracked in SQLite
 - **Proactive push** — backend initiates messages anytime via persistent WebSocket (`notify` / `alarm` / future `screen_comment`)
 
+### 🌅 Proactive Companionship (v3-G chunk 2, May 2026)
+- **通用 proactive engine** — `trigger → aggregate → ChatAgent → WS push` 流水线。`ProactiveTrigger` 抽象类让新触发器只需新建一个文件（cron / interval / event-source 三选一调度方式）。详见 DESIGN §十五之B
+- **早晨智能简报** — 默认每天 9 点（Asia/Tokyo）拉起一段 200-300 字自然口语问候，覆盖天气 / 今日日程 / 待办提醒 / 温度感闲笔 / 开放话头结尾。靠 ChatAgent 自主调 `time.now` / `calendar.today_events` / `list_memories` + LiteLLM model-native web search 编织
+- **特性**：用 character 当前 voice_model 流式 TTS、Live2D 同步口型 + emotion / motion 全跟上；播完用户 VAD 续聊，简报本轮直接进入短期记忆（"那把 X 改到下午"能正确理解）；character 解析三档优先级（override > 最近活跃 > Momo fallback）
+- **WS 协议向后兼容**：`text_chunk` / `audio_chunk` / `done` 加 `proactive=true` + `proactive_trigger` 字段，老前端忽略未知字段照常工作；新前端按 trigger 名映射 toast `🌅 早安简报`
+- **ChatHistory 渲染**：proactive turn 灰字前缀（`🌅（早安简报）`）；`profile_summary` 重写白名单 `kinds=['normal']` 自动排除 proactive / touch 行（v3-E1 Step Z.2 已落地，本 chunk 零改动）
+- **Settings**：[主动陪伴] section 控制 enabled / cron / city / character override + 🧪 立即测试简报按钮
+
 ### 🌸 Character Presence (v3-E1 main line done, May 2026)
 - 🎭 **Live2D avatar** (Hiyori sample model, Cubism 4) — rendering + idle / focus / breath, Galgame full-bleed layout
 - 👄 **Lip sync** — Web Audio AnalyserNode → `ParamMouthOpenY`, shared AudioContext across multi-segment TTS

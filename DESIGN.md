@@ -1085,6 +1085,108 @@ v3-E2 chunk 6 给八重 (id=2) 的 `hit_area_map_json` 写好了 8 个 HitAreas 
 
 ---
 
+## 十五之B、Proactive Engine 架构（v3-G chunk 2 起）
+
+通用主动陪伴流水线。基础假设：每条主动消息走的都是同一条管道（拉上下文 →
+ChatAgent 流式生成 → WS push → DB 持久化），区别只在"什么时候触发 + 触发时
+塞什么 system prompt"。这两件事抽到 ``ProactiveTrigger``，引擎本身 trigger-
+agnostic。
+
+### 流水线
+
+```
+   trigger (cron/interval/event)
+            │
+            ▼
+   ProactiveTrigger.build_system_prompt(character) ─┐
+   ProactiveTrigger.resolve_capabilities()         │  (聚合阶段)
+            │                                       │
+            ▼                                       │
+   resolve target character_id ◀───────────────────┤
+   (override > recent user turn > Momo fallback)   │
+            │                                       │
+            ▼                                       │
+   get_or_create conversation                       │
+            │                                       │
+            ▼                                       │
+   ChatAgent.stream(payload)                        │
+   payload = {                                      │
+       text:     "[proactive trigger]",            │
+       context.extra_system: build_system_prompt,   │
+       context.enable_search: trigger.enable_search,│
+       character_id: target_char_id,                │
+   }                                                │
+            │                                       │
+            ▼                                       │
+   sentence stream → 并发 TTS task queue           │  (生成 + 传输)
+            │                                       │
+            ▼                                       │
+   ConnectionManager.push                           │
+       text_chunk   {proactive: true, ...}         │
+       audio_chunk  {proactive: true}              │
+       emotion / motion / thinking (per-turn)       │
+       done         {proactive: true}              │
+            │                                       │
+            ▼                                       │
+   add_chat_history(                               │  (持久化)
+       role='assistant',                           │
+       kind='proactive',                           │
+       proactive_trigger=trigger.name,              │
+   )                                                │
+            ▼
+   profile_summary 重写：kinds=['normal'] 白名单 ⇒ 自动排除（v3-E1 Step Z.2 已落地）
+```
+
+### ProactiveTrigger 抽象（``backend/proactive/engine.py``）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| ``name`` | str | ✓ | 触发器唯一名字。写入 ``chat_history.proactive_trigger`` + cron job id；前端按它映射 toast / 灰字前缀 label |
+| ``cron_expr`` | str \| None | 三选一 | APScheduler crontab 表达式（5 段） |
+| ``interval_seconds`` | int \| None | 三选一 | 固定间隔触发 |
+| ``event_source`` | str \| None | 三选一 | 外部事件源标识（webhook 等，本 chunk 占位） |
+| ``enable_search`` | bool | — | 是否启用 LiteLLM model-native web search |
+| ``build_system_prompt(character)`` | async ⇒ str | ✓ | 注入到 ``context.extra_system`` 的本次触发系统提示 |
+| ``resolve_capabilities()`` | async ⇒ list[str] | — | 推荐 LLM 调的 capability hint（hint 用，不裁剪 ToolRegistry） |
+
+### v3-F' = engine 的 trigger pack
+
+``v3-F'`` 主动对话路线（饭点 / 睡前 / 长闲 / 心情主动检查）在本 chunk 落地
+后**不再是 engine 工程**，而是写若干个 ``ProactiveTrigger`` 子类。每个 trigger
+按本节签名写 ~50 行（一个 cron / interval + 一段 system prompt + 推荐
+capability hint），engine 自动接通完整 ChatAgent pipeline。
+
+| v3-F' trigger 候选 | 调度 | system prompt 关注点 |
+|---|---|---|
+| ``meal_lunch`` / ``meal_dinner`` | cron 12:00 / 18:00 | 关心吃了什么，调 ``list_memories`` 拿口味偏好 |
+| ``evening_wind_down`` | cron 22:00 | 一天总结 + 睡前关心，调 ``calendar.today_events`` 复盘 |
+| ``long_idle`` | interval 30min（条件：last user turn > 2h） | 主动开口，话题源自 profile_summary |
+
+工程量 = 每个 trigger 大约半天到一天。engine 本身零改动。
+
+### 协议字段（向后兼容）
+
+```json
+{ "type": "text_chunk",  "content": "...",
+  "proactive": true, "proactive_trigger": "morning_briefing" }
+{ "type": "audio_chunk", "content": "<base64>",
+  "proactive": true, "proactive_trigger": "morning_briefing" }
+{ "type": "done",        "proactive": true, "proactive_trigger": "morning_briefing" }
+```
+
+老前端对未知字段静默忽略。
+
+### 已知限制 / Backlog
+
+* ``resolve_capabilities`` 当前只作 prompt-time hint，不真正裁剪传给 LLM 的
+  ``tools[]``。LLM 仍可见所有 CHAT_AGENT consumer capability —— 为多调几个
+  capability 的轻负担换 chat.py 零改动。后续若强裁剪场景出现（如 trust /
+  cost 隔离），再扩展 ChatAgent 接受 per-call ``tool_subset``。
+* 多 trigger 同时触发的 audio / emotion 状态隔离尚未验证（cron 0 9 * * *
+  里只有 morning_briefing，并发场景延后到 v3-F' 多 trigger 上线时再做）。
+
+---
+
 ## 十五、MCP 工具扩展
 
 ```
