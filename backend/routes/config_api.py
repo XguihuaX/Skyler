@@ -48,10 +48,20 @@ class MorningBriefingConfig(BaseModel):
     city: str = "东京"
 
 
+class WakeCallBriefingConfig(BaseModel):
+    cron: str = "0 8 * * *"
+    pending_ttl_minutes: int = 30
+    default_snooze_minutes: int = 30
+    city: str = "东京"
+
+
 class ProactiveConfig(BaseModel):
     enabled: bool = True
+    # v3-G chunk 2.6 mode 互斥：'wake_call' / 'morning_briefing' / 'off'
+    mode: str = "wake_call"
     character_id_override: int | None = None
     morning_briefing: MorningBriefingConfig = MorningBriefingConfig()
+    wake_call_briefing: WakeCallBriefingConfig = WakeCallBriefingConfig()
 
 
 class ConfigResponse(BaseModel):
@@ -76,10 +86,15 @@ def _build_config_response() -> ConfigResponse:
     tts_raw: dict = config_yaml.get("tts") or {}
     proactive_raw: dict = config_yaml.get("proactive") or {}
     morning_raw: dict = proactive_raw.get("morning_briefing") or {}
+    wake_raw: dict = proactive_raw.get("wake_call_briefing") or {}
 
     char_override = proactive_raw.get("character_id_override")
     if not isinstance(char_override, int):
         char_override = None
+
+    mode_raw = str(proactive_raw.get("mode") or "wake_call").strip().lower()
+    if mode_raw not in ("wake_call", "morning_briefing", "off"):
+        mode_raw = "wake_call"
 
     return ConfigResponse(
         default_model=config_yaml.get("default_model", "deepseek/deepseek-chat"),
@@ -99,11 +114,18 @@ def _build_config_response() -> ConfigResponse:
         ),
         proactive=ProactiveConfig(
             enabled=bool(proactive_raw.get("enabled", True)),
+            mode=mode_raw,
             character_id_override=char_override,
             morning_briefing=MorningBriefingConfig(
                 enabled=bool(morning_raw.get("enabled", True)),
                 cron=str(morning_raw.get("cron") or "0 9 * * *"),
                 city=str(morning_raw.get("city") or "东京"),
+            ),
+            wake_call_briefing=WakeCallBriefingConfig(
+                cron=str(wake_raw.get("cron") or "0 8 * * *"),
+                pending_ttl_minutes=int(wake_raw.get("pending_ttl_minutes") or 30),
+                default_snooze_minutes=int(wake_raw.get("default_snooze_minutes") or 30),
+                city=str(wake_raw.get("city") or "东京"),
             ),
         ),
     )

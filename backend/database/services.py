@@ -4,7 +4,7 @@ from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database.models import ChatHistory, Memory, Todo, User
+from backend.database.models import ChatHistory, Memory, PendingBriefing, Todo, User
 
 # ---------------------------------------------------------------------------
 # Re-exported for convenience: callers can do
@@ -471,3 +471,116 @@ async def get_chat_history(
     rows = list(result.scalars().all())
     rows.reverse()
     return rows
+
+
+async def get_last_assistant_turn(
+    session: AsyncSession, user_id: str,
+) -> Optional[ChatHistory]:
+    """v3-G chunk 2.6 helper —— 拿用户最近一行 assistant chat_history。
+
+    用途：wake_call stage 2 检测，确认上一条 assistant turn 的
+    ``proactive_trigger == 'wake_call'`` 才注入 addendum。其他用户也可
+    复用此 helper（如未来 follow-up 链路）。
+    """
+    row = (await session.execute(
+        select(ChatHistory)
+        .where(ChatHistory.user_id == user_id)
+        .where(ChatHistory.role == "assistant")
+        .order_by(ChatHistory.created_at.desc(), ChatHistory.id.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    return row
+
+
+# ---------------------------------------------------------------------------
+# v3-G chunk 2.6 — pending_briefings CRUD
+# ---------------------------------------------------------------------------
+
+async def add_pending_briefing(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    trigger_name: str,
+    briefing_data_json: str,
+    character_id: int,
+    conversation_id: int,
+    ttl_minutes: int = 30,
+) -> PendingBriefing:
+    """写入一行 pending_briefing。``created_at`` 用 ``datetime.utcnow()``
+    显式赋值（不走 server_default），保证 stage 2 比较的 ``created_at``
+    与 server-side ``utcnow`` 时区一致。
+    """
+    row = PendingBriefing(
+        user_id=user_id,
+        trigger_name=trigger_name,
+        briefing_data_json=briefing_data_json,
+        character_id=character_id,
+        conversation_id=conversation_id,
+        created_at=datetime.utcnow(),
+        ttl_minutes=int(ttl_minutes),
+        consumed_at=None,
+    )
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def get_active_pending_briefing(
+    session: AsyncSession,
+    user_id: str,
+    trigger_name: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> Optional[PendingBriefing]:
+    """拿最近一行 ``consumed_at IS NULL`` 且未超 TTL 的 pending_briefing。
+
+    Args:
+        trigger_name: 可选 filter（默认任意 trigger）
+        now: 测试可注入；正式路径用 ``datetime.utcnow()``
+
+    返回 None 表示没有"刚被叫早还没回应"的状态。
+
+    实现说明：用 SQLite 不支持 timezone-aware ``utcnow`` 与 ORM
+    ``datetime`` 比较时统一走 naive utc。``ttl_minutes`` 算成秒后用
+    Python 端二次过滤——纯 SQL ``DATETIME(now) - DATETIME(created_at)``
+    SQLite 不直观，宁可多取一行后过滤。
+    """
+    if now is None:
+        now = datetime.utcnow()
+    query = (
+        select(PendingBriefing)
+        .where(PendingBriefing.user_id == user_id)
+        .where(PendingBriefing.consumed_at.is_(None))
+    )
+    if trigger_name is not None:
+        query = query.where(PendingBriefing.trigger_name == trigger_name)
+    query = query.order_by(
+        PendingBriefing.created_at.desc(), PendingBriefing.id.desc(),
+    ).limit(1)
+    row = (await session.execute(query)).scalar_one_or_none()
+    if row is None:
+        return None
+    # TTL 过期 → 视为不存在（不删行；后台 housekeeping 后续做）
+    age = now - row.created_at
+    if age.total_seconds() > row.ttl_minutes * 60:
+        return None
+    return row
+
+
+async def consume_pending_briefing(
+    session: AsyncSession,
+    pending_id: int,
+    now: Optional[datetime] = None,
+) -> bool:
+    """把一行 pending 的 ``consumed_at`` 设为 now。已消费再调返 False
+    （idempotent，幂等不抛错）。"""
+    if now is None:
+        now = datetime.utcnow()
+    row = (await session.execute(
+        select(PendingBriefing).where(PendingBriefing.id == pending_id)
+    )).scalar_one_or_none()
+    if row is None or row.consumed_at is not None:
+        return False
+    row.consumed_at = now
+    await session.commit()
+    return True

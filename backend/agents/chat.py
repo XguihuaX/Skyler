@@ -659,12 +659,90 @@ async def _execute_tool(
 # Context assembly
 # ---------------------------------------------------------------------------
 
+async def _maybe_build_wake_call_addendum(
+    user_id: str, user_text: str,
+) -> Optional[str]:
+    """v3-G chunk 2.6 stage 2：检测 wake_call pending → 返 addendum，否则 None。
+
+    判定条件全部为真才注入：
+      1. ``proactive.mode == 'wake_call'``（避免与 morning_briefing 模式
+         交叉污染——后者不写 pending_briefings，本检查仅做防御）
+      2. 该 user 最近一行 assistant chat_history 的 ``proactive_trigger``
+         等于 ``'wake_call'``。这样普通对话 / 切到别的 conversation 不会
+         误命中 pending（即使 pending 还没过 TTL）。
+      3. ``pending_briefings`` 有未消费、未超 TTL 的行。
+
+    命中即同步把 pending 标 ``consumed_at = now`` （consume-on-detect 语义，
+    详见 ``backend/proactive/triggers/wake_call_briefing.py`` 模块头）。
+
+    此函数对 _build_messages 是 best-effort —— 任何异常吞成 None，让普通
+    chat path 照常走。
+    """
+    try:
+        from backend.config import config_yaml as _cfg_yaml
+        proactive_cfg = _cfg_yaml.get("proactive") or {}
+        if str(proactive_cfg.get("mode") or "") != "wake_call":
+            return None
+
+        from backend.database.services import (
+            consume_pending_briefing,
+            get_active_pending_briefing,
+            get_last_assistant_turn,
+        )
+        from backend.proactive.triggers.wake_call_briefing import (
+            WAKE_CALL_STAGE2_ADDENDUM,
+        )
+
+        async with AsyncSessionLocal() as session:
+            last_assistant = await get_last_assistant_turn(session, user_id)
+            if (
+                last_assistant is None
+                or last_assistant.proactive_trigger != "wake_call"
+            ):
+                return None
+
+            pending = await get_active_pending_briefing(
+                session, user_id, trigger_name="wake_call",
+            )
+            if pending is None:
+                return None
+
+            briefing_data_json = pending.briefing_data_json
+            pending_id = pending.id
+
+            # consume-on-detect：成功取到立即标 consumed，避免重发同一条
+            # 用户消息时再次注入。
+            await consume_pending_briefing(session, pending_id)
+
+        try:
+            data = json.loads(briefing_data_json) if briefing_data_json else {}
+        except json.JSONDecodeError:
+            data = {}
+        city = str(data.get("city") or "东京")
+
+        addendum = WAKE_CALL_STAGE2_ADDENDUM.format(
+            user_text=user_text,
+            briefing_data_json=briefing_data_json,
+            city=city,
+        )
+        logger.info(
+            "[wake_call.stage2] injected addendum for user=%s pending_id=%d "
+            "user_text=%r",
+            user_id, pending_id, user_text[:50],
+        )
+        return addendum
+    except Exception:
+        logger.exception("[wake_call.stage2] addendum probe failed; skipping")
+        return None
+
+
 async def _build_messages(
     user_id: str,
     text: str,
     tool_result: str | None = None,
     character_id: Optional[int] = None,
     extra_system: str | None = None,
+    skip_short_term: bool = False,
 ) -> List[dict]:
     """Assemble the full message list to send to the LLM.
 
@@ -750,12 +828,29 @@ async def _build_messages(
     if extra_system:
         system_parts.append(f"【临时指令】\n{extra_system}")
 
+    # ---- 6. v3-G chunk 2.6 wake_call stage 2：自动检测 pending_briefings ----
+    # 注意：proactive engine 自己（stage 1）调 ChatAgent.stream 时也会进这一
+    # 函数，但 stage 1 的 user text = "[proactive trigger]" 无意义，stage 2
+    # 不应在 stage 1 里注入（避免无限递归）。判定 sentinel：若 ``extra_system``
+    # 含 ``WAKE_CALL_STAGE1_SENTINEL``，跳过 addendum probe。
+    from backend.proactive.triggers.wake_call_briefing import (
+        WAKE_CALL_STAGE1_SENTINEL,
+    )
+    if not (extra_system and WAKE_CALL_STAGE1_SENTINEL in extra_system):
+        wake_call_addendum = await _maybe_build_wake_call_addendum(user_id, text)
+        if wake_call_addendum:
+            system_parts.append(f"【wake_call 简报】\n{wake_call_addendum}")
+
     system_prompt = "\n\n".join(system_parts)
 
     # ---- Short-term history as conversation turns ----
+    # v3-G chunk 2.6: stage 1 wake call 用 skip_short_term=True，避免历史
+    # 长简报 turn 污染 LLM tone（实测：8-15 字约束被历史 200 字简报 tone
+    # 覆盖时输出 100+ 字）。普通 chat / stage 2 仍走全量短期记忆。
     messages: List[dict] = [{"role": "system", "content": system_prompt}]
-    for turn in await short_term_memory.get(user_id):
-        messages.append({"role": turn["role"], "content": turn["content"]})
+    if not skip_short_term:
+        for turn in await short_term_memory.get(user_id):
+            messages.append({"role": turn["role"], "content": turn["content"]})
 
     # ---- Current user input ----
     messages.append({"role": "user", "content": text})
@@ -850,6 +945,7 @@ class ChatAgent(IAgent):
         tool_result: str | None = context.get("tool_result")
         extra_system: str | None = context.get("extra_system")
         enable_search: bool = bool(context.get("enable_search", False))
+        skip_short_term: bool = bool(context.get("skip_short_term", False))
         raw_char = payload.get("character_id")
         character_id: Optional[int] = (
             int(raw_char) if isinstance(raw_char, (int, str)) and str(raw_char).strip() else None
@@ -863,6 +959,7 @@ class ChatAgent(IAgent):
                 user_id, text, tool_result,
                 character_id=character_id,
                 extra_system=extra_system,
+                skip_short_term=skip_short_term,
             )
 
         prompt_str = json.dumps(messages, ensure_ascii=False)

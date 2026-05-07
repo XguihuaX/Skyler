@@ -52,7 +52,11 @@ from backend.agents.chat import (
 from backend.config import config_yaml, get_tts_enabled
 from backend.database import AsyncSessionLocal
 from backend.database.models import Character, ChatHistory, Conversation
-from backend.database.services import add_chat_history
+from backend.database.services import (
+    add_chat_history,
+    add_pending_briefing,
+    get_all_memories,
+)
 from backend.memory.short_term import short_term_memory
 from backend.tts import get_tts_engine
 from backend.utils.text_filters import strip_thinking
@@ -456,4 +460,298 @@ async def run_trigger(
     }
 
 
-__all__ = ["ProactiveTrigger", "run_trigger"]
+# ---------------------------------------------------------------------------
+# v3-G chunk 2.6 — wake_call_briefing 双阶段流水线
+# ---------------------------------------------------------------------------
+
+# stage 1 wake call 短问候缓冲值（chat_history kind='proactive', trigger='wake_call'）
+_WAKE_CALL_TRIGGER_NAME = "wake_call"
+
+
+async def aggregate_briefing_data(
+    user_id: str,
+    character_id: int,
+) -> dict:
+    """聚合早晨简报需要的本地数据（不调 LLM）。
+
+    这一层在 wake_call **stage 1** 跑——用户还没响应时就把"今日有什么"先
+    存好；用户响应后 ChatAgent stage 2 看到这些预聚合数据即可生成内容
+    （weather / news 留给 LLM 在 stage 2 用 ``enable_search`` 现查，缓存
+    更新鲜）。
+
+    morning_briefing **不**调本函数 —— 它走 ChatAgent 自己 tool calling
+    的"边生成边聚合"路径，不需要预聚合。
+
+    返回 dict（写入 ``pending_briefings.briefing_data_json``）::
+
+        {
+          "time":            {iso, weekday, is_weekend, human},
+          "calendar_events": [...],       # 来自 calendar.today_events 路由
+          "instruction_memories": [...],   # type='instruction' 的活记忆
+          "city":            "东京",        # 给 stage 2 LLM enable_search 的 hint
+        }
+
+    任一子项失败都吞成空集合或 None —— 聚合失败不应阻塞 wake call 短问
+    候的发出（用户至少先听到"起床啦"）。
+    """
+    out: dict = {}
+
+    # time —— 直接调 capability handler（不走 ToolRegistry，省一层）
+    try:
+        from backend.capabilities.time_capability import get_current_time
+        out["time"] = await get_current_time()
+    except Exception:
+        logger.exception("[wake_call.aggregate] time.now failed")
+        out["time"] = None
+
+    # calendar.today_events —— calendar router 决定 source
+    try:
+        from backend.capabilities.calendar import today_events
+        out["calendar_events"] = await today_events()
+    except Exception:
+        logger.exception("[wake_call.aggregate] calendar.today_events failed")
+        out["calendar_events"] = []
+
+    # instruction memories —— 直接 services 查，避免 LLM tool 多一轮
+    try:
+        async with AsyncSessionLocal() as session:
+            mems = await get_all_memories(
+                session, user_id,
+                active_only=True,
+                character_id=character_id,
+            )
+        out["instruction_memories"] = [
+            {"id": m.id, "type": m.type, "content": m.content}
+            for m in mems if m.type == "instruction"
+        ]
+    except Exception:
+        logger.exception("[wake_call.aggregate] list_memories failed")
+        out["instruction_memories"] = []
+
+    # city —— 从 wake_call_briefing 配置读，stage 2 LLM 用作 enable_search hint
+    proactive_cfg = config_yaml.get("proactive") or {}
+    wake_cfg = proactive_cfg.get("wake_call_briefing") or {}
+    out["city"] = str(wake_cfg.get("city") or "东京")
+
+    return out
+
+
+async def run_wake_call_trigger(
+    trigger: "ProactiveTrigger",
+    user_id: str,
+) -> dict:
+    """**Stage 1** of wake_call_briefing pipeline。
+
+    流程：
+      1. 解析 target character (override > recent user turn > Momo)
+      2. 拉/建 conversation
+      3. ``aggregate_briefing_data`` 拿结构化数据
+      4. 写 ``pending_briefings`` 一行（ttl 从 config 读）
+      5. ChatAgent.stream 生成 8-15 字短 wake call 推 WS（带
+         proactive=true + proactive_trigger='wake_call'）
+      6. 写 chat_history kind='proactive' + proactive_trigger='wake_call'
+         + add 到 short_term
+
+    用户后续任何 user turn 进 ChatAgent._build_messages 时，stage 2 触发
+    （在 chat.py 内）。本函数只做 stage 1，不等 stage 2。
+
+    返回 ``{text, character_id, conversation_id, pending_id, ...}`` 给手动
+    测试 endpoint 用。
+    """
+    from backend.routes import ws as _ws
+
+    target_char_id = await _resolve_target_character_id(user_id)
+    character = await _load_character(target_char_id)
+    if target_char_id is None or character is None:
+        target_char_id = 1
+        character = await _load_character(1)
+        if character is None:
+            logger.error("[wake_call] no character resolvable, aborting")
+            return {"text": "", "character_id": None, "conversation_id": None,
+                    "proactive_trigger": _WAKE_CALL_TRIGGER_NAME, "audio_bytes": 0,
+                    "pending_id": None, "error": "no character resolvable"}
+
+    conv_id = await _get_or_create_conversation(user_id, target_char_id)
+    if conv_id is None:
+        # 极端兜底：DB 不可写时仍 push 短问候（pending 写不进去也无所谓——
+        # stage 2 拿不到 pending 时会降级当普通对话回复）
+        logger.warning("[wake_call] conversation unresolved, proceeding without pending")
+
+    # ── Aggregate stage（先聚合再 push，让 short greeting 后用户首次回应
+    # 时 pending 一定已存在）──────────────────────────────────────────
+    briefing_data = await aggregate_briefing_data(user_id, target_char_id)
+
+    proactive_cfg = config_yaml.get("proactive") or {}
+    wake_cfg = proactive_cfg.get("wake_call_briefing") or {}
+    ttl_minutes = int(wake_cfg.get("pending_ttl_minutes") or 30)
+
+    pending_id: Optional[int] = None
+    if conv_id is not None:
+        try:
+            async with AsyncSessionLocal() as session:
+                row = await add_pending_briefing(
+                    session,
+                    user_id=user_id,
+                    trigger_name=_WAKE_CALL_TRIGGER_NAME,
+                    briefing_data_json=json.dumps(briefing_data, ensure_ascii=False),
+                    character_id=target_char_id,
+                    conversation_id=conv_id,
+                    ttl_minutes=ttl_minutes,
+                )
+                pending_id = int(row.id)
+            logger.info(
+                "[wake_call] pending_briefing #%d written for user=%s ttl=%dmin",
+                pending_id, user_id, ttl_minutes,
+            )
+        except Exception:
+            logger.exception("[wake_call] write pending_briefings failed")
+
+    # ── Push stage：用 ChatAgent.stream 生成 8-15 字短问候 ───────────────
+    # 复用 run_trigger 的核心逻辑：trigger.build_system_prompt 返"叫醒短句"
+    # 提示，engine 走同一份 streaming + TTS 路径。trigger.name 写
+    # 'wake_call' 让前端按 trigger 映射 toast / 灰字前缀。
+    system_prompt = await trigger.build_system_prompt(character)
+
+    chat_msg = {
+        "agent": "ChatAgent",
+        "payload": {
+            "user_id": user_id,
+            "text": _PROACTIVE_USER_PROMPT,
+            "character_id": target_char_id,
+            "context": {
+                "extra_system": system_prompt,
+                "enable_search": False,  # 短问候不需要 web search
+                # 关键：跳过 short_term 历史。否则历史里的长简报 turn 会
+                # 污染 LLM tone，stage 1 输出从 8-15 字漂移到 100+ 字。
+                "skip_short_term": True,
+            },
+        },
+    }
+
+    voice_model: Optional[str] = character.voice_model
+    tts_engine = get_tts_engine(voice_model)
+    tts_enabled = get_tts_enabled()
+
+    connection_manager = _ws.connection_manager
+    proactive_meta = {
+        "proactive": True,
+        "proactive_trigger": trigger.name,
+    }
+
+    async def _push(msg: dict) -> None:
+        try:
+            await connection_manager.push(user_id, msg)
+        except Exception as exc:
+            logger.warning("[wake_call] push failed: %s", exc)
+
+    async def _send_audio(audio: bytes) -> None:
+        b64 = base64.b64encode(audio).decode()
+        await _push({"type": "audio_chunk", "content": b64, **proactive_meta})
+
+    chat_agent = ChatAgent()
+    audio_queue: "asyncio.Queue[Optional[asyncio.Task[Optional[bytes]]]]" = asyncio.Queue()
+    pending_tts: List[asyncio.Task] = []
+    consumer: Optional[asyncio.Task] = None
+    if tts_enabled:
+        consumer = asyncio.create_task(_ws._tts_audio_consumer(audio_queue, _send_audio))
+
+    reply_parts: List[str] = []
+    turn_emotion = "默认"
+    emotion_resolved = False
+
+    try:
+        async for sentence in chat_agent.stream(chat_msg):
+            if not emotion_resolved:
+                parsed_emotion, sentence = _parse_emotion(sentence)
+                turn_emotion = parsed_emotion
+                emotion_resolved = True
+                if parsed_emotion and parsed_emotion != "默认":
+                    await _push({"type": "emotion", "value": parsed_emotion, **proactive_meta})
+
+            _thinking, sentence = _parse_thinking(sentence)
+            parsed_motion, sentence = _parse_motion(sentence)
+            if parsed_motion:
+                await _push({"type": "motion", "value": parsed_motion, **proactive_meta})
+
+            if not sentence.strip():
+                continue
+            reply_parts.append(sentence)
+            await _push({"type": "text_chunk", "content": sentence, **proactive_meta})
+
+            if tts_enabled and consumer is not None:
+                task = asyncio.create_task(
+                    _ws._tts_synth_with_timeout(
+                        tts_engine, sentence, turn_emotion,
+                        idx=len(reply_parts),
+                    )
+                )
+                pending_tts.append(task)
+                await audio_queue.put(task)
+
+        if tts_enabled and consumer is not None:
+            await audio_queue.put(None)
+            await consumer
+
+    except Exception:
+        logger.exception("[wake_call] ChatAgent stream failed")
+        await _push({"type": "error", "message": "wake_call stream failed", **proactive_meta})
+    finally:
+        if consumer is not None and not consumer.done():
+            consumer.cancel()
+        for t in pending_tts:
+            if not t.done():
+                t.cancel()
+
+    await _push({"type": "done", **proactive_meta})
+
+    # 持久化：与 morning_briefing 同样的双写（chat_history + short_term）
+    full_reply = _strip_format_tags("".join(reply_parts))
+    if full_reply:
+        try:
+            await short_term_memory.add(user_id, "assistant", full_reply)
+        except Exception:
+            logger.exception("[wake_call] short_term add failed")
+
+        try:
+            async with AsyncSessionLocal() as session:
+                await add_chat_history(
+                    session,
+                    user_id=user_id,
+                    role="assistant",
+                    content=full_reply,
+                    conversation_id=conv_id,
+                    character_id=target_char_id,
+                    kind="proactive",
+                    proactive_trigger=trigger.name,
+                )
+                if conv_id is not None:
+                    conv = (await session.execute(
+                        select(Conversation).where(Conversation.id == conv_id)
+                    )).scalar_one_or_none()
+                    if conv is not None:
+                        conv.updated_at = datetime.utcnow()
+                        await session.commit()
+        except Exception:
+            logger.exception("[wake_call] persist assistant row failed")
+
+    logger.info(
+        "[wake_call] stage 1 done user=%s char=%s greeting_len=%d pending_id=%s",
+        user_id, target_char_id, len(full_reply), pending_id,
+    )
+
+    return {
+        "text": full_reply,
+        "character_id": target_char_id,
+        "conversation_id": conv_id,
+        "proactive_trigger": trigger.name,
+        "audio_bytes": 0,
+        "pending_id": pending_id,
+    }
+
+
+__all__ = [
+    "ProactiveTrigger",
+    "run_trigger",
+    "run_wake_call_trigger",
+    "aggregate_briefing_data",
+]

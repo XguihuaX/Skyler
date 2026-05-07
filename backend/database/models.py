@@ -145,3 +145,24 @@ class ChatHistory(Base):
     proactive_trigger = Column(String(64), nullable=True)
 
     user = relationship("User", back_populates="chat_history")
+
+
+class PendingBriefing(Base):
+    """v3-G chunk 2.6 — wake_call_briefing 跨进程中间状态。
+
+    stage 1（cron）写一行带聚合数据；stage 2（用户响应）ChatAgent
+    `_build_messages` 读出最近未消费 + 未过期的行，注入 addendum 后标
+    consumed_at。详见 migrations/v3_g_chunk2_6_pending_briefing.py 字段
+    语义。
+    """
+    __tablename__ = "pending_briefings"
+
+    id                 = Column(Integer, primary_key=True, autoincrement=True)
+    user_id            = Column(String(64), nullable=False)
+    trigger_name       = Column(String(64), nullable=False)
+    briefing_data_json = Column(Text, nullable=False)
+    character_id       = Column(Integer, nullable=False)
+    conversation_id    = Column(Integer, nullable=False)
+    created_at         = Column(DateTime, nullable=False, server_default=func.now())
+    ttl_minutes        = Column(Integer, nullable=False, default=30, server_default="30")
+    consumed_at        = Column(DateTime, nullable=True)

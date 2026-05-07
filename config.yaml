@@ -76,9 +76,19 @@ briefing:
 proactive:
   enabled: true
   character_id_override: null
+  # v3-G chunk 2.6 mode 互斥：'wake_call' / 'morning_briefing' / 'off'
+  # 'wake_call' 推荐——默认（模式 B 邀请对话，cron 短问候 + 用户响应触发简报）
+  # 'morning_briefing'（模式 A 单方面播报，cron 整段简报）
+  # 'off' 不注册任何 cron
+  mode: wake_call
   morning_briefing:
     enabled: true
     cron: 0 9 * * *
+    city: 东京
+  wake_call_briefing:
+    cron: 0 8 * * *
+    pending_ttl_minutes: 30
+    default_snooze_minutes: 30
     city: 东京
 scheduler:
   timezone: Asia/Tokyo
