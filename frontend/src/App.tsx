@@ -105,6 +105,7 @@ function App() {
                   streaming: false,
                   ts: 0,
                   kind: r.kind ?? 'normal',
+                  proactiveTrigger: r.proactive_trigger ?? undefined,
                 })),
               );
             } catch (e) {

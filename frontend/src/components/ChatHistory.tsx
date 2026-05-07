@@ -2,13 +2,19 @@ import { memo, useEffect, useRef } from 'react';
 import { useAppStore, type ChatMessage } from '../store';
 import { stripThinking } from '../lib/textFilters';
 
+// v3-G chunk 2: proactive trigger.name -> 灰字前缀 label。后续加 trigger 时
+// 在这里 append 即可。映射不到 → 通用兜底 "（主动陪伴）"。
+const PROACTIVE_PREFIX: Record<string, string> = {
+  morning_briefing: '🌅（早安简报）',
+};
+
 const Bubble = memo(function Bubble({ m }: { m: ChatMessage }) {
   const isUser = m.role === 'user';
 
   // v3-E1 Step Z.2：'touch' 行 user-side 显示成"（碰了一下）"灰字而不是
   // 裸字符串 [touch]，让对话历史看起来像 Momo 自然回应了一下抚摸；
-  // assistant 行正常显示。'proactive'（v3-F'）user-side 同理 → "（提醒）"，
-  // 但本步先只渲染 touch，proactive 等 v3-F' 一起做。
+  // assistant 行正常显示。'proactive' 没有 user 行（engine 不写 user 占位），
+  // 所以 user-side 不会命中 proactive 分支；assistant 侧加灰字前缀。
   if (isUser && m.kind === 'touch') {
     return (
       <div className="flex justify-end">
@@ -25,8 +31,24 @@ const Bubble = memo(function Bubble({ m }: { m: ChatMessage }) {
   // v3-F 回归修：渲染前剥 <thinking>...</thinking>。后端写库前已剥一道，
   // 此处兜底处理老历史数据 + streaming 边界
   const displayContent = stripThinking(m.content);
+
+  // v3-G chunk 2: proactive assistant 气泡 = 灰字前缀 + 正常气泡正文。
+  // 前缀放在气泡上方，UI 与 emotion / motion 标签层一致地"轻"，不抢视觉。
+  const proactivePrefix =
+    !isUser && m.kind === 'proactive'
+      ? PROACTIVE_PREFIX[m.proactiveTrigger ?? ''] ?? '✨（主动陪伴）'
+      : null;
+
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+      {proactivePrefix && (
+        <span
+          className="text-xs italic mb-1 px-1"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {proactivePrefix}
+        </span>
+      )}
       <div
         className="max-w-[78%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap break-words shadow"
         style={

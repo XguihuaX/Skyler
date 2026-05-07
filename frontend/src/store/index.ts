@@ -28,6 +28,11 @@ export interface ChatMessage {
   // v3-E1 Step Z.2：与后端 chat_history.kind 同步。store 创建侧默认 'normal'，
   // API 加载侧透传后端值。'touch' 行 user-side 渲染成"（碰了一下）"灰字。
   kind: ChatKind;
+  // v3-G chunk 2: proactive 行的触发器名（'morning_briefing' / null）。
+  // ChatHistory 按这个字段映射 "🌅（早安简报）" 灰字前缀；非 proactive 行始
+  // 终为空。流式期间由 useWebSocket 从 WS chunk 的 proactive_trigger 字段
+  // 写入；历史加载时由后端 conversations API 透传。
+  proactiveTrigger?: string;
 }
 
 // V2.5-C2 — ConversationList collapse persistence
@@ -216,6 +221,20 @@ interface AppState {
   enableSearch: boolean;
   setEnableSearch: (v: boolean) => void;
 
+  // v3-G chunk 2 — 主动陪伴 (proactive engine) 配置镜像。SettingsPanel
+  // [主动陪伴] section 写回经 setConfigField；/api/config GET 时由
+  // syncFromConfig 拉回填。
+  proactiveEnabled: boolean;
+  setProactiveEnabled: (v: boolean) => void;
+  proactiveCharOverride: number | null;
+  setProactiveCharOverride: (v: number | null) => void;
+  morningBriefingEnabled: boolean;
+  setMorningBriefingEnabled: (v: boolean) => void;
+  morningBriefingCron: string;
+  setMorningBriefingCron: (v: string) => void;
+  morningBriefingCity: string;
+  setMorningBriefingCity: (v: string) => void;
+
   // V2.5-C — characters / conversations / chat history
   characters: CharacterRow[];
   setCharacters: (v: CharacterRow[]) => void;
@@ -349,6 +368,17 @@ export const useAppStore = create<AppState>((set) => ({
   enableSearch: true,
   setEnableSearch: (enableSearch) => set({ enableSearch }),
 
+  proactiveEnabled: true,
+  setProactiveEnabled: (proactiveEnabled) => set({ proactiveEnabled }),
+  proactiveCharOverride: null,
+  setProactiveCharOverride: (proactiveCharOverride) => set({ proactiveCharOverride }),
+  morningBriefingEnabled: true,
+  setMorningBriefingEnabled: (morningBriefingEnabled) => set({ morningBriefingEnabled }),
+  morningBriefingCron: '0 9 * * *',
+  setMorningBriefingCron: (morningBriefingCron) => set({ morningBriefingCron }),
+  morningBriefingCity: '东京',
+  setMorningBriefingCity: (morningBriefingCity) => set({ morningBriefingCity }),
+
   characters: [],
   setCharacters: (characters) => set({ characters }),
   currentCharacterId: null,
@@ -412,5 +442,10 @@ export const useAppStore = create<AppState>((set) => ({
       profileEnabled: c.memory.profile_enabled,
       enableSearch: c.search.enable_search,
       ttsEnabled: c.tts.enabled,
+      proactiveEnabled: c.proactive?.enabled ?? true,
+      proactiveCharOverride: c.proactive?.character_id_override ?? null,
+      morningBriefingEnabled: c.proactive?.morning_briefing?.enabled ?? true,
+      morningBriefingCron: c.proactive?.morning_briefing?.cron ?? '0 9 * * *',
+      morningBriefingCity: c.proactive?.morning_briefing?.city ?? '东京',
     }),
 }));

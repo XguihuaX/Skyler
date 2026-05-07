@@ -16,6 +16,17 @@ export interface AppConfig {
   tts: {
     enabled: boolean;
   };
+  // v3-G chunk 2: 主动陪伴（proactive engine）配置。前端 SettingsPanel
+  // 主动陪伴 section 镜像它，写回经 setConfigField + /api/config/reload。
+  proactive: {
+    enabled: boolean;
+    character_id_override: number | null;
+    morning_briefing: {
+      enabled: boolean;
+      cron: string;
+      city: string;
+    };
+  };
 }
 
 export async function fetchConfig(): Promise<AppConfig> {
@@ -113,6 +124,9 @@ export interface ChatMessageRow {
   character_id: number | null;
   created_at: string | null;
   kind: ChatKind;
+  // v3-G chunk 2: 当 kind='proactive' 时记录 trigger.name（'morning_briefing'）；
+  // 其他 kind 为 null。
+  proactive_trigger?: string | null;
 }
 
 export async function fetchCharacters(): Promise<CharacterRow[]> {

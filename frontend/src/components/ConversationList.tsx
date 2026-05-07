@@ -62,6 +62,7 @@ export default function ConversationList() {
         streaming: false,
         ts: 0,
         kind: r.kind ?? 'normal',
+        proactiveTrigger: r.proactive_trigger ?? undefined,
       })));
     } catch (e) {
       console.error('[ConversationList] fetchMessages failed:', e);

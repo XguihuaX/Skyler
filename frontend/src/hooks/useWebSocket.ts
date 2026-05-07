@@ -20,7 +20,17 @@ interface WsMessage {
   value?: string;
   // v3-F #4: done 消息可能带 interrupted=true 表示这一轮被打断
   interrupted?: boolean;
+  // v3-G chunk 2：proactive engine 触发的轮，所有该轮的 chunk 都带这两个字段。
+  // 老前端忽略未知字段照常工作；新前端按 trigger 名映射 toast label + 给气泡
+  // 打 kind='proactive' 标。
+  proactive?: boolean;
+  proactive_trigger?: string;
 }
+
+// v3-G chunk 2: trigger.name -> toast 标题。后续加 trigger 时只在这里 append。
+const PROACTIVE_TOAST_LABEL: Record<string, string> = {
+  morning_briefing: '🌅 早安简报',
+};
 
 interface UseWebSocketReturn {
   sendText: (content: string) => void;
@@ -151,6 +161,11 @@ export function useWebSocket(): UseWebSocketReturn {
           );
         }
 
+        // v3-G chunk 2: proactive 轮第一个 chunk 弹 toast。判断"第一个 chunk"
+        // 用 streamingMessageId === null（更可靠，覆盖 textChunkCountRef 在
+        // 跨轮残留的边界）。trigger.name 映射不到 → 通用兜底文案。
+        const isFirstProactiveChunk = msg.proactive && s.streamingMessageId === null;
+
         // 流式更新 chatMessages：第一个 chunk 创建 streaming assistant 气泡，
         // 后续 chunk 仅追加该气泡的 content（避免每 chunk 重建整 array）。
         if (s.streamingMessageId === null) {
@@ -161,16 +176,22 @@ export function useWebSocket(): UseWebSocketReturn {
             content: chunk,
             streaming: true,
             ts: performance.now(),
-            // streaming assistant 气泡 kind 跟随当轮 turn 决定（store
-            // 取不到，因为这里就是产生 turn 的入口）。简化处理：所有
-            // streaming 气泡标 'normal'，触摸触发的 assistant 行只在
-            // 后端 chat_history 持久化时打 'touch'，前端 live 渲染期间
-            // 不需要灰字处理（用户看着像 Momo 自然冒了一句话）。
-            kind: 'normal',
+            // v3-G chunk 2: 后端 proactive=true 的 chunk → 流式气泡 kind='proactive'，
+            // ChatHistory 渲染时加 "🌅（早安简报）" 灰字前缀；'touch' 不会经
+            // text_chunk 出现（[touch] 行只是 user 占位，没有 assistant 流），
+            // 所以 streaming 气泡只可能 'normal' / 'proactive'。
+            kind: msg.proactive ? 'proactive' : 'normal',
+            proactiveTrigger: msg.proactive ? msg.proactive_trigger : undefined,
           });
           s.setStreamingMessageId(id);
         } else {
           s.appendChatMessageContent(s.streamingMessageId, chunk);
+        }
+
+        if (isFirstProactiveChunk) {
+          const trigName = msg.proactive_trigger ?? '';
+          const label = PROACTIVE_TOAST_LABEL[trigName] ?? '✨ Momo 主动来了';
+          s.pushNotification({ type: 'notify', content: label });
         }
         break;
       }

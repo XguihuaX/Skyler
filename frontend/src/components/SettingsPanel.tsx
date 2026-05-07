@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useAppStore, type ThemeKey } from '../store';
 import { setConfigField } from '../lib/window';
 import { fetchModels, setModel, type ModelInfo } from '../lib/models';
+import { triggerTestBriefing } from '../lib/integrations';
 import CapabilityPanel from './CapabilityPanel';
 import MemoryManagerDrawer from './MemoryManagerDrawer';
 
@@ -164,6 +165,216 @@ interface ToastInfo {
 // ---------------------------------------------------------------------------
 // Memory section — summary card + manager-drawer launcher
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// v3-G chunk 2 — 主动陪伴 (Proactive Companionship) section
+// ---------------------------------------------------------------------------
+
+interface ProactiveSectionProps {
+  showToast: (text: string) => void;
+}
+
+function ProactiveSection({ showToast }: ProactiveSectionProps) {
+  const proactiveEnabled        = useAppStore((s) => s.proactiveEnabled);
+  const setProactiveEnabled     = useAppStore((s) => s.setProactiveEnabled);
+  const morningBriefingEnabled  = useAppStore((s) => s.morningBriefingEnabled);
+  const setMorningBriefingEnabled = useAppStore((s) => s.setMorningBriefingEnabled);
+  const morningBriefingCron     = useAppStore((s) => s.morningBriefingCron);
+  const setMorningBriefingCron  = useAppStore((s) => s.setMorningBriefingCron);
+  const morningBriefingCity     = useAppStore((s) => s.morningBriefingCity);
+  const setMorningBriefingCity  = useAppStore((s) => s.setMorningBriefingCity);
+  const proactiveCharOverride   = useAppStore((s) => s.proactiveCharOverride);
+  const setProactiveCharOverride = useAppStore((s) => s.setProactiveCharOverride);
+  const characters              = useAppStore((s) => s.characters);
+
+  const [cronDraft, setCronDraft] = useState<string>(morningBriefingCron);
+  const [cityDraft, setCityDraft] = useState<string>(morningBriefingCity);
+  const [busyTesting, setBusyTesting] = useState(false);
+
+  // store 拉到新值时同步本地 draft（首次加载 / 外部 reload）
+  useEffect(() => { setCronDraft(morningBriefingCron); }, [morningBriefingCron]);
+  useEffect(() => { setCityDraft(morningBriefingCity); }, [morningBriefingCity]);
+
+  const writeField = useCallback(
+    (keyPath: string, value: unknown, label: string, rollback: () => void) => {
+      setConfigField(keyPath, value).catch((e) => {
+        console.error(`[Proactive] ${keyPath} sync failed:`, e);
+        rollback();
+        showToast(`${label} 写入失败：${(e as Error).message}`);
+      });
+    },
+    [showToast],
+  );
+
+  const onToggleProactive = (next: boolean) => {
+    const prev = proactiveEnabled;
+    setProactiveEnabled(next);
+    writeField('proactive.enabled', next, '主动陪伴总开关', () => setProactiveEnabled(prev));
+  };
+
+  const onToggleMorning = (next: boolean) => {
+    const prev = morningBriefingEnabled;
+    setMorningBriefingEnabled(next);
+    writeField(
+      'proactive.morning_briefing.enabled', next, '早晨简报',
+      () => setMorningBriefingEnabled(prev),
+    );
+  };
+
+  const onCommitCron = () => {
+    const value = cronDraft.trim();
+    if (!value) {
+      setCronDraft(morningBriefingCron);
+      return;
+    }
+    if (value === morningBriefingCron) return;
+    const prev = morningBriefingCron;
+    setMorningBriefingCron(value);
+    writeField(
+      'proactive.morning_briefing.cron', value, 'Cron 表达式',
+      () => { setMorningBriefingCron(prev); setCronDraft(prev); },
+    );
+  };
+
+  const onCommitCity = () => {
+    const value = cityDraft.trim();
+    if (!value || value === morningBriefingCity) {
+      setCityDraft(morningBriefingCity);
+      return;
+    }
+    const prev = morningBriefingCity;
+    setMorningBriefingCity(value);
+    writeField(
+      'proactive.morning_briefing.city', value, '城市',
+      () => { setMorningBriefingCity(prev); setCityDraft(prev); },
+    );
+  };
+
+  const onCharOverride = (raw: string) => {
+    const next = raw === '' ? null : Number(raw);
+    const prev = proactiveCharOverride;
+    setProactiveCharOverride(next);
+    writeField(
+      'proactive.character_id_override', next, '角色覆盖',
+      () => setProactiveCharOverride(prev),
+    );
+  };
+
+  const onTestBriefing = async () => {
+    if (busyTesting) return;
+    setBusyTesting(true);
+    try {
+      const r = await triggerTestBriefing();
+      const preview = (r.text || '').slice(0, 40);
+      showToast(`简报触发成功：${preview}${r.text.length > 40 ? '…' : ''}`);
+    } catch (e) {
+      showToast(`简报触发失败：${(e as Error).message}`);
+    } finally {
+      setBusyTesting(false);
+    }
+  };
+
+  return (
+    <Section title="主动陪伴">
+      <Toggle
+        label="启用主动陪伴"
+        value={proactiveEnabled}
+        onChange={onToggleProactive}
+      />
+      <Toggle
+        label="早晨简报"
+        value={morningBriefingEnabled}
+        onChange={onToggleMorning}
+      />
+      <div className="py-2">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
+            Cron 表达式
+          </span>
+          <span
+            className="text-xs"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            {morningBriefingCron === '0 9 * * *' ? '每天 9:00' : '自定义'}
+          </span>
+        </div>
+        <input
+          type="text"
+          value={cronDraft}
+          placeholder="0 9 * * *"
+          onChange={(e) => setCronDraft(e.target.value)}
+          onBlur={onCommitCron}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          className="w-full px-2 py-1.5 text-xs rounded font-mono"
+          style={{
+            background: 'var(--color-bg-input)',
+            border: '1px solid var(--color-border)',
+            color: 'var(--color-text-primary)',
+          }}
+        />
+      </div>
+      <div className="py-2">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
+            城市（用于天气查询）
+          </span>
+        </div>
+        <input
+          type="text"
+          value={cityDraft}
+          placeholder="东京"
+          onChange={(e) => setCityDraft(e.target.value)}
+          onBlur={onCommitCity}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          className="w-full px-2 py-1.5 text-xs rounded"
+          style={{
+            background: 'var(--color-bg-input)',
+            border: '1px solid var(--color-border)',
+            color: 'var(--color-text-primary)',
+          }}
+        />
+      </div>
+      <div className="py-2">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
+            角色覆盖
+          </span>
+        </div>
+        <select
+          value={proactiveCharOverride === null ? '' : String(proactiveCharOverride)}
+          onChange={(e) => onCharOverride(e.target.value)}
+          className="w-full px-2 py-1.5 text-xs rounded"
+          style={{
+            background: 'var(--color-bg-input)',
+            border: '1px solid var(--color-border)',
+            color: 'var(--color-text-primary)',
+          }}
+        >
+          <option value="">自动跟随最近活跃</option>
+          {characters.map((c) => (
+            <option key={c.id} value={String(c.id)}>{c.name}</option>
+          ))}
+        </select>
+      </div>
+      <div className="py-2 flex justify-end">
+        <button
+          type="button"
+          onClick={onTestBriefing}
+          disabled={busyTesting}
+          className="text-xs px-3 py-1.5 rounded transition-colors"
+          style={{
+            background: 'var(--color-accent)',
+            color: 'var(--color-bubble-user-text)',
+            opacity: busyTesting ? 0.5 : 1,
+          }}
+        >
+          🧪 立即测试简报
+        </button>
+      </div>
+    </Section>
+  );
+}
+
 
 interface ConfirmModalProps {
   text: string;
@@ -844,6 +1055,8 @@ export default function SettingsPanel() {
           onChange={(next) => remoteToggle('enableSearch', 'search.enable_search', next, '联网搜索')}
         />
       </Section>
+
+      <ProactiveSection showToast={showToast} />
 
       <Section title="ASR / VAD">
         <Segmented<'manual' | 'vad'>
