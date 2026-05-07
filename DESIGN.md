@@ -1248,6 +1248,61 @@ backend/capabilities/<service>.py        ──┐
 scope 升级（如未来要加创建事件能力）必须先 revoke 当前 token，再重新 OAuth flow，
 否则 Google API 会返 403 insufficient scope。
 
+### 日历多数据源架构（v3-G chunk 1.6 起）
+
+接入 Apple Calendar 后日历能力变成**双源**。设计原则：用户视角统一，工程实
+现路由层瘦：
+
+```
+                LLM tool surface (CHAT_AGENT)
+        ┌──────────────────────────────────────────────┐
+        │   calendar.today_events    (router)          │  ← LLM 通常调这两个
+        │   calendar.upcoming_events (router)          │
+        │                                              │
+        │   apple_calendar.today_events                │  ← Apple 直接，给"用 Apple 看"
+        │   apple_calendar.upcoming_events             │     这种明确意图
+        │   apple_calendar.create_event                │  ← Apple 写（chunk 2.5 入口）
+        │   apple_calendar.delete_event                │
+        │                                              │
+        │   google_calendar.* 不在 LLM 视野            │  ← 高级用户路径
+        │     （仅 user_visible + SCHEDULER consumer） │
+        └──────────────────────────────────────────────┘
+                            │
+                            │  router resolves
+                            ▼
+                  config.yaml calendar.default_source
+                            │
+                  ┌─────────┴─────────┐
+                  │                   │
+                  ▼                   ▼
+       apple_calendar.today_events  google_calendar.today_events
+       (实际 capability handler)    (chunk 1 的 OAuth 路径)
+                  │                   │
+                  ▼                   ▼
+       backend/integrations/        backend/integrations/
+       apple_calendar.py            google_calendar.py
+       (EventKit pyobjc)            (Google API + tenacity 重试)
+```
+
+**改 source 切换**：仅改 `config.yaml.calendar.default_source: apple|google`
+重启即生效。简报模块（`from backend.capabilities.calendar import today_events`）
+不知道路由存在，自动跟随。
+
+**chunk 1 → chunk 1.6 的 namespace rename**（无破坏性）：
+
+* `backend/capabilities/calendar.py`（chunk 1，直接调 Google）
+  → `backend/capabilities/google_calendar.py`（chunk 1.6 git mv 保 history）
+* `calendar.today_events` / `calendar.upcoming_events`（chunk 1 cap name）
+  → `google_calendar.today_events` / `google_calendar.upcoming_events`（chunk 1.6 重命名）
+* 新建 `backend/capabilities/calendar.py`（chunk 1.6 router），占用旧的 `calendar.*` 名字
+
+**为什么不全合并到 calendar.* 一个 cap**：四个原因——
+
+1. 高级用户场景："用 Google 看一下" / "对比 Apple 和 Google" 需要直接 cap
+2. SCHEDULER 任务可以锁定 source（"我的简报永远走 Apple"）
+3. 健康面板要显示每个 source 独立状态（一个挂了另一个还能用，UI 要看得到）
+4. 路由层不带读写副作用，纯 dispatch + 错误兜底，逻辑简单容易测
+
 ### MCP 双向架构（v3-G chunk 1.5 起）
 
 CapabilityRegistry 是统一抽象核心，三种来源 + 三种消费者形成完整的 MCP 双
@@ -1407,6 +1462,23 @@ pixi-live2d-display 及其所有维护中的 fork（advanced / lipsyncpatch / mu
 - [ ] **TTS 多段并发合成**（OLV #2）—— 当前是 sentence-by-sentence 串行，改为并发合成 + 顺序播放，砍首句到末句的等待时间
 - [ ] **TTS 预处理器**（OLV #3）—— 正则剥离 `*动作*` / `(注释)` / `[标记]` 不让 TTS 读出来；同时也要不读 `<emotion>` / `<motion>` / `<thinking>` 残留（双保险）
 - [ ] **AI 内心独白**（OLV #5）—— `<thinking>X</thinking>` 标签解析，不读出但前端显示在 status 区或独立 thoughts 抽屉
+
+#### v3-G chunk 1.6 ✅ 完成（2026-05-07）—— Apple Calendar 接入 + 日历多源路由
+- [x] **`backend/integrations/apple_calendar.py`** —— pyobjc-framework-EventKit；macOS 14+ `requestFullAccessToEventsWithCompletion_` + 旧版 fallback；`threading.Event` 桥接 Cocoa callback 到 `asyncio.to_thread`；list/create/delete events；health_check 三档（非 macOS / EventKit 缺失 / macOS<12 / 未授权 → 全 warn）
+- [x] **`backend/capabilities/apple_calendar.py`** —— `apple_calendar.today_events / upcoming_events / create_event / delete_event` 4 个 capability；create_event 描述明确引导 LLM 先调 `time.now` 算 ISO（chunk 2.5 自然语言录入入口）
+- [x] **`backend/capabilities/calendar.py` (router)** —— `calendar.today_events / upcoming_events` 按 `config.yaml.calendar.default_source` 路由到 apple/google；router 的 health_check 转发到当前 source 并标注 source 名
+- [x] **`backend/capabilities/google_calendar.py`** —— chunk 1 `calendar.py` 重命名 (git mv 保 history)；cap 名 `calendar.*` → `google_calendar.*`；consumers 降级 SCHEDULER-only；`_gated_health_check` 在 disabled 时返启用提示 warn
+- [x] **`config.yaml`**：`calendar.default_source` + `apple_calendar.enabled` + `google_calendar.enabled` (默认 false)
+- [x] **`docs/apple-calendar-setup.md`** —— Console 权限 / iCloud 同步 / 多日历 / 切换 source / 故障排查
+- [x] **测试**：`tests/test_apple_calendar.py`（35 cases，EventKit 完全 mock，跨平台跑得过）+ `tests/test_calendar_router.py`（22 cases，路由 + namespace rename + briefing 兼容）
+
+**关键决策**：
+
+1. **思路 1（路由 + 平行命名空间）**：`calendar.*` 是 LLM 看到的正路（CHAT_AGENT），`apple_calendar.*` 直接 cap 也 CHAT_AGENT（用户 spec 要求），`google_calendar.*` 直接 cap 仅 SCHEDULER（降低 LLM tool surface 噪音）。LLM 看到 7 个 tool（router 2 + Apple 4 + time 1）；面板看到 9 个（含 Google 2 隐藏 cap 用于状态透明）
+2. **Briefing 模块零改**：`from backend.capabilities.calendar import today_events` 仍然能 import —— 装饰器返回原函数，函数名仍是 `today_events`；现在它是 router，按 default_source 自动选 source
+3. **跨平台 graceful degradation**：`requirements.txt` 用 PEP 508 `; sys_platform == "darwin"` 限制 pyobjc 仅 macOS 安装；运行时 `EventKit = None` 路径让非 macOS 也能起 lifespan，capability 注册成功，health 返 warn 提示"仅 macOS 可用"
+4. **EventKit Cocoa callback 桥接**：权限申请 callback 跑在 main run loop，用 `threading.Event` 同步到调用线程后整体 `asyncio.to_thread` 包装，与 chunk 1 Google Calendar 同步内核 + async wrapper 风格对齐
+5. **首次调用惰性请求授权**：用户调任何 capability 时若未授权就触发 `_request_access_blocking()` 弹 macOS 系统框 —— 这是用户必须看到的合法 UX，不预先警告 / 不绕过
 
 #### v3-G chunk 1.5 ✅ 完成（2026-05-07）—— 双向 MCP 集成
 - [x] **`backend/mcp/server.py`** —— `Server` (lowlevel) + `@list_tools`/`@call_tool` 装饰器从 CapabilityRegistry 实时派生；`StreamableHTTPSessionManager(stateless=True, json_response=False)` 提供 SSE 流；mount `/mcp` 经 FastAPI raw ASGI 通道；Bearer 鉴权在 mount 前 middleware-style

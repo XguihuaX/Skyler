@@ -70,6 +70,24 @@ tts:
         traits: 阳光大男孩
         instruct: true
 
+# v3-G chunk 1.6 — 日历多 source 路由
+# calendar.today_events / calendar.upcoming_events 是 LLM 看到的统一入口，
+# 按 default_source 路由到 apple 或 google。改这一行重启即生效，
+# briefing / chat 自动跟随。
+calendar:
+  default_source: apple   # apple | google
+
+# v3-G chunk 1.6 — Apple Calendar (macOS EventKit) 集成
+# 仅 macOS 实际工作。第一次调用日历相关 capability 会弹系统权限框，详见
+# docs/apple-calendar-setup.md
+apple_calendar:
+  enabled: true
+
+# v3-G chunk 1 — Google Calendar 集成（chunk 1.6 起默认禁用）
+# 启用前需要按 docs/google-calendar-setup.md 完成 OAuth desktop client 配置
+google_calendar:
+  enabled: false
+
 # v3-G chunk 1 — 起床简报（v0.1：模板拼接，chunk 2 升级 ChatAgent 智能版）
 briefing:
   enabled: true

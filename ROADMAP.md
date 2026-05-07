@@ -268,6 +268,35 @@
 
 ### v3-G：生活 & 工具型能力
 
+**chunk 1.6 ✅ 完成（2026-05-07）— Apple Calendar 接入（macOS EventKit，国内可用）**
+
+接入第二个日历数据源：macOS 原生 EventKit。**零网络 / 零 VPN / 零外部账号**——彻底解决国内用户 Google Calendar 卡防火墙的问题。同时建立"统一路由 + 双源"架构：用户改一行 yaml 即可切换 Apple ↔ Google。
+
+| Hash | 内容 |
+|---|---|
+| `0f7c5a9` | feat(integrations): apple calendar via macOS EventKit —— `backend/integrations/apple_calendar.py` 用 pyobjc-framework-EventKit；macOS 14+ 走 `requestFullAccessToEventsWithCompletion_`，旧版回退 `requestAccessToEntityType_completion_`；threading.Event 把 Cocoa callback 同步到 asyncio.to_thread；非 macOS / pyobjc 缺失 / macOS<12 / 未授权全部降级 warn 不阻塞主流程；4 个 capability：`apple_calendar.today_events / upcoming_events / create_event / delete_event` —— **create_event 是 chunk 2.5 自然语言录入的关键入口**；`docs/apple-calendar-setup.md` 含权限框 / iCloud 同步 / 多日历选择 / 故障排查 |
+| `<本 commit>` | feat(capabilities): calendar router + google chunk 1 namespace rename —— chunk 1 的 `backend/capabilities/calendar.py` 改名 `google_calendar.py`（git mv 保 history），cap 名 `calendar.*` → `google_calendar.*`，consumers 降级 SCHEDULER-only（避免 LLM tool surface 噪音）；新建 `backend/capabilities/calendar.py` 作**统一路由**，按 `config.yaml.calendar.default_source` 路由到 apple 或 google；briefing 模块零改（`from backend.capabilities.calendar import today_events` 自动走路由）；docs/ + ROADMAP / DESIGN / README 同步 |
+
+**关键决策**：
+
+1. **路由 vs 平行命名空间**：选思路 1（用户视角统一）。`calendar.today_events` 是 LLM 看到的正路；`apple_calendar.*` 4 个 + `google_calendar.*` 2 个直接 capability 仍注册（`user_visible=True` 让能力面板看得到，便于调试 + 状态透明），但只有 Apple 4 个直接 cap 同时 CHAT_AGENT consumer（用户 spec 要求）；Google 2 个直接 cap 仅 SCHEDULER（避免 LLM 看到 6 个雷同 tool 困惑）
+2. **Google chunk 1 代码保留 + 默认禁用**：`google_calendar.enabled: false` 默认；启用 Google 时切 `default_source: google` + `enabled: true` 即可。OAuth 流程、健康检查、retry 全部 chunk 1 已验证可用，零回归
+3. **non-macOS 平台不阻塞**：`pyobjc-framework-EventKit` 在 `requirements.txt` 用 PEP 508 marker `; sys_platform == "darwin"` 限制安装；运行时 `IS_MACOS` 检测 + `EventKit = None` 路径让 health_check 直接返 warn，capability 仍注册但报告"仅 macOS 可用"
+4. **macOS 系统权限弹框是正常 UX**：第一次调用任意 calendar capability 时 macOS 弹"Skyler 想访问您的日历"——这是 macOS 系统级保护机制，**不绕过 / 不预先警告 / 不替用户点击**。文档明确说明
+5. **create_event 描述里写明"先调 time.now 拿当前时间再算 ISO"**：用户说"明天上午 10 点"时 LLM 需要知道"今天"；description 直接引导这条调用链，避免 LLM 自己猜日期出 bug
+6. **跨日历支持**：默认写到系统默认日历；可显式传 `calendar_name="工作"` 写到指定日历
+
+**测试覆盖**：8 个测试套件 / **总计 175+ cases 全过**（chunk 0/1/1.5 累计 109 + chunk 1.6 新增 35 apple + 22 router = **166 cases**）
+
+**Backlog**：
+
+* **chunk 2.5 自然语言录入**：用户说"提醒我明天 10 点看牙医"→ ChatAgent 自动调 `time.now` → `apple_calendar.create_event`，pipeline 已就位，prompt 优化属下个 chunk
+* **Reminders 集成**：当前只 Events；macOS Reminders 需要单独申请 `requestFullAccessToRemindersWithCompletion_`，是另一个独立权限框
+* **Google 写能力**：当前 OAuth scope 仅 `calendar.readonly`，要支持 `google_calendar.create_event` 需扩 scope + 重新授权（path 已写到 docs）
+* **多 source 同时聚合**：用户哪天想"同时看 Apple 和 Google"，router 加 `default_source: both` 模式合并去重 —— 现在没需求不做
+
+---
+
 **chunk 1.5 ✅ 完成（2026-05-07）— 双向 MCP 集成（暴露 server + 调用外部 client）**
 
 让 Skyler 同时是 MCP server（把 capability 自动派生暴露给 Claude Desktop / Cursor / Claude Code 等外部 LLM 工具）和 MCP client（连接外部 MCP server，反向把对方 tool 注册成 capability）。**统一抽象**：一份 CapabilityRegistry，三种来源：(1) 内置 Python decorator；(2) 外部 MCP server 派生（runtime 注册）；(3) 内部 → 外部暴露（自动从 1+2 派生，按 `expose_via_server` 过滤）。
