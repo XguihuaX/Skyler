@@ -23,6 +23,7 @@ import subprocess
 from typing import Optional
 
 from backend.capabilities import Consumer, TriggerMode, register_capability
+from backend.capabilities.media_control import get_nowplaying_bin
 from backend.integrations import netease_music as nm
 
 logger = logging.getLogger(__name__)
@@ -75,19 +76,23 @@ _NCM_PLAY_DELAY_SEC = 1.5  # 等 NCM App 启动 + 加载 UI + 注册 MediaRemote
 async def _trigger_ncm_play() -> bool:
     """``open`` 唤起 NCM 后调用，触发自动播放。
 
+    复用 media_control 已解析的 ``nowplaying-cli`` 绝对路径（Tauri sidecar /
+    launchd 等场景下后端 PATH 不一定有 /opt/homebrew/bin，DRY 一份解析逻辑）。
+
     Best-effort：任何步骤失败都 log warning 后返 False，不抛异常——主流程
     （open URL）已经成功，"没自动播"是退化体验，不应让 capability 整体失败。
     """
-    if shutil.which("nowplaying-cli") is None:
+    bin_path = get_nowplaying_bin()
+    if bin_path is None:
         logger.warning(
-            "[netease] nowplaying-cli 未安装；无法触发自动播放。"
-            "请 `brew install nowplaying-cli`",
+            "[netease] nowplaying-cli 未解析到绝对路径；无法触发自动播放。"
+            "请 `brew install nowplaying-cli`，或调 media_control.refresh_nowplaying_bin()",
         )
         return False
     await asyncio.sleep(_NCM_PLAY_DELAY_SEC)
     try:
         proc = await asyncio.to_thread(
-            subprocess.run, ["nowplaying-cli", "play"],
+            subprocess.run, [bin_path, "play"],
             capture_output=True, text=True, timeout=2,
         )
     except subprocess.TimeoutExpired:

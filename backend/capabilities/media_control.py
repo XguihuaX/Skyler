@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Optional
 
 from backend.capabilities import Consumer, TriggerMode, register_capability
 
@@ -29,8 +30,74 @@ IS_MACOS = sys.platform == "darwin"
 _CMD_TIMEOUT = 2  # seconds
 
 
+# ---------------------------------------------------------------------------
+# nowplaying-cli 路径解析
+# ---------------------------------------------------------------------------
+#
+# 后端进程 PATH 不一定包含 ``/opt/homebrew/bin``（M 系列）/``/usr/local/bin``
+# （Intel）—— 经 Tauri sidecar / launchd 启动时 PATH 会被裁剪到 ``/usr/bin:
+# /bin:/usr/sbin:/sbin``，``shutil.which`` 找不到 nowplaying-cli。
+#
+# 修：模块加载时一次性解析路径，shutil.which fail 后回退到已知 Homebrew 安装
+# 目录探测；找到的绝对路径被所有 subprocess.run 调用复用，避免每次 PATH 查
+# 的开销 + 跨进程环境差异。``refresh_nowplaying_bin()`` 提供运行时刷新（
+# brew install 后无需重启 backend）。
+
+_HOMEBREW_FALLBACK_PATHS = (
+    "/opt/homebrew/bin/nowplaying-cli",   # Apple Silicon
+    "/usr/local/bin/nowplaying-cli",      # Intel
+)
+
+
+def _resolve_nowplaying_bin() -> Optional[str]:
+    """先 PATH 后 Homebrew 兜底；返绝对路径或 None。"""
+    via_path = shutil.which("nowplaying-cli")
+    if via_path:
+        return via_path
+    for cand in _HOMEBREW_FALLBACK_PATHS:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+_NOWPLAYING_BIN: Optional[str] = _resolve_nowplaying_bin() if IS_MACOS else None
+
+
+# stderr print 保证用户可见——module 加载发生在 main.py 的 basicConfig 之前，
+# logger.info 此刻会被 last-resort filter（默认 WARNING level）丢弃。
+if IS_MACOS:
+    if _NOWPLAYING_BIN:
+        print(
+            f"[media_control] nowplaying-cli resolved to: {_NOWPLAYING_BIN}",
+            file=sys.stderr,
+        )
+        logger.info("nowplaying-cli resolved to: %s", _NOWPLAYING_BIN)
+    else:
+        _missing_msg = (
+            "[media_control] nowplaying-cli NOT FOUND in PATH "
+            f"({os.environ.get('PATH', '')!r}) "
+            "or Homebrew dirs — media.* capabilities will return error. "
+            "Run: brew install nowplaying-cli"
+        )
+        print(_missing_msg, file=sys.stderr)
+        logger.warning(_missing_msg)
+
+
+def get_nowplaying_bin() -> Optional[str]:
+    """对外暴露，给 netease_music capability 复用同一份解析。"""
+    return _NOWPLAYING_BIN
+
+
+def refresh_nowplaying_bin() -> Optional[str]:
+    """重新跑一次解析。``brew install nowplaying-cli`` 后调用即可，无需重启。"""
+    global _NOWPLAYING_BIN
+    _NOWPLAYING_BIN = _resolve_nowplaying_bin() if IS_MACOS else None
+    logger.info("nowplaying-cli re-resolved: %s", _NOWPLAYING_BIN)
+    return _NOWPLAYING_BIN
+
+
 def _has_nowplaying_cli() -> bool:
-    return IS_MACOS and shutil.which("nowplaying-cli") is not None
+    return IS_MACOS and _NOWPLAYING_BIN is not None
 
 
 def _run_sync(cmd: list[str]) -> tuple[int, str, str]:
@@ -50,7 +117,9 @@ def _run_sync(cmd: list[str]) -> tuple[int, str, str]:
 
 
 async def _nowplaying(*subcmd: str) -> tuple[int, str, str]:
-    return await asyncio.to_thread(_run_sync, ["nowplaying-cli", *subcmd])
+    if _NOWPLAYING_BIN is None:
+        return -2, "", "nowplaying-cli not resolved"
+    return await asyncio.to_thread(_run_sync, [_NOWPLAYING_BIN, *subcmd])
 
 
 async def _osascript(script: str) -> tuple[int, str, str]:
@@ -67,15 +136,16 @@ async def health_check() -> dict:
             "status": "warn",
             "error": f"媒体控制仅 macOS 可用（当前平台 {sys.platform}）",
         }
-    if not _has_nowplaying_cli():
+    if _NOWPLAYING_BIN is None:
         return {
             "status": "warn",
             "error": (
-                "nowplaying-cli 未安装。请 `brew install nowplaying-cli` "
-                "（GitHub: kirtan-shah/nowplaying-cli）"
+                "nowplaying-cli 未在 PATH 或 Homebrew 路径中找到。"
+                "请 `brew install nowplaying-cli`（M 系列装到 /opt/homebrew/bin，"
+                "Intel 在 /usr/local/bin；Skyler 自动找）"
             ),
         }
-    return {"status": "healthy"}
+    return {"status": "healthy", "binary": _NOWPLAYING_BIN}
 
 
 # ---------------------------------------------------------------------------

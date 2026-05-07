@@ -307,8 +307,11 @@ async def test_search_returns_shape():
 # main
 # ---------------------------------------------------------------------------
 
+_FAKE_BIN_NETEASE = "/opt/homebrew/bin/nowplaying-cli"
+
+
 async def test_trigger_ncm_play_calls_nowplaying_cli():
-    print("\n[netease caps — _trigger_ncm_play invokes nowplaying-cli play]")
+    print("\n[netease caps — _trigger_ncm_play invokes nowplaying-cli with absolute path]")
     captured: dict = {"cmd": None, "slept": None}
 
     def fake_run(cmd, **kwargs):
@@ -319,25 +322,28 @@ async def test_trigger_ncm_play_calls_nowplaying_cli():
     async def fake_sleep(secs):
         captured["slept"] = secs
 
-    with patch.object(caps.shutil, "which", return_value="/opt/homebrew/bin/nowplaying-cli"), \
+    with patch.object(caps, "get_nowplaying_bin", return_value=_FAKE_BIN_NETEASE), \
          patch.object(caps.subprocess, "run", side_effect=fake_run), \
          patch.object(caps.asyncio, "sleep", side_effect=fake_sleep):
         ok = await caps._trigger_ncm_play()
     check("trigger ok=True", ok is True)
-    check("cmd = nowplaying-cli play", captured["cmd"] == ["nowplaying-cli", "play"])
+    check(
+        "cmd uses absolute path returned by get_nowplaying_bin",
+        captured["cmd"] == [_FAKE_BIN_NETEASE, "play"],
+    )
     check("slept ~1.5s", captured["slept"] == caps._NCM_PLAY_DELAY_SEC)
 
 
 async def test_trigger_ncm_play_handles_missing_cli():
-    print("\n[netease caps — _trigger_ncm_play handles nowplaying-cli missing]")
+    print("\n[netease caps — _trigger_ncm_play handles bin=None (PATH miss)]")
     sleep_called = {"v": False}
     async def fake_sleep(secs):
         sleep_called["v"] = True
-    with patch.object(caps.shutil, "which", return_value=None), \
+    with patch.object(caps, "get_nowplaying_bin", return_value=None), \
          patch.object(caps.asyncio, "sleep", side_effect=fake_sleep):
         ok = await caps._trigger_ncm_play()
-    check("returns False when cli missing", ok is False)
-    check("does NOT sleep when cli missing (early return)", sleep_called["v"] is False)
+    check("returns False when bin is None", ok is False)
+    check("does NOT sleep when bin is None (early return)", sleep_called["v"] is False)
 
 
 async def test_trigger_ncm_play_handles_timeout():
@@ -347,7 +353,7 @@ async def test_trigger_ncm_play_handles_timeout():
         raise sp.TimeoutExpired(cmd=cmd, timeout=2)
     async def fake_sleep(secs):
         pass
-    with patch.object(caps.shutil, "which", return_value="/opt/homebrew/bin/nowplaying-cli"), \
+    with patch.object(caps, "get_nowplaying_bin", return_value=_FAKE_BIN_NETEASE), \
          patch.object(caps.subprocess, "run", side_effect=boom), \
          patch.object(caps.asyncio, "sleep", side_effect=fake_sleep):
         ok = await caps._trigger_ncm_play()
@@ -361,7 +367,7 @@ async def test_trigger_ncm_play_handles_nonzero_rc():
         return m
     async def fake_sleep(secs):
         pass
-    with patch.object(caps.shutil, "which", return_value="/opt/homebrew/bin/nowplaying-cli"), \
+    with patch.object(caps, "get_nowplaying_bin", return_value=_FAKE_BIN_NETEASE), \
          patch.object(caps.subprocess, "run", side_effect=fake_run), \
          patch.object(caps.asyncio, "sleep", side_effect=fake_sleep):
         ok = await caps._trigger_ncm_play()

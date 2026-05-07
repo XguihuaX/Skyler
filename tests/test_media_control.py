@@ -59,31 +59,95 @@ async def test_health_non_macos():
 async def test_health_no_cli():
     print("\n[media — health: nowplaying-cli missing → warn]")
     with patch.object(mc, "IS_MACOS", True), \
-         patch.object(mc.shutil, "which", return_value=None):
+         patch.object(mc, "_NOWPLAYING_BIN", None):
         h = await mc.health_check()
     check("warn", h["status"] == "warn")
     check("提示 brew install", "brew install nowplaying-cli" in (h.get("error") or ""))
 
 
-async def test_health_ok():
-    print("\n[media — health: macOS + cli installed → healthy]")
+async def test_health_ok_returns_binary_path():
+    print("\n[media — health: macOS + cli resolved → healthy + binary]")
+    FAKE_BIN = "/opt/homebrew/bin/nowplaying-cli"
     with patch.object(mc, "IS_MACOS", True), \
-         patch.object(mc.shutil, "which", return_value="/opt/homebrew/bin/nowplaying-cli"):
+         patch.object(mc, "_NOWPLAYING_BIN", FAKE_BIN):
         h = await mc.health_check()
     check("healthy", h["status"] == "healthy")
+    check("binary path returned", h.get("binary") == FAKE_BIN)
+
+
+# ---------------------------------------------------------------------------
+# 2.5. 路径解析（PATH-found / fallback / both-miss）
+# ---------------------------------------------------------------------------
+
+def test_resolver_prefers_shutil_which():
+    print("\n[media — resolver: shutil.which hit takes priority]")
+    with patch.object(mc.shutil, "which", return_value="/some/path/nowplaying-cli"):
+        out = mc._resolve_nowplaying_bin()
+    check("uses PATH result", out == "/some/path/nowplaying-cli")
+
+
+def test_resolver_falls_back_to_homebrew_apple_silicon():
+    print("\n[media — resolver: PATH miss → /opt/homebrew/bin fallback]")
+    HB = "/opt/homebrew/bin/nowplaying-cli"
+    def fake_isfile(p):
+        return p == HB
+    def fake_access(p, mode):
+        return p == HB
+    with patch.object(mc.shutil, "which", return_value=None), \
+         patch.object(mc.os.path, "isfile", side_effect=fake_isfile), \
+         patch.object(mc.os, "access", side_effect=fake_access):
+        out = mc._resolve_nowplaying_bin()
+    check("falls back to /opt/homebrew", out == HB)
+
+
+def test_resolver_falls_back_to_homebrew_intel():
+    print("\n[media — resolver: PATH miss + /opt/homebrew miss → /usr/local/bin]")
+    USR_LOCAL = "/usr/local/bin/nowplaying-cli"
+    def fake_isfile(p):
+        return p == USR_LOCAL
+    def fake_access(p, mode):
+        return p == USR_LOCAL
+    with patch.object(mc.shutil, "which", return_value=None), \
+         patch.object(mc.os.path, "isfile", side_effect=fake_isfile), \
+         patch.object(mc.os, "access", side_effect=fake_access):
+        out = mc._resolve_nowplaying_bin()
+    check("falls back to /usr/local", out == USR_LOCAL)
+
+
+def test_resolver_returns_none_when_all_miss():
+    print("\n[media — resolver: PATH miss + Homebrew miss → None]")
+    with patch.object(mc.shutil, "which", return_value=None), \
+         patch.object(mc.os.path, "isfile", return_value=False):
+        out = mc._resolve_nowplaying_bin()
+    check("returns None", out is None)
+
+
+def test_refresh_updates_module_global():
+    print("\n[media — refresh_nowplaying_bin re-runs resolution]")
+    original = mc._NOWPLAYING_BIN
+    try:
+        with patch.object(mc, "_resolve_nowplaying_bin", return_value="/x/y/nowplaying-cli"):
+            out = mc.refresh_nowplaying_bin()
+        check("module global updated", mc._NOWPLAYING_BIN == "/x/y/nowplaying-cli")
+        check("return value matches", out == "/x/y/nowplaying-cli")
+    finally:
+        mc._NOWPLAYING_BIN = original
 
 
 # ---------------------------------------------------------------------------
 # 3. next / previous / play_pause invoke nowplaying-cli
 # ---------------------------------------------------------------------------
 
+_FAKE_BIN = "/opt/homebrew/bin/nowplaying-cli"
+
+
 async def _run_with_fake_subprocess(coro_fn, *, rc=0, stdout="", stderr=""):
-    """patch _has_nowplaying_cli=True + _run_sync to record cmd + return canned."""
+    """patch _NOWPLAYING_BIN=fake + _run_sync to record cmd + return canned."""
     captured: dict = {"cmd": None}
     def fake_run(cmd):
         captured["cmd"] = cmd
         return rc, stdout, stderr
-    with patch.object(mc, "_has_nowplaying_cli", return_value=True), \
+    with patch.object(mc, "_NOWPLAYING_BIN", _FAKE_BIN), \
          patch.object(mc, "IS_MACOS", True), \
          patch.object(mc, "_run_sync", side_effect=fake_run):
         out = await coro_fn()
@@ -91,24 +155,24 @@ async def _run_with_fake_subprocess(coro_fn, *, rc=0, stdout="", stderr=""):
 
 
 async def test_next_track():
-    print("\n[media — next_track invokes 'nowplaying-cli next']")
+    print("\n[media — next_track invokes nowplaying-cli with absolute path]")
     out, cmd = await _run_with_fake_subprocess(mc.next_track, rc=0)
     check("ok True", out["ok"] is True)
-    check("cmd correct", cmd == ["nowplaying-cli", "next"])
+    check("cmd uses absolute path", cmd == [_FAKE_BIN, "next"])
 
 
 async def test_previous_track():
-    print("\n[media — previous_track invokes 'nowplaying-cli previous']")
+    print("\n[media — previous_track invokes nowplaying-cli with absolute path]")
     out, cmd = await _run_with_fake_subprocess(mc.previous_track, rc=0)
     check("ok True", out["ok"] is True)
-    check("cmd correct", cmd == ["nowplaying-cli", "previous"])
+    check("cmd uses absolute path", cmd == [_FAKE_BIN, "previous"])
 
 
 async def test_play_pause():
-    print("\n[media — play_pause invokes togglePlayPause]")
+    print("\n[media — play_pause invokes togglePlayPause with absolute path]")
     out, cmd = await _run_with_fake_subprocess(mc.play_pause, rc=0)
     check("ok True", out["ok"] is True)
-    check("cmd correct", cmd == ["nowplaying-cli", "togglePlayPause"])
+    check("cmd uses absolute path", cmd == [_FAKE_BIN, "togglePlayPause"])
 
 
 async def test_next_track_failure_passes_stderr():
@@ -118,6 +182,21 @@ async def test_next_track_failure_passes_stderr():
     )
     check("ok False", out["ok"] is False)
     check("error message", out["error"] == "some error")
+
+
+async def test_next_track_with_no_cli_short_circuits():
+    print("\n[media — next_track with _NOWPLAYING_BIN=None short-circuits]")
+    captured = {"called": False}
+    def fake_run(cmd):
+        captured["called"] = True
+        return 0, "", ""
+    with patch.object(mc, "_NOWPLAYING_BIN", None), \
+         patch.object(mc, "IS_MACOS", True), \
+         patch.object(mc, "_run_sync", side_effect=fake_run):
+        out = await mc.next_track()
+    check("ok False", out["ok"] is False)
+    check("error mentions install", "brew install" in (out.get("error") or ""))
+    check("subprocess NOT invoked when bin is None", captured["called"] is False)
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +214,7 @@ async def test_now_playing_parses_three_lines():
     check("artist", out["artist"] == "逃跑计划")
     check("album", out["album"] == "世界")
     check("playing True", out["playing"] is True)
-    check("cmd has get title artist album", cmd == ["nowplaying-cli", "get", "title", "artist", "album"])
+    check("cmd uses absolute path + get fields", cmd == [_FAKE_BIN, "get", "title", "artist", "album"])
 
 
 async def test_now_playing_nothing_playing():
@@ -159,8 +238,9 @@ async def test_now_playing_null_string_treated_as_none():
 
 
 async def test_now_playing_no_cli():
-    print("\n[media — now_playing with cli missing returns playing=False]")
-    with patch.object(mc, "_has_nowplaying_cli", return_value=False):
+    print("\n[media — now_playing with bin=None returns playing=False]")
+    with patch.object(mc, "_NOWPLAYING_BIN", None), \
+         patch.object(mc, "IS_MACOS", True):
         out = await mc.now_playing()
     check("playing False", out["playing"] is False)
     check("error 提示 brew", "brew install nowplaying-cli" in (out.get("error") or ""))
@@ -233,8 +313,14 @@ async def main():
     test_caps_registered()
     await test_health_non_macos()
     await test_health_no_cli()
-    await test_health_ok()
+    await test_health_ok_returns_binary_path()
+    test_resolver_prefers_shutil_which()
+    test_resolver_falls_back_to_homebrew_apple_silicon()
+    test_resolver_falls_back_to_homebrew_intel()
+    test_resolver_returns_none_when_all_miss()
+    test_refresh_updates_module_global()
     await test_next_track()
+    await test_next_track_with_no_cli_short_circuits()
     await test_previous_track()
     await test_play_pause()
     await test_next_track_failure_passes_stderr()
