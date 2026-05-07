@@ -24,3 +24,5 @@ tenacity>=8.0
 mcp>=1.0
 # v3-G chunk 1.6 — Apple Calendar via macOS EventKit（仅 macOS 实际加载）
 pyobjc-framework-EventKit>=10.0; sys_platform == "darwin"
+# v3-H chunk 1 — 网易云 web API 加密（weapi: AES-128-CBC + RSA-1024）
+pycryptodome>=3.20
