@@ -25,7 +25,7 @@
 | **v3-F'：主动对话 + 时间感知（饭点 / 睡前 / 长时无互动）** | 📋 计划中 | 0% |
 | v3-G：生活 & 工具型能力（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 | 0% |
 | **v3-G'：TTS UI 升级 + cosyvoice emotion 走 instruct（chunk 1a SSML 路径已撤回）** | ✅ 完成（5 commit + 2 patch，2026-05-06）；Phase 2 复刻音色 / SoVITS 训练 📋 PENDING | Phase 1 100% |
-| **v3-H：媒体接入（网易云 / B站 / nowplaying-cli）** | 🚧 部分 BLOCKED（网易云被网络环境卡住；B站 / 媒体控制 独立可做）| 0% |
+| **v3-H：媒体接入（网易云内置 / 媒体控制 / B站）** | 🚧 chunk 1 ✅ 完成（网易云 + nowplaying-cli，2026-05-08）；B 站 📋 TODO | 65% |
 | v4：屏幕感知 + 视觉能力 | 📋 远期 | 0% |
 | **v5-D：autodl 部署 + 子 agent 隔离** | 📋 远期 | 0% |
 | **v5-T1：GPT-SoVITS 后端接通（依赖 v5-D）** | 📋 远期 | 0% |
@@ -475,69 +475,40 @@
 
 ---
 
-### v3-H：媒体接入（音乐 / 视频 / 系统播放控制）🚧 部分 BLOCKED
+### v3-H：媒体接入（音乐 / 视频 / 系统播放控制）
 
-延展 v3-G chunk 1.5 的 MCP client 架构，把第三方媒体能力接入成 capability。三条**互不依赖**的子链路，可任意顺序推进；网易云被网络环境卡住时，其他两条照样可做。
+延展 v3-G chunk 1.5 的 capability 架构，把第三方媒体能力接入成 capability。三条**互不依赖**的子链路。
 
 | 子任务 | 状态 | 路径要点 |
 |---|---|---|
-| 网易云接入 | 🚧 BLOCKED（网络环境）| 经 cloud-music-mcp（Code-MonkeyZhang）反向注册成 capability |
-| B 站接入 | 📋 TODO | 独立链路，不依赖网易云；MCP client 或直接 integrations/bilibili.py |
-| 媒体控制（nowplaying-cli）| 📋 TODO | 独立可做；纯 macOS CLI，看系统当前播什么 + 播控（不限来源） |
+| 网易云内置接入 | ✅ chunk 1 完成（2026-05-08）| 后端直接调网易云 web API（weapi 加密）+ orpheus URL scheme 唤起本地 App |
+| 媒体控制（nowplaying-cli）| ✅ chunk 1 完成（2026-05-08）| `brew install nowplaying-cli` + 5 个 capability，跨来源播控 |
+| B 站接入 | 📋 TODO | 独立链路；MCP client 或直接 integrations/bilibili.py |
 
-#### 网易云接入 — 🚧 BLOCKED（网络环境问题）
+#### chunk 1 ✅ 完成（2026-05-08）— 网易云内置接入 + macOS 媒体控制
 
-**目标**：通过 [Code-MonkeyZhang/cloud-music-mcp](https://github.com/Code-MonkeyZhang/cloud-music-mcp) 把网易云搜歌 / 拉歌单 / 播放控制接入成 Skyler 的 capability，沿用 chunk 1.5 的 MCP client 架构（`mcp_clients` 配置块 → 启动连接 → 自动反向注册到 CapabilityRegistry）。
+**关键决策：放弃 cloud-music-mcp，自己写 weapi**
 
-**当前阻塞**：依赖 `pyncm` Python 库装不上：
+之前 v3-H 计划走 [Code-MonkeyZhang/cloud-music-mcp](https://github.com/Code-MonkeyZhang/cloud-music-mcp) MCP client 路径，被 `pyncm` 装不上卡住（PyPI / 镜像在 Python ssl 路径被截断，怀疑代理 TUN 劫持）。本 chunk **改自己写 weapi 内置实现**：weapi 加密参数（AES-128-CBC + RSA-1024）公开已久，jixunmoe / Binaryify 等都用同一组常量，不是逆向破解；体积代价仅 `pycryptodome` 一个新 dep（~3MB BSD/PD，已是 bce-python-sdk 的 transitive，本地零增量）。
 
-- PyPI 主站返回空 simple page (content-length 13)
-- 清华 / 阿里 / 豆瓣镜像 SSL 握手被截断（Python ssl 模块路径），但 curl 同 URL 正常
-- 怀疑是代理软件 TUN 模式劫持 Python 流量
+| Hash | 内容 |
+|---|---|
+| `a00f696` | feat(integrations): netease cloud music client (web API + url scheme) —— `backend/integrations/netease_music.py`：weapi 加密 + 7 个 client 方法（daily_recommend / personal_fm / my_playlists / playlist_detail / search / like_song / add_to_playlist）+ orpheus:// URL scheme builder + Chrome 风控 headers + cookie 走 `.env` `NETEASE_MUSIC_U`；health_check 三档；42/42 mock 单测 |
+| `6d63958` | feat(capabilities): netease music 7 capabilities —— `backend/capabilities/netease_music.py`：7 个 capability 全 CHAT_AGENT consumer，description 强引导（chunk 1.7 verbatim 模式）；`play_playlist` 设计成两步流程让 LLM 用语义模糊匹配 emoji / 别名 / 多语言歌单名（"跑步" → "🏃 跑步专用"）；49/49 单测 |
+| `5632660` | feat(capabilities): media control via nowplaying-cli —— `backend/capabilities/media_control.py`：5 个 capability（next/previous/play_pause/now_playing/set_volume），`subprocess.run` 包装 `nowplaying-cli` + `osascript`，IS_MACOS / 缺 CLI 双重 graceful，timeout=2s；48/48 单测 |
+| `<本 commit>` | docs+chat: netease & media control system prompt + setup guides —— `_TOOL_PROMPT_ADDENDUM` 加【音乐类】+【媒体控制】两段 verbatim 引导；`docs/netease-music-setup.md` 含 Chrome F12 抓 cookie 图文 + 风控提示 + 故障排查；`docs/media-control-setup.md` 含装机 / 能力 / 与网易云配合 / 隐私说明；ROADMAP v3-H chunk 1 ✅ |
 
-**解决方案**（待网络条件改善后回来）：
+**架构验证**：
+- 网易云 7 cap + 媒体控制 5 cap 共 **12 个新 capability**，全部经 `@register_capability` 一次性进 CapabilityRegistry + ToolRegistry，ChatAgent 零改动看到（chunk 0 抽象第三次得到验证）
+- 跨来源体验：用户用网易云 App 听歌时，"下一首"走 `media.next_track`（系统级 MediaRemote framework）；用 Apple Music / Spotify / YouTube 听歌时，同一句"下一首"完全等价工作
+- "好听！加红心"复合调用链：`media.now_playing` 拿 title+artist → `netease.like_current` 用关键词回搜 song id → `like_song` 写回。LLM 自然能编排（chunk 1.7 system prompt 强引导后）
 
-1. 切换网络环境（手机热点 / 不挂代理 / 换路由）
-2. 或：手动下载 pyncm wheel 离线装
-3. 或：fork cloud-music-mcp 改 dep 为已能装上的网易云 SDK
+**测试覆盖**：3 个新测试套件 / **总计 139 cases 全过**（netease_music 42 + netease_capabilities 49 + media_control 48）
 
-接入步骤已记录在 `docs/netease-music-setup.md`（如已写）或本条目下方，待网络问题解决后直接续上 chunk 1.5 的 MCP client 架构。
+**Backlog**：
 
-**接入步骤**（待解锁后照本补全）：
-
-1. `config.yaml` 的 `mcp_clients` 块加 `netease-music` 条目（参 chunk 1.5 `docs/mcp-client-setup.md` 同款模板，`expose_via_skyler_server: false` 避免账号凭证外泄给外部 LLM）
-2. 重启 backend → CapabilityRegistry 自动派生 `ext.netease-music.*` tool
-3. ChatAgent `_TOOL_PROMPT_ADDENDUM`（chunk 1.7 引入）补一段音乐类调用引导（"用户说'放首歌' / '搜某某'"）
-4. 写 `docs/netease-music-setup.md`：pyncm 装机指南 + 网易云登录（账号 / 二维码）+ 故障排查
-
-#### B 站接入 — 📋 TODO（不依赖网易云链路）
-
-**与网易云完全解耦**——不等 pyncm 解锁。两条候选路径，按"先看有没有现成 MCP server"决定：
-
-- **A. MCP client**：搜现成 bilibili-mcp，复用 chunk 1.5 配置块（最小改动）
-- **B. 直接底层 client + capability 装饰器**：仿 `backend/integrations/google_calendar.py` 写 `backend/integrations/bilibili.py`，登录态用 `~/.skyler/bilibili_credentials.json`
-
-**初版能力**（最小可用）：搜视频 / 拉首页推荐 / 拉指定 UP 主最新投稿。
-
-**不做**：直播弹幕（已在"不在路线图里"明确排除，与桌面伴侣定位无关）。
-
-**估时**：路径 A 半天（如有合适 mcp）；路径 B 2-3 天（OAuth + 重试 + 健康检查全套）。
-
-#### 媒体控制（nowplaying-cli）— 📋 TODO（独立可做，建议先行）
-
-**思路**：[kirtan-shah/nowplaying-cli](https://github.com/kirtan-shah/nowplaying-cli) 是 macOS CLI（`brew install nowplaying-cli`），通过 `MediaRemote.framework` 私有 API 拿"当前系统在播什么"——**不限来源**：网易云 / Apple Music / Spotify / YouTube / Bilibili 网页都能识别——并支持播放 / 暂停 / 上一首 / 下一首。
-
-**与网易云的关系**：**完全独立**。即使网易云链路全 block，只要用户用任何来源在播歌，Skyler 都能看到 + 控制。
-
-**接入路径**：
-
-1. `backend/integrations/nowplaying.py`：`subprocess.run(["nowplaying-cli", "get-raw"])` 解析输出；`requirements.txt` 不加新 Python 依赖（CLI 经 brew 装），仅 macOS（运行时 `IS_MACOS` 检测，与 Apple Calendar 同款 fallback）
-2. capability：`media.nowplaying`（查当前曲目）+ `media.play_pause` / `media.next` / `media.previous` 四个
-3. health_check：`shutil.which("nowplaying-cli")` 缺失 → warn "请 `brew install nowplaying-cli`"，不阻塞
-
-**估时**：1 天（subprocess wrapper + 4 capability + mock subprocess 单测）。
-
-**优先级建议**：v3-H 三子任务里**最先做**——无外部依赖、无账号、纯本地、不受网络环境影响。做完后即使网易云一直 BLOCKED，"放歌 / 暂停 / 切歌"的 UX 已经能跑。
+* **chunk 2 — B 站接入**：搜视频 / 拉首页 / 指定 UP 主投稿。**不做**直播弹幕（已在"不在路线图里"排除）。两条候选：MCP client（找现成 bilibili-mcp）/ 直接 integrations/bilibili.py。估时半天到 3 天。
+* **chunk 1.x 增强**：网易云 `add_to_playlist` 没单独包成 capability（client 层有），等用户复盘有需求再暴露；`like_current` 当前不会自动判断当前播的是不是网易云资源，搜不到时返 error，由 LLM 包装；后续可加"先 search 验证再调 like"两步保证
 
 ---
 
