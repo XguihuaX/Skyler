@@ -147,6 +147,34 @@ class ChatHistory(Base):
     user = relationship("User", back_populates="chat_history")
 
 
+class CharacterState(Base):
+    """v3-G chunk 3b — 角色跨 turn 状态。
+
+    与 ``ChatHistory.kind`` / 单轮 ``emotion`` 标签的语义关系：
+
+      * ``emotion`` (chunk D)        ─ per-turn 瞬时（"这一句开心"），不持久
+      * ``CharacterState.mood``      ─ 跨 turn 累积情绪（"今天整体心情"），持久
+
+    两套独立不冲突：emotion 控 TTS / Live2D 当轮表现；mood 控状态条 + 后续
+    系统的"角色感"——比如 mood='tired' 时人设倾向偏低能量。
+
+    UNIQUE(character_id) 强制一对一。一个 character 只有一行 state；查询
+    用 character_id 直接 lookup。
+    """
+    __tablename__ = "character_states"
+
+    id                  = Column(Integer, primary_key=True, autoincrement=True)
+    character_id        = Column(Integer, nullable=False, unique=True)
+    mood                = Column(String(32), nullable=False, default="neutral",
+                                 server_default="neutral")
+    intimacy            = Column(Integer, nullable=False, default=0,
+                                 server_default="0")
+    current_thought     = Column(Text, nullable=True)
+    current_activity    = Column(String(64), nullable=True)
+    last_interaction_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at          = Column(DateTime, nullable=False, server_default=func.now())
+
+
 class PendingBriefing(Base):
     """v3-G chunk 2.6 — wake_call_briefing 跨进程中间状态。
 

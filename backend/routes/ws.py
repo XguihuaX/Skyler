@@ -47,7 +47,13 @@ from typing import Optional, Tuple
 
 from sqlalchemy import select
 
-from backend.agents.chat import ChatAgent, _parse_emotion, _parse_motion, _parse_thinking
+from backend.agents.chat import (
+    ChatAgent,
+    _parse_emotion,
+    _parse_motion,
+    _parse_state_update,
+    _parse_thinking,
+)
 from backend.asr.whisper import whisper_asr
 from backend.config import config_yaml, get_planner_model, get_tts_enabled
 from backend.config.prompt_manager import prompt_manager
@@ -62,7 +68,7 @@ from backend.database.services import (
 from backend.llm.client import LLMError, call_llm
 from backend.memory.short_term import short_term_memory
 from backend.tts import get_tts_engine, tts_manager  # noqa: F401  (manager 保留作为旧路径)
-from backend.utils.text_filters import strip_thinking
+from backend.utils.text_filters import strip_state_update, strip_thinking
 from backend.utils.timer import timed
 
 timing_logger = logging.getLogger("momoos.timing")
@@ -402,6 +408,49 @@ async def _bump_conversation_updated_at(conv_id: int) -> None:
             await session.commit()
 
 
+async def _apply_and_push_state_update(
+    ws: WebSocket,
+    user_id: str,
+    character_id: int,
+    parsed: dict,
+) -> None:
+    """v3-G chunk 3b 帮手：把解析到的 ``<state_update>`` 应用到 DB +
+    push WS ``state_update`` 事件让前端状态条刷新。
+
+    任何子步骤失败都吞 + log，不阻塞主对话流。``parsed`` 来自
+    ``_parse_state_update``，含 mood / intimacy_delta / thought（可能为 None）。
+    services.update_character_state 已校验 enum / clamp delta / 截断长度。
+    """
+    try:
+        from backend.database.services import update_character_state
+        async with AsyncSessionLocal() as session:
+            new_state = await update_character_state(
+                session, character_id,
+                mood=parsed.get("mood"),
+                intimacy_delta=parsed.get("intimacy_delta"),
+                thought=parsed.get("thought"),
+                activity=parsed.get("activity"),
+            )
+        await ws.send_json({
+            "type": "state_update",
+            "character_id": int(character_id),
+            "mood": new_state.mood,
+            "intimacy": new_state.intimacy,
+            "thought": new_state.current_thought,
+            "activity": new_state.current_activity,
+        })
+        logger.info(
+            "[state_update] user=%s char=%s applied %s → mood=%s intimacy=%d",
+            user_id, character_id, parsed,
+            new_state.mood, new_state.intimacy,
+        )
+    except Exception:
+        logger.exception(
+            "[state_update] apply/push failed user=%s char=%s parsed=%s",
+            user_id, character_id, parsed,
+        )
+
+
 async def _update_memory(
     user_id: str,
     user_text: str,
@@ -426,7 +475,10 @@ async def _update_memory(
     """
     # v3-F 回归修：流式按句剥 thinking（chat.py _parse_thinking）有边界漏网，
     # 写库前再剥一道，确保 short_term + chat_history 都不带 <thinking> 标签。
-    reply = strip_thinking(reply)
+    # v3-G chunk 3b 同 pattern：流式 _parse_state_update 只在 first sentence
+    # 跑（与 emotion 同段），后续 sentence 残留的 <state_update> 走 ws-side
+    # strip 兜底。chunk 2.6 footgun 教训：双保险 + TTS preprocessor 第三道。
+    reply = strip_state_update(strip_thinking(reply))
     try:
         await short_term_memory.add(user_id, "user",      user_text)
         await short_term_memory.add(user_id, "assistant", reply)
@@ -511,7 +563,8 @@ async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
     # v3-F 回归修：被打断时 reply_parts 可能在 thinking 块内部被 cancel，
     # 残留半个标签 —— strip_thinking 只剥完整对，半截开标签会留下。
     # 前端渲染层有兜底正则再扫一次，最差只是多保留一段没意义的字符串。
-    full_reply = strip_thinking("".join(state.reply_parts)).strip()
+    # v3-G chunk 3b：同步剥 <state_update>。
+    full_reply = strip_state_update(strip_thinking("".join(state.reply_parts))).strip()
     interrupted_at = datetime.utcnow()
 
     try:
@@ -646,6 +699,21 @@ async def _handle_message(
         # 让打断收尾能拿到这一轮的 user 文本
         state.user_text = text
 
+        # v3-G chunk 3b：任何 user message 入 turn → 更新角色 last_interaction_at。
+        # 不在这里改 mood / intimacy（那靠 LLM <state_update> 标签）。失败 best-effort，
+        # 不阻塞主对话流。
+        if char_id is not None and msg_type != "touch":
+            try:
+                from backend.database.services import update_character_state
+                async with AsyncSessionLocal() as session:
+                    await update_character_state(
+                        session, char_id, bump_last_interaction=True,
+                    )
+            except Exception:
+                logger.exception(
+                    "[state] bump last_interaction_at failed char=%s", char_id,
+                )
+
         # ── 2. ChatAgent stream + TTS ────────────────────────────────────────
         # v3-C：直接走 ChatAgent，意图识别 / 记忆 tool / 内置工具调度全部
         # 由 LiteLLM tool calling 在 ChatAgent.stream() 内统一处理。
@@ -751,6 +819,16 @@ async def _handle_message(
                                 "type": "emotion",
                                 "value": parsed_emotion,
                             })
+
+                        # v3-G chunk 3b：第一句同时解析 <state_update> 标签。
+                        # 与 emotion 同段（紧贴 <emotion> 之后）；解析后剥离
+                        # 不进 chat_history、不进 TTS。命中即写 DB + push WS
+                        # state_update 事件让前端状态条立即刷新。
+                        parsed_state, sentence = _parse_state_update(sentence)
+                        if parsed_state and char_id is not None:
+                            await _apply_and_push_state_update(
+                                ws, user_id, char_id, parsed_state,
+                            )
 
                     # v3-F #2：剥离 <thinking>...</thinking> 内心独白；命中后单独 push
                     # 一次。chat.py 的 _safe_boundary 保证 thinking 块不会被

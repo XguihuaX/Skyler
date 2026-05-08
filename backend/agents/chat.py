@@ -215,6 +215,120 @@ def _build_motion_instruction() -> str:
 
 
 # ---------------------------------------------------------------------------
+# v3-G chunk 3b：角色状态标签 <state_update>
+# ---------------------------------------------------------------------------
+
+# 自闭合标签：``<state_update mood="happy" intimacy_delta="+1" thought="..." />``
+# 也容错带文本闭合：``<state_update ...>...</state_update>``
+# 与 emotion / motion / thinking 的关系：
+#   - emotion = per-turn 瞬时（"这一句开心"），不持久
+#   - state_update.mood = 跨 turn 累积情绪（"今天整体心情"），持久 DB
+# 两套独立不冲突。state_update 标签紧贴 ``<emotion>`` 之后由 LLM 可选输出。
+_STATE_UPDATE_RE = re.compile(
+    r"<state_update\b([^>]*?)/>"            # 标准自闭合
+    r"|<state_update\b([^>]*?)>[\s\S]*?</state_update>",  # 容错变体
+    re.IGNORECASE,
+)
+# 单个属性：``key="value"``。允许双引号 / 单引号 / 无引号简单值。
+_STATE_UPDATE_ATTR_RE = re.compile(
+    r"""(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))""",
+)
+
+
+def _parse_state_update(text: str) -> Tuple[Optional[dict], str]:
+    """解析并剥离 ``<state_update ... />`` 标签。
+
+    Args:
+        text: 原文本，可能含 1 个 state_update 标签。多个时只用第一个，其余
+              一并剥除（与 motion 同 pattern）。
+
+    Returns:
+        ``(parsed_dict_or_None, stripped_text)``：
+          - 命中 → 解析 mood / intimacy_delta / thought 三个属性，返 dict
+            （字段缺失为 None）。整段所有 state_update 标签从文本剥掉。
+          - 未命中 → ``(None, text)`` 原样返回。
+
+    解析时不做业务校验（mood enum / delta clamp / thought 长度）—— 只做
+    XML 属性切片；下游 ``services.update_character_state`` 负责校验 + 静默
+    丢弃越界值，避免 LLM 拼错时整轮挂掉。
+    """
+    if not text:
+        return None, text
+    m = _STATE_UPDATE_RE.search(text)
+    if m is None:
+        return None, text
+    attrs_str = (m.group(1) or m.group(2) or "").strip()
+    parsed: dict = {"mood": None, "intimacy_delta": None, "thought": None}
+    for attr_match in _STATE_UPDATE_ATTR_RE.finditer(attrs_str):
+        key = (attr_match.group(1) or "").lower()
+        val = (
+            attr_match.group(2)
+            or attr_match.group(3)
+            or attr_match.group(4)
+            or ""
+        ).strip()
+        if key == "mood":
+            parsed["mood"] = val or None
+        elif key == "intimacy_delta":
+            try:
+                parsed["intimacy_delta"] = int(val.replace("+", ""))
+            except ValueError:
+                parsed["intimacy_delta"] = None
+        elif key == "thought":
+            parsed["thought"] = val or None
+        elif key == "activity":
+            parsed["activity"] = val or None
+    stripped = _STATE_UPDATE_RE.sub("", text).strip()
+    return parsed, stripped
+
+
+def _build_state_update_instruction(state: Optional[dict]) -> str:
+    """生成 state_update 指令 + 当前 state 注入到 system prompt。
+
+    Args:
+        state: ``character_state`` dict 或 None（无 character_id 时）。
+
+    Returns:
+        多行 system 段落。无 state 时退化成"标签使用说明"，不展示当前值。
+    """
+    intro = (
+        "你必须在 <emotion> 标签之后输出 <state_update /> 自闭合标签来"
+        "记录这一轮的状态变化：\n\n"
+        "**触发规则（满足任一就要输出）**：\n"
+        "- 用户表达了情绪（开心 / 难过 / 累 / 兴奋 / 好奇 / 困）→ 输出对应"
+        " mood\n"
+        "- 用户分享了正向事情（完成任务 / 好消息 / 感谢你）→ 输出 "
+        "intimacy_delta=\"+1\"\n"
+        "- 用户表达了关心 / 主动找你聊天 / 称呼你时带感情 → 输出 "
+        "intimacy_delta=\"+1\"\n"
+        "- 用户表达了负面（生气 / 烦躁 / 抱怨你）→ 输出 intimacy_delta=\"-1\""
+        " 配合相应 mood\n"
+        "- 你想留下一句心境笔记 → 加 thought=\"...\"（≤60 字）\n\n"
+        '示例：<emotion>happy</emotion><state_update mood="happy" intimacy_delta="+1" thought="觉得用户今天很努力" />嘿，辛苦啦！\n\n'
+        "可用属性：\n"
+        "- mood：happy / sad / curious / calm / excited / tired / neutral 七选一\n"
+        "- intimacy_delta：-2 到 +2（系统 clamp，不能刷高；保守用 +1 / -1 即可）\n"
+        '- thought：≤60 字，可选\n\n'
+        "**只有在以下场景可以省略标签**：用户说的话是中性 chitchat（如\"几点了\"、\"在吗\"），既无情绪也无关怀。否则**必须**给一个 state_update。\n"
+    )
+    if not state:
+        return intro
+    mood = state.get("mood") or "neutral"
+    intimacy = state.get("intimacy", 0)
+    activity = state.get("activity") or "没什么特别的"
+    thought = state.get("thought") or "没什么"
+    return (
+        intro
+        + "\n[你的当前状态]\n"
+        + f"心情：{mood}（happy/sad/curious/calm/excited/tired/neutral 之一）\n"
+        + f"亲密度：{intimacy}/100\n"
+        + f"当前正在做什么：{activity}\n"
+        + f"当前在想：{thought}\n"
+        + "请保持人设一致性。"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Sentence splitter
 # ---------------------------------------------------------------------------
 
@@ -398,6 +512,20 @@ _TOOL_PROMPT_ADDENDUM = (
     "  - 用户问\"现在在放什么 / 这首叫啥 / 谁唱的\" → media.now_playing；\n"
     "  - 用户说\"音量调到 X / 大声点 / 小声点 / 静音\" → media.set_volume（\"大声/小声\"由你"
     "判一个合理 level，不要反复问\"调到多少\"）。\n\n"
+    "【角色状态】（v3-G chunk 3b）：\n"
+    "  - 你可以**偶尔**调 character.set_activity 更新自己「当前在做什么 / 在想什么」，"
+    "让用户感受到「连续性」。如长时间未互动后说\"刚才在烤面包，现在好啦\"——这种"
+    "闲笔比每次都同样开场更自然。\n"
+    "  - **克制使用**：不要每轮都调（会显得机械）。每 5-10 轮一次为宜，或在用户问"
+    "「你刚才在干什么」「在忙什么」时调。\n"
+    "  - 用户问「你状态如何 / 你最近怎么样」时调 character.get_state 拿当前值再回答。\n"
+    "  - 心情 mood 与亲密度 intimacy 的更新通过 <state_update /> 标签（不通过 tool 调用），"
+    "见 system prompt 关于该标签的指示。\n\n"
+    "【剪贴板】（v3-G chunk 3a）：\n"
+    "  - 用户提到「刚复制的」「上面那个」「这段」时，调 clipboard.get_recent 拿最近内容；\n"
+    "  - 用户要「翻译」「帮我看看」「总结一下」复制的内容时调 clipboard.translate / "
+    "clipboard.summarize；\n"
+    "  - **不要**自动响应剪贴板变化（用户只想 Momo 在被问到时回应，否则烦人）。\n\n"
     "工具调用准则（重要）：\n"
     "  - 不要假装权限状态（比如自己说\"未授权\"、\"我没有日历访问权限\"）——直接调用，"
     "让真实结果说话。第一次访问日历时 macOS 会自动弹权限框；用户给完授权重试一次就行。\n"
@@ -793,9 +921,33 @@ async def _build_messages(
     emotion_inst = _build_emotion_instruction()
     thinking_inst = _build_thinking_instruction()
     motion_inst = _build_motion_instruction()
+
+    # v3-G chunk 3b：注入"当前角色状态"段（mood / intimacy / activity / thought）+
+    # state_update 标签使用说明。无 character_id 时退化成"标签说明"段，不
+    # 展示具体数值。
+    state_dict: Optional[dict] = None
+    if character_id is not None:
+        try:
+            from backend.database.services import get_or_create_character_state
+            async with AsyncSessionLocal() as session:
+                state_row = await get_or_create_character_state(session, character_id)
+            state_dict = {
+                "mood": state_row.mood,
+                "intimacy": state_row.intimacy,
+                "thought": state_row.current_thought,
+                "activity": state_row.current_activity,
+            }
+        except Exception:
+            logger.exception(
+                "_build_messages: character_state lookup failed for character_id=%s",
+                character_id,
+            )
+    state_inst = _build_state_update_instruction(state_dict)
+
     # v3-F：thinking 指令紧跟 emotion 指令（两者都是输出格式约束，归一处）
     # v3-E1 step6：motion 指令也归此处，三条共同构成输出格式约束块
-    head_parts = [emotion_inst, thinking_inst, motion_inst]
+    # v3-G chunk 3b：state_update 也归此处
+    head_parts = [emotion_inst, thinking_inst, motion_inst, state_inst]
     if base:
         head_parts.append(base)
     head_parts.append(persona_block)

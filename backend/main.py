@@ -53,10 +53,14 @@ from backend.database.migrations.v3_g_chunk2_proactive import (
 from backend.database.migrations.v3_g_chunk2_6_pending_briefing import (
     run_migration as migrate_v3_g_chunk2_6_pending_briefing,
 )
+from backend.database.migrations.v3_g_chunk3_character_states import (
+    run_migration as migrate_v3_g_chunk3_character_states,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
 from backend.routes.briefing_api import router as briefing_router
+from backend.routes.character_state_api import router as character_state_router
 from backend.routes.capabilities_api import router as capabilities_router
 from backend.routes.mcp_api import (
     mcp_endpoint as _mcp_endpoint,
@@ -91,6 +95,8 @@ import backend.capabilities.calendar          # noqa: F401, E402  v3-G chunk 1.6
 import backend.capabilities.netease_music     # noqa: F401, E402  v3-H chunk 1
 import backend.capabilities.media_control     # noqa: F401, E402  v3-H chunk 1
 import backend.proactive.snooze_capability    # noqa: F401, E402  v3-G chunk 2.6
+import backend.capabilities.clipboard         # noqa: F401, E402  v3-G chunk 3a
+import backend.capabilities.character_state   # noqa: F401, E402  v3-G chunk 3b
 from backend.mcp import server as mcp_server  # noqa: E402  v3-G chunk 1.5
 
 logging.basicConfig(
@@ -143,6 +149,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 1b11. V3-G chunk 2.6: pending_briefings 表（idempotent）─────────
     await migrate_v3_g_chunk2_6_pending_briefing()
+
+    # ── 1b12. V3-G chunk 3b: character_states 表（idempotent）───────────
+    await migrate_v3_g_chunk3_character_states()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
@@ -225,6 +234,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 6. v3-G chunk 0 — Cron scheduler (APScheduler) ──────────────────────
     await cron_scheduler.start()
+
+    # ── 6b. v3-G chunk 3b — intimacy_decay daily cron（每天 0:00）─────────
+    try:
+        from backend.capabilities.character_state import intimacy_decay
+        cron_scheduler.schedule_cron(
+            "intimacy_decay_daily", "0 0 * * *", intimacy_decay,
+        )
+        logger.info("[cron] intimacy_decay_daily registered: 0 0 * * *")
+    except ValueError:
+        logger.info("[cron] intimacy_decay_daily already registered (hot-reload)")
+    except Exception:
+        logger.exception("[cron] intimacy_decay_daily registration failed")
+
+    # ── 6c. v3-G chunk 3a — clipboard polling task ─────────────────────────
+    try:
+        from backend.integrations.clipboard import clipboard_watcher
+        clipboard_watcher.start_polling()
+    except Exception:
+        logger.exception("[clipboard] polling task spawn failed")
 
     # ── 7. v3-G chunk 2 / 2.6 — Proactive engine cron 注册（mode 互斥）─
     # ``config.proactive.mode`` 决定哪个 trigger 上 cron：
@@ -346,6 +374,7 @@ app.include_router(capabilities_router,  prefix="/api", tags=["capabilities"])
 app.include_router(integrations_router,  prefix="/api", tags=["integrations"])
 app.include_router(webhooks_router,      prefix="/api", tags=["webhooks"])
 app.include_router(briefing_router,      prefix="/api", tags=["briefing"])
+app.include_router(character_state_router, prefix="/api", tags=["character_state"])
 app.include_router(mcp_router,           prefix="/api", tags=["mcp"])
 app.include_router(ws_router,                            tags=["websocket"])
 

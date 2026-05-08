@@ -38,3 +38,32 @@ def strip_thinking(text: str) -> str:
     if not text:
         return text
     return _THINKING_BLOCK_RE.sub("", text)
+
+
+# v3-G chunk 3b：``<state_update mood="..." intimacy_delta="..." thought="..." />``
+# 自闭合标签，紧贴 ``<emotion>`` 之后由 LLM 可选输出。chat.py 按段剥离 + ws.py
+# 写库前再剥 + TTS preprocessor（本函数）第三道双保险，避免标签漏进朗读。
+#
+# Regex 容错：
+#  - 标准自闭合 ``<state_update ... />``
+#  - 容错带文本闭合 ``<state_update ...>...</state_update>``
+#  - 大小写不敏感（_re.IGNORECASE）
+_STATE_UPDATE_RE = re.compile(
+    r"<state_update\b[^>]*?/>"            # 标准自闭合
+    r"|<state_update\b[^>]*?>[\s\S]*?</state_update>",  # 容错变体
+    re.IGNORECASE,
+)
+
+
+def strip_state_update(text: str) -> str:
+    """删除所有 ``<state_update ... />`` 标签（自闭合 + 容错变体）。
+
+    Args:
+        text: 原始文本。
+
+    Returns:
+        剥干净的文本（含尾随空白合并）。空 / None 原样返回。
+    """
+    if not text:
+        return text
+    return _STATE_UPDATE_RE.sub("", text)

@@ -4,7 +4,14 @@ from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database.models import ChatHistory, Memory, PendingBriefing, Todo, User
+from backend.database.models import (
+    CharacterState,
+    ChatHistory,
+    Memory,
+    PendingBriefing,
+    Todo,
+    User,
+)
 
 # ---------------------------------------------------------------------------
 # Re-exported for convenience: callers can do
@@ -584,3 +591,152 @@ async def consume_pending_briefing(
     row.consumed_at = now
     await session.commit()
     return True
+
+
+# ---------------------------------------------------------------------------
+# v3-G chunk 3b — character_states CRUD
+# ---------------------------------------------------------------------------
+
+#: chunk 3b mood enum；application 层校验，不下放 DB（未来加 mood 不需 schema 迁移）
+VALID_MOODS = frozenset({"happy", "sad", "curious", "calm", "excited", "tired", "neutral"})
+
+#: 亲密度上下界，clamping 在所有写入路径
+INTIMACY_MIN = 0
+INTIMACY_MAX = 100
+
+#: 单轮 LLM 通过 ``<state_update intimacy_delta>`` 一次最多调整的幅度
+INTIMACY_DELTA_PER_TURN_MAX = 2
+
+
+def _clamp_intimacy(v: int) -> int:
+    return max(INTIMACY_MIN, min(INTIMACY_MAX, int(v)))
+
+
+def _normalize_mood(m: Optional[str]) -> Optional[str]:
+    if not isinstance(m, str):
+        return None
+    cleaned = m.strip().lower()
+    return cleaned if cleaned in VALID_MOODS else None
+
+
+async def get_or_create_character_state(
+    session: AsyncSession, character_id: int,
+) -> CharacterState:
+    """每个 character 一行 state；缺失时按默认值创建。"""
+    row = (await session.execute(
+        select(CharacterState).where(CharacterState.character_id == character_id)
+    )).scalar_one_or_none()
+    if row is not None:
+        return row
+    now = datetime.utcnow()
+    row = CharacterState(
+        character_id=character_id,
+        mood="neutral",
+        intimacy=0,
+        current_thought=None,
+        current_activity=None,
+        last_interaction_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def update_character_state(
+    session: AsyncSession,
+    character_id: int,
+    *,
+    mood: Optional[str] = None,
+    intimacy_delta: Optional[int] = None,
+    intimacy_absolute: Optional[int] = None,
+    thought: Optional[str] = None,
+    activity: Optional[str] = None,
+    bump_last_interaction: bool = False,
+) -> CharacterState:
+    """统一更新接口。每个参数可选；只更新传入的字段。
+
+    * ``mood`` 不在 enum 内 → 静默忽略（不抛错，避免 LLM 拼错时整轮挂掉）
+    * ``intimacy_delta`` clamp 到 ``[-INTIMACY_DELTA_PER_TURN_MAX, +X]`` 后
+      累加到当前值，再 clamp 到 [0, 100]
+    * ``intimacy_absolute`` 直接赋（用于 reset / decay 路径），优先级高于 delta
+    * ``thought`` / ``activity`` 长度太长截断到 60 字
+    * ``bump_last_interaction``: True 时把 ``last_interaction_at`` 设为 utcnow
+      （任何 user message 入 ChatAgent 时调）
+    """
+    row = await get_or_create_character_state(session, character_id)
+    changed = False
+
+    norm_mood = _normalize_mood(mood)
+    if norm_mood is not None and norm_mood != row.mood:
+        row.mood = norm_mood
+        changed = True
+
+    if intimacy_absolute is not None:
+        new_val = _clamp_intimacy(intimacy_absolute)
+        if new_val != row.intimacy:
+            row.intimacy = new_val
+            changed = True
+    elif intimacy_delta is not None:
+        d = max(-INTIMACY_DELTA_PER_TURN_MAX, min(INTIMACY_DELTA_PER_TURN_MAX, int(intimacy_delta)))
+        if d != 0:
+            row.intimacy = _clamp_intimacy(row.intimacy + d)
+            changed = True
+
+    if thought is not None:
+        new_thought = thought.strip()[:60] or None
+        if new_thought != row.current_thought:
+            row.current_thought = new_thought
+            changed = True
+
+    if activity is not None:
+        new_activity = activity.strip()[:60] or None
+        if new_activity != row.current_activity:
+            row.current_activity = new_activity
+            changed = True
+
+    now = datetime.utcnow()
+    if bump_last_interaction:
+        row.last_interaction_at = now
+        changed = True
+    if changed:
+        row.updated_at = now
+        await session.commit()
+        await session.refresh(row)
+    return row
+
+
+async def reset_character_state(
+    session: AsyncSession, character_id: int,
+) -> CharacterState:
+    """把指定 character 的 state 重置为出厂默认。设置面板"重置亲密度"按钮调用。"""
+    row = await get_or_create_character_state(session, character_id)
+    now = datetime.utcnow()
+    row.mood = "neutral"
+    row.intimacy = 0
+    row.current_thought = None
+    row.current_activity = None
+    row.last_interaction_at = now
+    row.updated_at = now
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def list_all_character_ids(session: AsyncSession) -> List[int]:
+    """枚举所有 ``characters.id`` —— 给 intimacy_decay cron 遍历用。"""
+    from backend.database.models import Character
+    result = await session.execute(select(Character.id))
+    return [int(r) for r in result.scalars().all()]
+
+
+async def list_state_character_ids(session: AsyncSession) -> List[int]:
+    """枚举所有 ``character_states.character_id`` —— intimacy_decay 实际遍历对象。
+
+    与 ``list_all_character_ids`` 区别：本函数返"已有 state 行"的角色，避免
+    全表扫 Character 后大量 0-intimacy 0-decay 空转；同时支持运行时只为部分
+    character 创建 state 的场景。
+    """
+    result = await session.execute(select(CharacterState.character_id))
+    return [int(r) for r in result.scalars().all()]
