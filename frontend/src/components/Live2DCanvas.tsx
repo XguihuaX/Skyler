@@ -33,6 +33,19 @@ interface Live2DCanvasProps {
  * - cancelled flag 防御 React 18 dev 模式 mount→cleanup→mount 双跑
  * - cleanup 调 runtime.unloadModel，runtime 内部销毁 stage / 模型 / observer
  *
+ * v3-G chunk 4 audit (Step Z 杂项 D-2)：dev 控制台偶见
+ * "fetch hiyori_m01.motion3.json Aborted" warning，根因是 pixi-live2d-display
+ * 库内部异步 fetch motion 资产时，第一轮 mount 还在加载就被 React StrictMode
+ * 双 mount 触发 unloadModel 中断。**这是库行为且无害**：
+ * 1. 第一轮 fetch 被 abort → console warning
+ * 2. 第二轮 mount 重新 fetch → 正常完成
+ * 3. idle motion 在第二轮加载完后正常播放
+ * 我们的 cancelled flag + unloadModel 时序已经正确（先标 cancelled，再 unload，
+ * 防止 setHandleRef 写到已 unload 的 handle 上）。warning 是库自己的 console
+ * 噪音，不该追。如需消除，未来可在 PixiCubism4Runtime.unloadModel 内部对正在
+ * pending 的 fetch promise 做 abort silencing —— 但代价是封装库内部行为，得不
+ * 偿失。
+ *
  * v3-E2 per-character 接入：
  * - 当前角色（store.currentCharacterId）经 resolveCharacterMaps 取出 motion /
  *   emotion / hitArea map。NULL / 空 / parse 失败 → 全局默认（Hiyori 不变）。
