@@ -769,6 +769,13 @@ async def _execute_tool(
     # ── 其他工具：经 ToolRegistry 调度 ────────────────────────────────────
     # 防止 LLM 误传会话级参数覆盖注入值
     args.pop("user_id", None)
+    # v3-G chunk 4: 显式注入 character_id 到 ToolRegistry tools。
+    # 旧实现只给 memory tools 透传 character_id，``character.set_activity``
+    # / ``character.get_state`` 等 capability 走 ToolRegistry 路径时收不到 →
+    # 报"character_id missing in context"。这里补上，与 chunk 4 fallback
+    # resilience 路径保持同一注入语义。
+    if character_id is not None and "character_id" not in args:
+        args["character_id"] = character_id
     try:
         result = await ToolRegistry.call(name, user_id=user_id, **args)
         return {"status": "ok", "result": result}
@@ -790,18 +797,18 @@ async def _execute_tool(
 async def _maybe_build_wake_call_addendum(
     user_id: str, user_text: str,
 ) -> Optional[str]:
-    """v3-G chunk 2.6 stage 2：检测 wake_call pending → 返 addendum，否则 None。
+    """v3-G chunk 2.6 起 stage 2 addendum 探测；chunk 4 起多 trigger 通用。
 
     判定条件全部为真才注入：
-      1. ``proactive.mode == 'wake_call'``（避免与 morning_briefing 模式
-         交叉污染——后者不写 pending_briefings，本检查仅做防御）
+      1. ``proactive.enabled == True``（chunk 4：取消 mode='wake_call' 强
+         耦合，让 lunch_call / bedtime_chat / long_idle 共享同一探测路径）
       2. 该 user 最近一行 assistant chat_history 的 ``proactive_trigger``
-         等于 ``'wake_call'``。这样普通对话 / 切到别的 conversation 不会
-         误命中 pending（即使 pending 还没过 TTL）。
-      3. ``pending_briefings`` 有未消费、未超 TTL 的行。
+         字段非空（即任一 trigger 留下的痕迹），且对应 trigger 在
+         _stage2_registry 注册了 builder。
+      3. ``pending_briefings`` 有未消费、未超 TTL 的行（trigger_name 与
+         上一条 assistant 的 ``proactive_trigger`` 一致）。
 
-    命中即同步把 pending 标 ``consumed_at = now`` （consume-on-detect 语义，
-    详见 ``backend/proactive/triggers/wake_call_briefing.py`` 模块头）。
+    命中即同步把 pending 标 ``consumed_at = now`` （consume-on-detect 语义）。
 
     此函数对 _build_messages 是 best-effort —— 任何异常吞成 None，让普通
     chat path 照常走。
@@ -809,7 +816,7 @@ async def _maybe_build_wake_call_addendum(
     try:
         from backend.config import config_yaml as _cfg_yaml
         proactive_cfg = _cfg_yaml.get("proactive") or {}
-        if str(proactive_cfg.get("mode") or "") != "wake_call":
+        if not proactive_cfg.get("enabled", False):
             return None
 
         from backend.database.services import (
@@ -817,20 +824,27 @@ async def _maybe_build_wake_call_addendum(
             get_active_pending_briefing,
             get_last_assistant_turn,
         )
-        from backend.proactive.triggers.wake_call_briefing import (
-            WAKE_CALL_STAGE2_ADDENDUM,
+        # 触发模块的 import 副作用注册到 _stage2_registry
+        import backend.proactive.triggers.wake_call_briefing  # noqa: F401
+        try:
+            import backend.proactive.triggers.lunch_call         # noqa: F401
+            import backend.proactive.triggers.dinner_call        # noqa: F401
+            import backend.proactive.triggers.bedtime_chat       # noqa: F401
+            import backend.proactive.triggers.long_idle          # noqa: F401
+        except ImportError:
+            pass  # chunk 4 之前 / 部分场景没有这些 trigger
+        from backend.proactive.triggers._stage2_registry import (
+            build_stage2_addendum,
         )
 
         async with AsyncSessionLocal() as session:
             last_assistant = await get_last_assistant_turn(session, user_id)
-            if (
-                last_assistant is None
-                or last_assistant.proactive_trigger != "wake_call"
-            ):
+            trigger_name = last_assistant.proactive_trigger if last_assistant else None
+            if not trigger_name:
                 return None
 
             pending = await get_active_pending_briefing(
-                session, user_id, trigger_name="wake_call",
+                session, user_id, trigger_name=trigger_name,
             )
             if pending is None:
                 return None
@@ -848,19 +862,23 @@ async def _maybe_build_wake_call_addendum(
             data = {}
         city = str(data.get("city") or "东京")
 
-        addendum = WAKE_CALL_STAGE2_ADDENDUM.format(
-            user_text=user_text,
-            briefing_data_json=briefing_data_json,
-            city=city,
+        addendum = build_stage2_addendum(
+            trigger_name, user_text, briefing_data_json, city,
         )
+        if addendum is None:
+            logger.info(
+                "[stage2] no builder for trigger=%s user=%s pending_id=%d (skipped)",
+                trigger_name, user_id, pending_id,
+            )
+            return None
         logger.info(
-            "[wake_call.stage2] injected addendum for user=%s pending_id=%d "
+            "[stage2] injected addendum for trigger=%s user=%s pending_id=%d "
             "user_text=%r",
-            user_id, pending_id, user_text[:50],
+            trigger_name, user_id, pending_id, user_text[:50],
         )
         return addendum
     except Exception:
-        logger.exception("[wake_call.stage2] addendum probe failed; skipping")
+        logger.exception("[stage2] addendum probe failed; skipping")
         return None
 
 
@@ -980,18 +998,34 @@ async def _build_messages(
     if extra_system:
         system_parts.append(f"【临时指令】\n{extra_system}")
 
-    # ---- 6. v3-G chunk 2.6 wake_call stage 2：自动检测 pending_briefings ----
+    # ---- 6. v3-G chunk 2.6/4 proactive stage 2：自动检测 pending_briefings ----
     # 注意：proactive engine 自己（stage 1）调 ChatAgent.stream 时也会进这一
     # 函数，但 stage 1 的 user text = "[proactive trigger]" 无意义，stage 2
-    # 不应在 stage 1 里注入（避免无限递归）。判定 sentinel：若 ``extra_system``
-    # 含 ``WAKE_CALL_STAGE1_SENTINEL``，跳过 addendum probe。
-    from backend.proactive.triggers.wake_call_briefing import (
-        WAKE_CALL_STAGE1_SENTINEL,
-    )
-    if not (extra_system and WAKE_CALL_STAGE1_SENTINEL in extra_system):
-        wake_call_addendum = await _maybe_build_wake_call_addendum(user_id, text)
-        if wake_call_addendum:
-            system_parts.append(f"【wake_call 简报】\n{wake_call_addendum}")
+    # 不应在 stage 1 里注入（避免无限递归）。chunk 4：扩展到 wake_call /
+    # lunch_call / dinner_call / bedtime_chat / long_idle 多 sentinel；任一
+    # sentinel 命中 extra_system 都跳过 stage 2 探测。
+    try:
+        # Trigger imports 触发 register_stage2 副作用。失败（依赖问题）退化
+        # 为只查 wake_call 的旧路径。
+        import backend.proactive.triggers.wake_call_briefing  # noqa: F401
+        try:
+            import backend.proactive.triggers.lunch_call    # noqa: F401
+            import backend.proactive.triggers.dinner_call   # noqa: F401
+            import backend.proactive.triggers.bedtime_chat  # noqa: F401
+            import backend.proactive.triggers.long_idle     # noqa: F401
+        except ImportError:
+            pass
+        from backend.proactive.triggers._stage2_registry import (
+            all_stage1_sentinels,
+        )
+        sentinels = all_stage1_sentinels()
+    except Exception:
+        sentinels = []
+    in_stage1 = bool(extra_system and any(s in extra_system for s in sentinels))
+    if not in_stage1:
+        stage2_addendum = await _maybe_build_wake_call_addendum(user_id, text)
+        if stage2_addendum:
+            system_parts.append(f"【proactive 简报】\n{stage2_addendum}")
 
     system_prompt = "\n\n".join(system_parts)
 

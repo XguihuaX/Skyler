@@ -926,10 +926,33 @@ async def _handle_message(
                 if not t.done():
                     t.cancel()
 
+        # ── 3a. v3-G chunk 4: tool_call_resilience —— Qwen 偶发把 tool 调用
+        # 以非 OpenAI 协议形式（<tool_call>JSON</tool_call> / Anthropic
+        # invoke / markdown json）写到 delta.content 里 → ChatAgent 主循环
+        # 看不见，capability 不真触发。本 chunk 引入兜底层：stream 结束后扫
+        # full_reply 找这些 fallback 形式 + 真执行 + 剥 XML 残骸。chunk 2.6
+        # snooze + chunk 3 clipboard.translate 实测 quirk 由此真解。
+        full_reply = "".join(reply_parts)
+        try:
+            from backend.agents.tool_call_resilience import (
+                detect_and_execute_fallback_tool_calls,
+            )
+            cleaned_reply, fallback_executed = await detect_and_execute_fallback_tool_calls(
+                full_reply, user_id=user_id, character_id=char_id,
+            )
+            if fallback_executed:
+                logger.info(
+                    "[chat] tool_call_resilience caught %d fallback call(s): %s",
+                    len(fallback_executed),
+                    [f"{e['pattern']}/{e['name']}" for e in fallback_executed],
+                )
+                full_reply = cleaned_reply
+        except Exception:
+            logger.exception("[tool_resilience] layer crashed; using raw reply")
+
         await ws.send_json({"type": "done"})
 
-        # ── 3. Background memory update ─────────────────────────────────────
-        full_reply = "".join(reply_parts)
+        # ── 3b. Background memory update ────────────────────────────────────
         asyncio.create_task(_update_memory(
             user_id, text, full_reply,
             conversation_id=conv_id,
