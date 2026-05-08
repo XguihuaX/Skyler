@@ -82,6 +82,25 @@ All components use `var(--color-*)` from `styles/themes.css` (no hardcoded Tailw
 - **Todo management** — agent-created and user-created tasks tracked in SQLite
 - **Proactive push** — backend initiates messages anytime via persistent WebSocket (`notify` / `alarm` / future `screen_comment`)
 
+### 📋 Clipboard Assistant (v3-G chunk 3a, May 2026)
+- **后端轮询**：macOS 走 `NSPasteboard.changeCount`（pyobjc transitive，无新装），跨平台 fallback 走 `pyperclip`。1Hz 轮询；每次捕获自动启发式识别 content_type（`url` / `code` / `plain_text` / `markdown` / `json`）。
+- **隐私**：仅本地内存 ringbuffer（最近 50 条，TTL 24h），重启清空，**不持久化**到 SQLite，不外传。
+- **3 个 capability**（CHAT_AGENT consumer）：`clipboard.get_recent` / `clipboard.summarize` / `clipboard.translate`。LLM 在用户提到「刚复制的」「上面那个」「翻译这段」时按 `_TOOL_PROMPT_ADDENDUM` 引导按需调用——**不自动响应**剪贴板变化，避免烦扰。
+- **设置面板**：[剪贴板] section 显示最近 5 条预览（hover 看完整内容）+ 隐私一行说明 + [全部清除]。
+- **路由**：`GET /api/clipboard/recent` / `POST /api/clipboard/clear` / `POST /api/clipboard/captured`（备用 frontend-driven 路径）。
+
+### 💗 Character State (v3-G chunk 3b, May 2026)
+- **跨 turn 累积状态**：`character_states` 表 (mood / intimacy / current_thought / current_activity)；与 `<emotion>` 标签（per-turn 瞬时）独立不冲突。
+- **`<state_update>` 标签协议**：LLM 每轮可在 `<emotion>` 后输出自闭合标签 `<state_update mood="happy" intimacy_delta="+1" thought="..." />`。`backend/agents/chat.py _parse_state_update` 解析，单轮 `intimacy_delta` clamp 到 ±2 防刷高，无效 mood 静默忽略。3 道 strip 防泄露（流式按段 + 写库前 + TTS preprocessor）。
+- **3 个 capability**：
+  - `character.get_state`（CHAT_AGENT，用户问「你最近怎么样」时调）
+  - `character.set_activity`（CHAT_AGENT，让 Momo 自己更新「在做什么」「在想什么」营造连续性，prompt 强引导每 5-10 轮一次）
+  - `character.intimacy_decay`（SCHEDULER，每天 0:00 自动 -1，min 0，让长期不互动的关系慢慢冷淡）
+- **WS 协议扩展**：新增 `state_update` push 类型，每次 state 变化（标签解析后或 set_activity 调用后或 reset 后）push 一次；前端 `CharacterStatePanel` 自动刷新。
+- **前端浮动状态条**：mood emoji + intimacy 进度条 + hover 看 thought / activity。Widget 模式右下角 / Panel 模式 CharacterView 顶部。
+- **设置面板**：[角色状态] section "显示状态条" toggle + "重置亲密度"按钮（带确认弹窗）。
+- **路由**：`GET /api/characters/{id}/state` / `POST /api/characters/{id}/reset_state`。
+
 ### 🌅 Proactive Companionship (v3-G chunk 2 + 2.6, May 2026)
 - **通用 proactive engine** — `trigger → aggregate → ChatAgent → WS push` 流水线。`ProactiveTrigger` 抽象类让新触发器只需新建一个文件（cron / interval / event-source 三选一调度方式）。详见 DESIGN §十五之B
 - **两种交互哲学**（chunk 2.6 起，`config.proactive.mode` 互斥决定）：
