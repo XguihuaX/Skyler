@@ -69,10 +69,15 @@ async def test_get_or_create_creates_default():
     print("\n[character_state — get_or_create creates default row]")
     await _setup_db()
     from backend.database import AsyncSessionLocal
-    from backend.database.services import get_or_create_character_state
+    from backend.database.services import (
+        get_or_create_character_state, reset_character_state,
+    )
 
+    # 用未被其他测试 / e2e 占用的 character_id（高位避开 1/2/300+），同时
+    # 显式 reset 以隔离跨 run 污染（chunk 3 e2e 把 char_id=1 改成 happy/2）
     async with AsyncSessionLocal() as session:
-        state = await get_or_create_character_state(session, character_id=1)
+        await reset_character_state(session, character_id=700)
+        state = await get_or_create_character_state(session, character_id=700)
 
     check("mood neutral default", state.mood == "neutral")
     check("intimacy 0 default", state.intimacy == 0)
@@ -82,7 +87,7 @@ async def test_get_or_create_creates_default():
 
     # 第二次调用：返同一行
     async with AsyncSessionLocal() as session:
-        state2 = await get_or_create_character_state(session, character_id=1)
+        state2 = await get_or_create_character_state(session, character_id=700)
     check("idempotent (same row id)", state2.id == state.id)
 
 

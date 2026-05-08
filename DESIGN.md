@@ -1760,6 +1760,158 @@ prompt 引导明确写"不要主动调，只在用户明确提到剪贴板时调
 
 ---
 
+## 十五之E、Tool Call Resilience Layer（v3-G chunk 4 Part A 起）
+
+### 背景
+
+Qwen3.6（DashScope OpenAI-compatible 通道）在 tool calling 时偶发把 tool
+调用以**非 OpenAI function_call 协议**的形式输出到 ``delta.content`` 文本
+流。chunk 2.6 footgun 4（snooze 不真触发）+ chunk 3 footgun 7（``clipboard.
+translate`` 不真翻）都是这条路径。
+
+### 三种 fallback 形式
+
+| 形态 | 模式 | 来源 |
+|---|---|---|
+| Qwen XML | ``<tool_call>{"name":"X","arguments":{...}}</tool_call>`` | Qwen 内部协议 |
+| Anthropic invoke | ``<function_calls><invoke name="X"><parameter name="K">V</parameter></invoke></function_calls>`` | LLM 训练数据混入 Anthropic 风格 |
+| Markdown JSON | ``\`\`\`json\n{"name": "X", "arguments": ...}\n\`\`\`` | 通用兜底（最宽松，最后扫） |
+
+### 处理路径
+
+```
+   ChatAgent.stream() 主循环 (OpenAI function_call) → reply_parts
+      │
+      ▼
+   ws.py turn pipeline 终点（done 之前）：
+   detect_and_execute_fallback_tool_calls(full_reply, user_id, character_id)
+      │
+      ├─ 三条 regex 顺序扫（qwen_xml → anthropic → markdown_json）
+      │
+      ├─ 容错 JSON parse（双重编码 / 引号混合 / 类型 coerce）
+      │
+      ├─ ToolRegistry._tools 检查 name 存在才调（防 LLM 编造 name）
+      │
+      ├─ 注入 user_id（会话级，LLM 不能 override）
+      ├─ 注入 character_id（缺失时；显式指定优先）
+      │
+      ▼
+   await ToolRegistry.call(name, **args)  （capability 副作用真生效）
+      │
+      ▼
+   剥离全部 fallback XML 残骸 → cleaned_text
+      │
+      ▼
+   chat_history 写 cleaned_text（无 XML / 不污染下游 profile_summary）
+```
+
+### 不做的事 / Backlog
+
+* **不喂 tool result 回 LLM 让它续写**：MVP 简化。capability 副作用已生
+  效，LLM 自欺"已完成"在用户视角无伤——用户看到"好的 5 分钟后再叫你"
+  + 5 分钟后真触发 wake_call。
+* **不阻断主流程**：任何子步骤异常吞 + log，永远返回原文 + 已执行的部分
+  ，不抛错。
+* **未来可选切模型测试**：Qwen Max / Claude 等模型形态变异率不同，按需测
+  试 + 记录 per-model 兜底率到 telemetry。
+
+### `_execute_tool` 的 character_id 注入修
+
+chunk 4 同步修复一个 chunk 3 latent bug：``_execute_tool`` 走 ToolRegistry
+路径时之前不传 ``character_id``，导致 ``character.set_activity`` /
+``character.get_state`` 等需要 character_id 的 capability 报错。chunk 4 在
+ToolRegistry.call 调用前显式注入 ``args["character_id"] = character_id``
+（与 fallback resilience 路径保持同一注入语义，对称契约）。
+
+---
+
+## 十五之F、v3-F' Trigger Pack 设计（v3-G chunk 4 Part C 起）
+
+### 模式 B 邀请对话哲学的多 trigger 复用证明
+
+chunk 2.6 落地 ``WakeCallBriefingTrigger`` 时定型了"模式 B 邀请对话"流水
+线。chunk 4 加 4 个新 trigger（lunch_call / dinner_call / bedtime_chat /
+long_idle），**每个都是 WakeCallBriefingTrigger 的克隆 + 改 prompt**，
+没有新 engine 工作——这是 chunk 2.6 抽象设计的复利兑现。
+
+### 共享基础
+
+* ``backend/proactive/triggers/_invite_base.py`` ——
+  ``InviteTriggerBase``（``ProactiveTrigger`` 子类）+ ``make_stage1_prompt
+  (sentinel, scene_label, examples)`` + ``make_stage2_addendum_template
+  (scene_label, scene_focus)``。
+* ``backend/proactive/triggers/_stage2_registry.py`` —— trigger.name →
+  (sentinel, addendum_builder) 全注册表。chat.py 按 ``last_assistant.
+  proactive_trigger`` 分发到对应 builder。
+
+### Trigger Pack 完整表
+
+| trigger | 模式 | 调度方式 | stage 1 例子 | stage 2 关注点 |
+|---|---|---|---|---|
+| ``wake_call`` | B 邀请 | cron 默认 ``0 8 * * *`` | "宝，醒一醒～" | 自适应早晨简报内容 |
+| ``lunch_call`` | B 邀请 | cron 工作日 ``0 12 * * 1-5`` + 周末 ``30 11 * * 0,6`` | "嘿，饿了吗？" | 胃口 / 餐食偏好 / 简单做饭 |
+| ``dinner_call`` | B 邀请 | cron 默认 ``30 18 * * *`` | "忙完了？要吃啥？" | 疲惫程度 / 餐食 / 外卖 |
+| ``bedtime_chat`` | B 邀请 | cron 默认 ``30 22 * * *``（default OFF）| "今天累不累？" | 今日 review / 明日预告 / 安抚 |
+| ``long_idle`` | B 邀请 | interval ``5 min`` 检查 + 三条件（default OFF）| "嘿，还在吗？" | 用户当下状态 / 简短陪伴 |
+| ``morning_briefing`` | A 单方面 | cron 默认 ``0 9 * * *`` | （直接整段播报）| 完整 200-300 字简报 |
+
+### long_idle 三条件 gate
+
+interval 5 分钟跑一次 ``check_and_maybe_fire``，**全为真**才发短问候：
+
+1. **用户消息 idle 超阈值**：最近一行 ``role='user'`` chat_history >
+   ``idle_threshold_minutes``（默认 30 分钟）
+2. **没有最近的 proactive turn**：任何 ``kind='proactive'`` 行 created_at >
+   ``cooldown_minutes``（默认 90 分钟）—— 避免连续主动打扰
+3. **前端 heartbeat 显示用户在前台**：``last_heartbeat`` 距 now ≤
+   ``heartbeat_grace_seconds``（默认 30s）
+
+### Heartbeat 协议
+
+* 前端 ``useWebSocket`` 在 ``visibility=visible + focus`` 时每 15s POST
+  ``/api/heartbeat``，``visibilitychange`` / ``blur`` / ``focus`` 事件
+  绑定 start/stop loop。
+* 后端 ``backend/proactive/triggers/long_idle.py`` 维护内存
+  ``_LAST_HEARTBEAT: dict[user_id, datetime]``，进程内共享。重启清空。
+
+### chunk 0 抽象的复利证明
+
+| chunk | 新增 capability 数 | 改 chat.py 的次数 |
+|---|---|---|
+| chunk 0 (基础) | 1 (time.now) | 0 |
+| chunk 1 (calendar) | 2 | 0 |
+| chunk 1.5 (MCP) | runtime 注册 N 个 | 0 |
+| chunk 1.6 (apple) | 4 + 2 | 0 |
+| chunk 1.7 (model picker) | 0 | 0 |
+| chunk 2 (proactive engine) | 0（engine 走 ChatAgent.stream）| 0（生 ``extra_system`` / ``enable_search``）|
+| chunk 2.6 (wake_call) | 1 (snooze)| 1（``_maybe_build_wake_call_addendum`` + sentinel detection）|
+| chunk 3a (clipboard) | 3 | 0 |
+| chunk 3b (character_state) | 3 | 1（``<state_update>`` parser + system prompt 注入）|
+| chunk 4 (resilience + 4 triggers) | 0 | 1（resilience hook + sentinel registry generalize） |
+| **累计** | **30+ capability + 5 trigger** | **3 次（全部最小化、向后兼容）** |
+
+chunk 0 的 ``CapabilityRegistry`` + ``ToolRegistry`` 双层抽象 + chunk 2 的
+``ProactiveTrigger`` 抽象，让 v3 后期所有"新功能"都退化成"加文件 + 写
+prompt"。最后一次 chat.py 改动是 chunk 4 的 stage 2 sentinel registry
+generalize（从 hardcode 一个 wake_call sentinel → 任意数量）—— 这是
+*抽象巩固*，不是新增功能。
+
+### Backlog / 后续
+
+* **frontend SettingsPanel 4 trigger toggle**：当前 4 个新 trigger 通过
+  ``config.yaml`` 编辑 enabled。前端 ``[主动陪伴]`` section 升级成 sub-
+  section [其他主动场景] + 4 个 toggle + 各自 cron 输入是 chunk 4 deferred
+  scope（per-trigger config 路由 + frontend 切换 UI）。short term 用户改
+  yaml 重启即可生效。
+* **per-trigger aggregate function 真实接通**：当前 4 trigger 的 stage 1
+  aggregate 复用 ``aggregate_briefing_data``（time + calendar + instruction
+  memories + city）。spec 提到 lunch / dinner 应聚合"最近 3 天饮食 memory"
+  / bedtime "今日 chat_history kind='normal' 摘要 + 明日 calendar"。这些
+  per-trigger aggregator 在 v3-F' Phase 2 / chunk 5 单独做。stage 2 prompt
+  已经引导 LLM 现查（``enable_search``）+ 已聚合数据均可用。
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建

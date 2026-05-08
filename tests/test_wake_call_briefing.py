@@ -204,6 +204,16 @@ async def test_stage2_detection_and_injection():
     from sqlalchemy import select
 
     # Setup: 上一行 assistant chat_history kind=proactive trigger=wake_call
+    # （清理 prior runs 留下的 unconsumed pendings 避免跨 run 污染）
+    from sqlalchemy import text as _sa_text
+    from backend.database import engine
+    async with engine.begin() as conn:
+        await conn.execute(
+            _sa_text(
+                "UPDATE pending_briefings SET consumed_at = CURRENT_TIMESTAMP "
+                "WHERE user_id = 'wc_stage2_user' AND consumed_at IS NULL"
+            ),
+        )
     async with AsyncSessionLocal() as session:
         await add_chat_history(
             session, "wc_stage2_user", "assistant", "起床啦～",
@@ -217,8 +227,10 @@ async def test_stage2_detection_and_injection():
         )
         pending_id = pending.id
 
-    # Run probe under mode='wake_call'
-    with patch.dict(config_yaml, {"proactive": {"mode": "wake_call"}}, clear=False):
+    # Run probe under proactive.enabled=True (chunk 4 generalized gate)
+    with patch.dict(config_yaml,
+                    {"proactive": {"enabled": True, "mode": "wake_call"}},
+                    clear=False):
         addendum = await _maybe_build_wake_call_addendum(
             "wc_stage2_user", "嗯嗯",
         )
@@ -242,7 +254,9 @@ async def test_stage2_detection_and_injection():
           fetched is not None and fetched.consumed_at is not None)
 
     # 第二次调用：pending 已 consumed → 应返 None
-    with patch.dict(config_yaml, {"proactive": {"mode": "wake_call"}}, clear=False):
+    with patch.dict(config_yaml,
+                    {"proactive": {"enabled": True, "mode": "wake_call"}},
+                    clear=False):
         addendum2 = await _maybe_build_wake_call_addendum(
             "wc_stage2_user", "嗯嗯",
         )
@@ -270,7 +284,9 @@ async def test_stage2_skips_when_no_wake_call_in_history():
             briefing_data_json="{}", character_id=1, conversation_id=1,
         )
 
-    with patch.dict(config_yaml, {"proactive": {"mode": "wake_call"}}, clear=False):
+    with patch.dict(config_yaml,
+                    {"proactive": {"enabled": True, "mode": "wake_call"}},
+                    clear=False):
         out = await _maybe_build_wake_call_addendum("wc_skip_user", "嗯")
     check("returns None (last assistant != wake_call)", out is None)
 
@@ -334,7 +350,9 @@ async def test_stage2_skips_when_pending_expired():
             {"ts": one_hour_ago, "i": pid},
         )
 
-    with patch.dict(config_yaml, {"proactive": {"mode": "wake_call"}}, clear=False):
+    with patch.dict(config_yaml,
+                    {"proactive": {"enabled": True, "mode": "wake_call"}},
+                    clear=False):
         out = await _maybe_build_wake_call_addendum("wc_ttl_user", "嗯")
     check("expired pending ⇒ returns None", out is None)
 
@@ -373,7 +391,9 @@ async def test_build_messages_skips_addendum_during_stage1():
     )
     stage1_prompt = WAKE_CALL_STAGE1_SENTINEL + "\n8-15 字叫醒用户。"
 
-    with patch.dict(config_yaml, {"proactive": {"mode": "wake_call"}}, clear=False):
+    with patch.dict(config_yaml,
+                    {"proactive": {"enabled": True, "mode": "wake_call"}},
+                    clear=False):
         msgs = await _build_messages(
             user_id="wc_recursion_user",
             text="[proactive trigger]",
