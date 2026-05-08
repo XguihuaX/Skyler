@@ -25,6 +25,12 @@ interface WsMessage {
   // 打 kind='proactive' 标。
   proactive?: boolean;
   proactive_trigger?: string;
+  // v3-G chunk 3b: state_update 消息字段
+  character_id?: number;
+  mood?: string;
+  intimacy?: number;
+  thought?: string | null;
+  activity?: string | null;
 }
 
 // v3-G chunk 2 / 2.6: trigger.name -> toast 标题。后续加 trigger 时只在这里 append。
@@ -296,6 +302,26 @@ export function useWebSocket(): UseWebSocketReturn {
         // useEffect（依赖项引用相等），实测上够用 —— LLM 多段动作通常会换名字。
         const value = msg.value ?? '';
         if (value) s.setCurrentMotion(value);
+        break;
+      }
+
+      case 'state_update': {
+        // v3-G chunk 3b: 后端 <state_update> 标签解析后 push，或 set_activity
+        // capability / reset_state 路由 push。把 store currentCharacterState
+        // 替换/合并；CharacterStatePanel 自动重渲染。
+        const charId = msg.character_id ?? s.currentCharacterId ?? null;
+        if (charId == null) break;
+        const prev = s.currentCharacterState;
+        s.setCurrentCharacterState({
+          character_id: charId,
+          mood: (msg.mood ?? prev?.mood ?? 'neutral') as
+            | 'happy' | 'sad' | 'curious' | 'calm' | 'excited' | 'tired' | 'neutral',
+          intimacy: msg.intimacy ?? prev?.intimacy ?? 0,
+          thought: msg.thought !== undefined ? msg.thought : (prev?.thought ?? null),
+          activity: msg.activity !== undefined ? msg.activity : (prev?.activity ?? null),
+          last_interaction_at: prev?.last_interaction_at ?? null,
+          updated_at: new Date().toISOString(),
+        });
         break;
       }
 

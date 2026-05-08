@@ -2,7 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { useAppStore, type ThemeKey } from '../store';
 import { setConfigField } from '../lib/window';
 import { fetchModels, setModel, type ModelInfo } from '../lib/models';
-import { triggerTestBriefing } from '../lib/integrations';
+import {
+  triggerTestBriefing,
+  resetCharacterState,
+  type ClipboardItem,
+} from '../lib/integrations';
 import CapabilityPanel from './CapabilityPanel';
 import MemoryManagerDrawer from './MemoryManagerDrawer';
 
@@ -519,6 +523,235 @@ function ProactiveSection({ showToast }: ProactiveSectionProps) {
         </button>
       </div>
     </Section>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// v3-G chunk 3a — 剪贴板 section
+// ---------------------------------------------------------------------------
+
+interface ClipboardSectionProps {
+  showToast: (text: string) => void;
+}
+
+function ClipboardSection({ showToast }: ClipboardSectionProps) {
+  const [enabled, setEnabled] = useState(true);
+  const [items, setItems] = useState<ClipboardItem[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchItems = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/clipboard/recent?n=5');
+      if (res.ok) {
+        const data = await res.json();
+        setItems((data?.items ?? []) as ClipboardItem[]);
+      }
+    } catch (e) {
+      console.warn('[clipboard section] fetch failed:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // mount + 5s 轮询：对齐后端 1Hz polling 的延迟体验（用户复制后 ~5s 内可见）
+  useEffect(() => {
+    fetchItems();
+    const t = setInterval(fetchItems, 5000);
+    return () => clearInterval(t);
+  }, [fetchItems]);
+
+  const onClearAll = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/clipboard/clear', {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      setItems([]);
+      showToast('剪贴板已清空');
+    } catch (e) {
+      showToast(`清空失败：${(e as Error).message}`);
+    }
+  };
+
+  const onPreview = (item: ClipboardItem) => {
+    const preview = item.content.length > 200
+      ? item.content.slice(0, 200) + '…'
+      : item.content;
+    alert(preview);
+  };
+
+  return (
+    <Section title="剪贴板">
+      <Toggle
+        label="捕获剪贴板（默认开启）"
+        value={enabled}
+        onChange={(v) => {
+          setEnabled(v);
+          // 后端 polling 控制走 ClipboardWatcher.set_enabled —— 暂不暴露 HTTP；
+          // localStorage 占位，未来加路由时切实际控制。
+          try { localStorage.setItem('momoos.clipboardEnabled', String(v)); } catch { /* ignore */ }
+        }}
+      />
+      <div
+        className="text-xs py-1.5"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        🔒 剪贴板内容仅本地内存，重启清空，不外传。
+      </div>
+
+      <div className="py-2">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+            最近 {items.length} 条
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={fetchItems}
+              disabled={loading}
+              className="text-xs px-2 py-1 rounded"
+              style={{
+                background: 'var(--color-bg-input)',
+                border: '1px solid var(--color-border)',
+                color: 'var(--color-text-primary)',
+                opacity: loading ? 0.5 : 1,
+              }}
+            >
+              {loading ? '…' : '↻ 刷新'}
+            </button>
+            <button
+              type="button"
+              onClick={onClearAll}
+              className="text-xs px-2 py-1 rounded"
+              style={{
+                background: 'var(--color-bg-input)',
+                border: '1px solid var(--color-border)',
+                color: 'var(--color-text-primary)',
+              }}
+            >
+              全部清除
+            </button>
+          </div>
+        </div>
+        {items.length === 0 ? (
+          <div
+            className="text-xs italic py-2"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            （还没捕获到剪贴板内容；复制点东西试试）
+          </div>
+        ) : (
+          <ul className="space-y-1.5">
+            {items.map((it) => (
+              <li
+                key={it.captured_at}
+                className="text-xs px-2 py-1.5 rounded cursor-pointer hover:opacity-80"
+                style={{
+                  background: 'var(--color-bg-input)',
+                  border: '1px solid var(--color-border-subtle)',
+                  color: 'var(--color-text-primary)',
+                }}
+                title={it.content}
+                onClick={() => onPreview(it)}
+              >
+                <div className="flex items-center justify-between">
+                  <span
+                    className="text-[10px] uppercase tabular-nums"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                  >
+                    {it.content_type}
+                  </span>
+                  <span
+                    className="text-[10px]"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                  >
+                    {(it.captured_iso || '').slice(11, 19)}
+                  </span>
+                </div>
+                <div className="truncate">{it.content}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// v3-G chunk 3b — 角色状态 section
+// ---------------------------------------------------------------------------
+
+interface CharacterStateSectionProps {
+  showToast: (text: string) => void;
+}
+
+function CharacterStateSection({ showToast }: CharacterStateSectionProps) {
+  const showPanel        = useAppStore((s) => s.showCharacterStatePanel);
+  const setShowPanel     = useAppStore((s) => s.setShowCharacterStatePanel);
+  const characterId      = useAppStore((s) => s.currentCharacterId);
+  const setState         = useAppStore((s) => s.setCurrentCharacterState);
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  const onReset = async () => {
+    if (characterId == null) {
+      showToast('当前角色未选定');
+      setConfirmReset(false);
+      return;
+    }
+    try {
+      const r = await resetCharacterState(characterId);
+      setState(r);
+      showToast(`已重置：mood=neutral, intimacy=0`);
+    } catch (e) {
+      showToast(`重置失败：${(e as Error).message}`);
+    } finally {
+      setConfirmReset(false);
+    }
+  };
+
+  return (
+    <>
+      <Section title="角色状态">
+        <Toggle
+          label="显示状态条"
+          value={showPanel}
+          onChange={setShowPanel}
+        />
+        <div
+          className="text-xs py-1.5"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          状态条右下角显示当前 mood + 亲密度，hover 看 thought / activity。
+        </div>
+        <div className="py-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setConfirmReset(true)}
+            disabled={characterId == null}
+            className="text-xs px-3 py-1.5 rounded transition-colors"
+            style={{
+              background: 'var(--color-bg-input)',
+              border: '1px solid var(--color-border)',
+              color: 'var(--color-text-primary)',
+              opacity: characterId == null ? 0.5 : 1,
+            }}
+          >
+            重置亲密度
+          </button>
+        </div>
+      </Section>
+      {confirmReset && (
+        <ConfirmModal
+          text={'确认重置当前角色的 mood / intimacy / thought / activity 到出厂默认？\n（将影响 Momo 对你的态度起点）'}
+          onConfirm={onReset}
+          onCancel={() => setConfirmReset(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -1204,6 +1437,10 @@ export default function SettingsPanel() {
       </Section>
 
       <ProactiveSection showToast={showToast} />
+
+      <ClipboardSection showToast={showToast} />
+
+      <CharacterStateSection showToast={showToast} />
 
       <Section title="ASR / VAD">
         <Segmented<'manual' | 'vad'>

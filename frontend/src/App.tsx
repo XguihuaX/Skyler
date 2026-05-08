@@ -5,6 +5,7 @@ import { useAudio } from './hooks/useAudio';
 import Widget from './modes/Widget';
 import Panel from './modes/Panel';
 import NotificationToast from './components/NotificationToast';
+import CharacterStatePanel from './components/CharacterStatePanel';
 import { AppApiContext, AppApi } from './contexts/appApi';
 import { applyModeWindowProps, fetchConfig } from './lib/window';
 import {
@@ -180,6 +181,9 @@ function App() {
         )}
         {mode === 'widget' && <Widget />}
         {mode === 'panel' && <Panel />}
+        {/* v3-G chunk 3b: 角色状态浮动小条；位置随 mode 切换。控制开关
+            在 SettingsPanel [角色] section（store.showCharacterStatePanel）。 */}
+        <CharacterStatePanel position={mode === 'widget' ? 'widget' : 'panel'} />
         <NotificationToast />
         {warming && (
           <div

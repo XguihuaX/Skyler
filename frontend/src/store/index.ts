@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { AppConfig, CharacterRow, ChatKind, ConversationRow, ProactiveMode } from '../lib/config';
+import type { CharacterStateResponse } from '../lib/integrations';
 import type { Live2DModel } from '../lib/live2d';
 import type { TtsProvider } from '../lib/tts';
 
@@ -107,6 +108,27 @@ function writeThemeToStorage(t: ThemeKey): void {
 function applyThemeToDom(t: ThemeKey): void {
   if (typeof document !== 'undefined') {
     document.documentElement.dataset.theme = t;
+  }
+}
+
+// v3-G chunk 3b — 状态条显示开关。SettingsPanel [角色] section 控；默认 on。
+const SHOW_STATE_PANEL_KEY = 'momoos.showStatePanel';
+
+function _readShowStatePanelFromStorage(): boolean {
+  try {
+    const raw = localStorage.getItem(SHOW_STATE_PANEL_KEY);
+    if (raw === 'false') return false;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function _writeShowStatePanelToStorage(v: boolean): void {
+  try {
+    localStorage.setItem(SHOW_STATE_PANEL_KEY, v ? 'true' : 'false');
+  } catch {
+    // localStorage unavailable — silently ignore
   }
 }
 
@@ -244,6 +266,13 @@ interface AppState {
   setWakeCallDefaultSnoozeMinutes: (v: number) => void;
   wakeCallCity: string;
   setWakeCallCity: (v: string) => void;
+
+  // v3-G chunk 3b — 角色状态。WS 'state_update' 事件 / 启动时 fetch 写入。
+  // null = 还没加载。CharacterStatePanel 监听显示 mood emoji + intimacy。
+  currentCharacterState: CharacterStateResponse | null;
+  setCurrentCharacterState: (v: CharacterStateResponse | null) => void;
+  showCharacterStatePanel: boolean;
+  setShowCharacterStatePanel: (v: boolean) => void;
 
   // V2.5-C — characters / conversations / chat history
   characters: CharacterRow[];
@@ -399,6 +428,14 @@ export const useAppStore = create<AppState>((set) => ({
     set({ wakeCallDefaultSnoozeMinutes }),
   wakeCallCity: '东京',
   setWakeCallCity: (wakeCallCity) => set({ wakeCallCity }),
+
+  currentCharacterState: null,
+  setCurrentCharacterState: (currentCharacterState) => set({ currentCharacterState }),
+  showCharacterStatePanel: _readShowStatePanelFromStorage(),
+  setShowCharacterStatePanel: (showCharacterStatePanel) => {
+    _writeShowStatePanelToStorage(showCharacterStatePanel);
+    set({ showCharacterStatePanel });
+  },
 
   characters: [],
   setCharacters: (characters) => set({ characters }),

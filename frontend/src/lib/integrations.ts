@@ -60,3 +60,59 @@ export async function triggerTestBriefing(
   if (!res.ok) throw new Error(`briefing test failed: ${res.status}`);
   return (await res.json()) as BriefingTestResponse;
 }
+
+// ---------------------------------------------------------------------------
+// v3-G chunk 3b — character state
+// ---------------------------------------------------------------------------
+
+export type CharacterMood = 'happy' | 'sad' | 'curious' | 'calm' | 'excited' | 'tired' | 'neutral';
+
+export interface CharacterStateResponse {
+  character_id: number;
+  mood: CharacterMood;
+  intimacy: number;
+  thought: string | null;
+  activity: string | null;
+  last_interaction_at: string | null;
+  updated_at: string | null;
+}
+
+export async function fetchCharacterState(characterId: number): Promise<CharacterStateResponse> {
+  const res = await fetch(`${BACKEND_BASE}/api/characters/${characterId}/state`);
+  if (!res.ok) throw new Error(`fetch character state failed: ${res.status}`);
+  return (await res.json()) as CharacterStateResponse;
+}
+
+export async function resetCharacterState(characterId: number): Promise<CharacterStateResponse> {
+  const res = await fetch(`${BACKEND_BASE}/api/characters/${characterId}/reset_state`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`reset character state failed: ${res.status}`);
+  return (await res.json()) as CharacterStateResponse;
+}
+
+// ---------------------------------------------------------------------------
+// v3-G chunk 3a — clipboard
+// ---------------------------------------------------------------------------
+
+export type ClipboardContentType = 'url' | 'code' | 'plain_text' | 'markdown' | 'json';
+
+export interface ClipboardItem {
+  content: string;
+  content_type: ClipboardContentType;
+  captured_at: number;
+  captured_iso: string;
+}
+
+export async function captureClipboard(content: string, contentType?: string): Promise<{ ok: boolean; size: number }> {
+  const res = await fetch(`${BACKEND_BASE}/api/clipboard/captured`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, content_type: contentType }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`clipboard capture failed (${res.status}): ${text}`);
+  }
+  return (await res.json()) as { ok: boolean; size: number };
+}
