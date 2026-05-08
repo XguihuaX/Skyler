@@ -33,10 +33,14 @@ interface WsMessage {
   activity?: string | null;
 }
 
-// v3-G chunk 2 / 2.6: trigger.name -> toast 标题。后续加 trigger 时只在这里 append。
+// v3-G chunk 2 / 2.6 / 4: trigger.name -> toast 标题。后续加 trigger 时只在这里 append。
 const PROACTIVE_TOAST_LABEL: Record<string, string> = {
   morning_briefing: '🌅 早安简报',
   wake_call: '🌅 早安',
+  lunch_call: '🍱 午饭时间',
+  dinner_call: '🍽 晚饭时间',
+  bedtime_chat: '🌙 睡前问候',
+  long_idle: '💭 想你一下',
 };
 
 interface UseWebSocketReturn {
@@ -383,6 +387,64 @@ export function useWebSocket(): UseWebSocketReturn {
       // onclose 会接着触发，由 onclose 负责重连逻辑
     };
   }, [store, handleMessage]);
+
+  // v3-G chunk 4 Part C: heartbeat 给 long_idle trigger 用。仅在
+  // visibility=visible + focus 时每 15s ping；离开页面立即停。后端 grace
+  // 30s 内 = "在前台"。无新装依赖；纯 fetch。
+  useEffect(() => {
+    let timer: number | null = null;
+    let cancelled = false;
+    const userId = store.getState().defaultUserId || 'default';
+
+    async function pingOnce() {
+      if (cancelled) return;
+      try {
+        await fetch('http://127.0.0.1:8000/api/heartbeat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId }),
+        });
+      } catch {
+        // 后端不可达 best-effort 忽略
+      }
+    }
+    function shouldPing(): boolean {
+      return typeof document !== 'undefined'
+        && document.visibilityState === 'visible'
+        && document.hasFocus();
+    }
+    function startLoop() {
+      stopLoop();
+      if (!shouldPing()) return;
+      pingOnce();
+      timer = window.setInterval(() => {
+        if (shouldPing()) pingOnce();
+        else stopLoop();
+      }, 15_000);
+    }
+    function stopLoop() {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    }
+    function onVisChange() {
+      if (shouldPing()) startLoop();
+      else stopLoop();
+    }
+
+    startLoop();
+    document.addEventListener('visibilitychange', onVisChange);
+    window.addEventListener('focus', onVisChange);
+    window.addEventListener('blur', onVisChange);
+    return () => {
+      cancelled = true;
+      stopLoop();
+      document.removeEventListener('visibilitychange', onVisChange);
+      window.removeEventListener('focus', onVisChange);
+      window.removeEventListener('blur', onVisChange);
+    };
+  }, [store]);
 
   useEffect(() => {
     connect();

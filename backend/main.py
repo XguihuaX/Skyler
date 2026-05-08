@@ -56,6 +56,9 @@ from backend.database.migrations.v3_g_chunk2_6_pending_briefing import (
 from backend.database.migrations.v3_g_chunk3_character_states import (
     run_migration as migrate_v3_g_chunk3_character_states,
 )
+from backend.database.migrations.v3_g_chunk4_strip_legacy_tags import (
+    run_migration as migrate_v3_g_chunk4_strip_legacy_tags,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -97,6 +100,11 @@ import backend.capabilities.media_control     # noqa: F401, E402  v3-H chunk 1
 import backend.proactive.snooze_capability    # noqa: F401, E402  v3-G chunk 2.6
 import backend.capabilities.clipboard         # noqa: F401, E402  v3-G chunk 3a
 import backend.capabilities.character_state   # noqa: F401, E402  v3-G chunk 3b
+# v3-G chunk 4 Part C — proactive trigger pack（导入触发 register_stage2 副作用）
+import backend.proactive.triggers.lunch_call    # noqa: F401, E402
+import backend.proactive.triggers.dinner_call   # noqa: F401, E402
+import backend.proactive.triggers.bedtime_chat  # noqa: F401, E402
+import backend.proactive.triggers.long_idle     # noqa: F401, E402
 from backend.mcp import server as mcp_server  # noqa: E402  v3-G chunk 1.5
 
 logging.basicConfig(
@@ -152,6 +160,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 1b12. V3-G chunk 3b: character_states 表（idempotent）───────────
     await migrate_v3_g_chunk3_character_states()
+
+    # ── 1b13. V3-G chunk 4 D-3: 历史 chat_history 标签脏数据扫表剥离 ────
+    await migrate_v3_g_chunk4_strip_legacy_tags()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
@@ -253,6 +264,111 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         clipboard_watcher.start_polling()
     except Exception:
         logger.exception("[clipboard] polling task spawn failed")
+
+    # ── 6d. v3-G chunk 4 Part C — v3-F' trigger pack registration ──────────
+    # 4 个新 trigger 各自按 config.proactive.triggers.{name}.enabled 决定。
+    # default 全 False（除 lunch_call / dinner_call 默认 True，餐点最低敏感）；
+    # bedtime_chat / long_idle default False（用户在面板手动开）。任一注册
+    # 失败不阻塞主流程（log warning 继续）。
+    try:
+        from backend.proactive.engine import run_wake_call_trigger
+        from backend.proactive.triggers import (
+            lunch_call as _lunch_mod,
+            dinner_call as _dinner_mod,
+            bedtime_chat as _bedtime_mod,
+            long_idle as _long_idle_mod,
+        )
+        from backend.proactive.triggers.lunch_call import LunchCallTrigger
+        from backend.proactive.triggers.dinner_call import DinnerCallTrigger
+        from backend.proactive.triggers.bedtime_chat import BedtimeChatTrigger
+
+        # ─ lunch_call (weekday + weekend 各一个 cron job) ────────────────
+        if _lunch_mod._enabled():
+            async def _fire_lunch_weekday() -> None:
+                await run_wake_call_trigger(
+                    LunchCallTrigger(weekend=False),
+                    user_id=str(config_yaml.get("default_user_id") or "default"),
+                )
+            async def _fire_lunch_weekend() -> None:
+                await run_wake_call_trigger(
+                    LunchCallTrigger(weekend=True),
+                    user_id=str(config_yaml.get("default_user_id") or "default"),
+                )
+            try:
+                cron_scheduler.schedule_cron(
+                    "lunch_call_weekday", _lunch_mod._resolve_cron_weekday(),
+                    _fire_lunch_weekday,
+                )
+                logger.info(
+                    "[cron] lunch_call_weekday registered: %s",
+                    _lunch_mod._resolve_cron_weekday(),
+                )
+            except ValueError:
+                logger.info("[cron] lunch_call_weekday already registered")
+            try:
+                cron_scheduler.schedule_cron(
+                    "lunch_call_weekend", _lunch_mod._resolve_cron_weekend(),
+                    _fire_lunch_weekend,
+                )
+                logger.info(
+                    "[cron] lunch_call_weekend registered: %s",
+                    _lunch_mod._resolve_cron_weekend(),
+                )
+            except ValueError:
+                logger.info("[cron] lunch_call_weekend already registered")
+
+        # ─ dinner_call ───────────────────────────────────────────────────
+        if _dinner_mod._enabled():
+            async def _fire_dinner() -> None:
+                await run_wake_call_trigger(
+                    DinnerCallTrigger(),
+                    user_id=str(config_yaml.get("default_user_id") or "default"),
+                )
+            try:
+                cron_scheduler.schedule_cron(
+                    "dinner_call", _dinner_mod._resolve_cron(), _fire_dinner,
+                )
+                logger.info(
+                    "[cron] dinner_call registered: %s", _dinner_mod._resolve_cron(),
+                )
+            except ValueError:
+                logger.info("[cron] dinner_call already registered")
+
+        # ─ bedtime_chat ──────────────────────────────────────────────────
+        if _bedtime_mod._enabled():
+            async def _fire_bedtime() -> None:
+                await run_wake_call_trigger(
+                    BedtimeChatTrigger(),
+                    user_id=str(config_yaml.get("default_user_id") or "default"),
+                )
+            try:
+                cron_scheduler.schedule_cron(
+                    "bedtime_chat", _bedtime_mod._resolve_cron(), _fire_bedtime,
+                )
+                logger.info(
+                    "[cron] bedtime_chat registered: %s",
+                    _bedtime_mod._resolve_cron(),
+                )
+            except ValueError:
+                logger.info("[cron] bedtime_chat already registered")
+
+        # ─ long_idle (interval 检查 + 内部三条件判定) ─────────────────────
+        if _long_idle_mod._enabled():
+            interval = _long_idle_mod._resolve_check_interval_minutes() * 60
+            try:
+                cron_scheduler.schedule_interval(
+                    "long_idle_check", interval, _long_idle_mod.check_and_maybe_fire,
+                )
+                logger.info(
+                    "[cron] long_idle_check registered: every %ds (threshold=%dmin cooldown=%dmin)",
+                    interval,
+                    _long_idle_mod._resolve_idle_threshold_minutes(),
+                    _long_idle_mod._resolve_cooldown_minutes(),
+                )
+            except ValueError:
+                logger.info("[cron] long_idle_check already registered")
+    except Exception:
+        logger.exception("[cron] v3-F' trigger pack registration failed")
 
     # ── 7. v3-G chunk 2 / 2.6 — Proactive engine cron 注册（mode 互斥）─
     # ``config.proactive.mode`` 决定哪个 trigger 上 cron：

@@ -90,6 +90,24 @@ proactive:
     pending_ttl_minutes: 30
     default_snooze_minutes: 30
     city: 东京
+  # v3-G chunk 4 Part C — v3-F' trigger pack（模式 B 邀请对话）
+  triggers:
+    lunch_call:
+      enabled: true
+      cron_weekday: 0 12 * * 1-5
+      cron_weekend: 30 11 * * 0,6
+    dinner_call:
+      enabled: true
+      cron: 30 18 * * *
+    bedtime_chat:
+      enabled: false   # 默认关，敏感场景手动开
+      cron: 30 22 * * *
+    long_idle:
+      enabled: false   # 默认关，最容易骚扰
+      idle_threshold_minutes: 30
+      cooldown_minutes: 90
+      heartbeat_grace_seconds: 30
+      check_interval_minutes: 5
 scheduler:
   timezone: Asia/Tokyo
 mcp_server:

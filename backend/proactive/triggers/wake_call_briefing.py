@@ -186,6 +186,22 @@ WAKE_CALL_STAGE2_ADDENDUM = """⚠️ 上一轮你叫用户起床。用户刚刚
 city = {city}（搜索时拼【今日 {city} 天气】）。"""
 
 
+# v3-G chunk 4 Part C：注册到 _stage2_registry 让 chat.py 多 trigger 通用查表。
+def _wake_call_stage2_builder(
+    user_text: str, briefing_data_json: str, city: str | None,
+) -> str:
+    return WAKE_CALL_STAGE2_ADDENDUM.format(
+        user_text=user_text,
+        briefing_data_json=briefing_data_json,
+        city=city or "东京",
+    )
+
+
+from backend.proactive.triggers._stage2_registry import register_stage2  # noqa: E402
+
+register_stage2("wake_call", WAKE_CALL_STAGE1_SENTINEL, _wake_call_stage2_builder)
+
+
 __all__ = [
     "WakeCallBriefingTrigger",
     "WAKE_CALL_STAGE1_SENTINEL",
