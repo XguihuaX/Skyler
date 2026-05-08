@@ -5,6 +5,8 @@ import { fetchModels, setModel, type ModelInfo } from '../lib/models';
 import {
   triggerTestBriefing,
   resetCharacterState,
+  fetchClipboardEnabled,
+  setClipboardEnabled,
   type ClipboardItem,
 } from '../lib/integrations';
 import CapabilityPanel from './CapabilityPanel';
@@ -540,6 +542,13 @@ function ClipboardSection({ showToast }: ClipboardSectionProps) {
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // v3-G chunk 4 Part B: 启动时同步真实后端状态（不依赖 localStorage）
+  useEffect(() => {
+    fetchClipboardEnabled()
+      .then((v) => setEnabled(v))
+      .catch((e) => console.warn('[clipboard] fetch enabled failed:', e));
+  }, []);
+
   const fetchItems = useCallback(async () => {
     setLoading(true);
     try {
@@ -588,10 +597,15 @@ function ClipboardSection({ showToast }: ClipboardSectionProps) {
         label="捕获剪贴板（默认开启）"
         value={enabled}
         onChange={(v) => {
+          // v3-G chunk 4 Part B: 真接通后端 ClipboardWatcher.set_enabled
+          // 通过 POST /api/clipboard/enabled。runtime override；重启回 yaml 默认。
+          const prev = enabled;
           setEnabled(v);
-          // 后端 polling 控制走 ClipboardWatcher.set_enabled —— 暂不暴露 HTTP；
-          // localStorage 占位，未来加路由时切实际控制。
-          try { localStorage.setItem('momoos.clipboardEnabled', String(v)); } catch { /* ignore */ }
+          setClipboardEnabled(v).catch((e) => {
+            console.error('[clipboard] toggle sync failed:', e);
+            setEnabled(prev);
+            showToast(`剪贴板开关写入失败：${(e as Error).message}`);
+          });
         }}
       />
       <div

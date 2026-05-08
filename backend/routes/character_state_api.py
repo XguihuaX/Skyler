@@ -92,6 +92,28 @@ class ClipboardCapturedBody(BaseModel):
     content_type: Optional[str] = None  # 'url' / 'code' / 'plain_text' / 'markdown' / 'json'
 
 
+# ---------------------------------------------------------------------------
+# v3-G chunk 4 部分 C — heartbeat (long_idle 用)
+# ---------------------------------------------------------------------------
+
+class HeartbeatBody(BaseModel):
+    user_id: Optional[str] = None
+
+
+@router.post("/heartbeat")
+async def heartbeat(body: HeartbeatBody) -> dict[str, Any]:
+    """v3-G chunk 4：前端心跳。前端 hook 在 visibility=visible + focus 时
+    每 15 秒调本路由 → ``long_idle`` trigger 用此判定"用户还在前台"。
+
+    内存 dict ``_LAST_HEARTBEAT`` 进程内共享；重启清空。无新装依赖。
+    """
+    from backend.config import config_yaml as _cfg
+    from backend.proactive.triggers.long_idle import record_heartbeat
+    user_id = body.user_id or str(_cfg.get("default_user_id") or "default")
+    record_heartbeat(user_id)
+    return {"ok": True, "user_id": user_id}
+
+
 @router.get("/clipboard/recent")
 async def clipboard_recent(n: int = 5) -> dict[str, Any]:
     """前端 SettingsPanel 剪贴板 section 列最近 N 条 (默认 5，max 20)。"""
@@ -107,6 +129,37 @@ async def clipboard_clear() -> dict[str, Any]:
     from backend.integrations.clipboard import clipboard_watcher
     n = clipboard_watcher.clear_all()
     return {"cleared": n}
+
+
+class ClipboardEnabledBody(BaseModel):
+    enabled: bool
+
+
+@router.get("/clipboard/enabled")
+async def clipboard_get_enabled() -> dict[str, Any]:
+    """v3-G chunk 4 部分 B：返回 ClipboardWatcher 当前 enabled 状态。
+
+    runtime override only —— ClipboardWatcher.set_enabled 改的是内存 flag，
+    本路由读同一份。重启回到 yaml 默认（默认 True）。
+    """
+    from backend.integrations.clipboard import clipboard_watcher
+    return {"enabled": clipboard_watcher._enabled}  # noqa: SLF001
+
+
+@router.post("/clipboard/enabled")
+async def clipboard_set_enabled(body: ClipboardEnabledBody) -> dict[str, Any]:
+    """v3-G chunk 4 部分 B：开 / 关 1Hz 轮询。
+
+    enabled=False → ClipboardWatcher._poll_loop 跳过 _poll_once（ringbuffer
+    已捕获条目保留，仅停新捕获）。enabled=True → 恢复 1Hz 轮询。
+
+    **不写 config.yaml**：runtime override only。重启时回到 yaml 默认值，
+    避免误入"持久关闭"状态用户找不到入口。
+    """
+    from backend.integrations.clipboard import clipboard_watcher
+    clipboard_watcher.set_enabled(bool(body.enabled))
+    logger.info("[clipboard] runtime enabled=%s (not persisted)", body.enabled)
+    return {"enabled": clipboard_watcher._enabled}  # noqa: SLF001
 
 
 @router.post("/clipboard/captured")

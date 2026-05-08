@@ -104,6 +104,24 @@ export interface ClipboardItem {
   captured_iso: string;
 }
 
+export async function fetchClipboardEnabled(): Promise<boolean> {
+  const res = await fetch(`${BACKEND_BASE}/api/clipboard/enabled`);
+  if (!res.ok) throw new Error(`fetch clipboard enabled failed: ${res.status}`);
+  const data = (await res.json()) as { enabled: boolean };
+  return data.enabled;
+}
+
+export async function setClipboardEnabled(enabled: boolean): Promise<boolean> {
+  const res = await fetch(`${BACKEND_BASE}/api/clipboard/enabled`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error(`set clipboard enabled failed: ${res.status}`);
+  const data = (await res.json()) as { enabled: boolean };
+  return data.enabled;
+}
+
 export async function captureClipboard(content: string, contentType?: string): Promise<{ ok: boolean; size: number }> {
   const res = await fetch(`${BACKEND_BASE}/api/clipboard/captured`, {
     method: 'POST',
