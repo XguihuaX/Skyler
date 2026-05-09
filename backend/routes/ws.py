@@ -68,7 +68,11 @@ from backend.database.services import (
 from backend.llm.client import LLMError, call_llm
 from backend.memory.short_term import short_term_memory
 from backend.tts import get_tts_engine, tts_manager  # noqa: F401  (manager 保留作为旧路径)
-from backend.utils.text_filters import strip_state_update, strip_thinking
+from backend.utils.text_filters import (
+    strip_state_update,
+    strip_thinking,
+    strip_tool_call_fallback,
+)
 from backend.utils.timer import timed
 
 timing_logger = logging.getLogger("momoos.timing")
@@ -478,7 +482,9 @@ async def _update_memory(
     # v3-G chunk 3b 同 pattern：流式 _parse_state_update 只在 first sentence
     # 跑（与 emotion 同段），后续 sentence 残留的 <state_update> 走 ws-side
     # strip 兜底。chunk 2.6 footgun 教训：双保险 + TTS preprocessor 第三道。
-    reply = strip_state_update(strip_thinking(reply))
+    # v3-G chunk 4 hotfix-1：tool_call_resilience 已 strip 过 full_reply，但
+    # 当 reply 直接来自 partial 路径或绕过 resilience 调用时这里再 strip 一道。
+    reply = strip_tool_call_fallback(strip_state_update(strip_thinking(reply)))
     try:
         await short_term_memory.add(user_id, "user",      user_text)
         await short_term_memory.add(user_id, "assistant", reply)
@@ -564,7 +570,11 @@ async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
     # 残留半个标签 —— strip_thinking 只剥完整对，半截开标签会留下。
     # 前端渲染层有兜底正则再扫一次，最差只是多保留一段没意义的字符串。
     # v3-G chunk 3b：同步剥 <state_update>。
-    full_reply = strip_state_update(strip_thinking("".join(state.reply_parts))).strip()
+    # v3-G chunk 4 hotfix-1：同步剥 fallback tool_call 标签（中断时 reply_parts
+    # 已是逐句 strip 过的，但保留双保险——主路径写库前同样 3 道全过）。
+    full_reply = strip_tool_call_fallback(
+        strip_state_update(strip_thinking("".join(state.reply_parts)))
+    ).strip()
     interrupted_at = datetime.utcnow()
 
     try:
@@ -862,8 +872,21 @@ async def _handle_message(
                             "value": parsed_motion,
                         })
 
+                    # v3-G chunk 4 hotfix-1：剥 fallback tool_call 标签
+                    # （<tool_call> / <function_calls> / <invoke> / json 块）。
+                    # tool_call_resilience 在 stream 结束后整体扫 full_reply 真
+                    # 执行 + 剥；此处需要在每句送 TTS / text_chunk 之前先剥，
+                    # 否则 cosyvoice 把 XML 念出来 + 前端短暂看到 XML。chat.py
+                    # _safe_boundary 已用 has_partial_open_tag 阻止半截 XML 越界，
+                    # 这里只可能命中完整闭合块。
+                    sentence = strip_tool_call_fallback(sentence)
+
                     # 剥标签后可能为空（极端情况：句子只有标签），跳过本句
                     if not sentence.strip():
+                        logger.info(
+                            "[chat] sentence skipped (all-tag after strip) user=%s",
+                            user_id,
+                        )
                         continue
 
                     reply_parts.append(sentence)

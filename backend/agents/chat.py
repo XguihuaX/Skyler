@@ -61,6 +61,7 @@ from backend.llm.client import LLMError, call_llm, stream_llm
 from backend.memory.long_term import generate_embedding, search_relevant_memories
 from backend.memory.short_term import short_term_memory
 from backend.tools.registry import ToolRegistry
+from backend.utils.text_filters import has_partial_open_tag
 from backend.utils.timer import timed
 
 logger = logging.getLogger(__name__)
@@ -353,12 +354,19 @@ def _safe_boundary(buf: str) -> int:
     于一段未闭合的内心独白中，``。``/``！``/``？`` 等可能出现在 thinking 内
     部，不能据此切句。返回 ``-1`` 让 ``_sentence_stream`` 继续累积，等下一个
     token 把 ``</thinking>`` 带进来。
+
+    v3-G chunk 4 hotfix-1：同一原则扩展到 fallback tool_call 标签
+    （``<tool_call>`` / ``<function_calls>`` / ``<invoke>`` / markdown json）—
+    block 内常含 ``。"`` / ``，`` 等会误触发 boundary，把半截 XML 送到 TTS。
+    用 ``has_partial_open_tag(buf)`` 一并检测。
     """
     open_m = _THINKING_OPEN_RE.search(buf)
     if open_m:
         close_m = _THINKING_CLOSE_RE.search(buf, open_m.end())
         if close_m is None:
             return -1
+    if has_partial_open_tag(buf):
+        return -1
     return _find_boundary(buf)
 
 

@@ -27,6 +27,7 @@ from backend.tts.base import TTSBase, TTSProvider, split_sentences
 from backend.tts.edge import EdgeTTSProvider
 from backend.tts.sovits import SoVITSProvider
 from backend.tts.voice_config import VoiceConfig, parse_voice_config
+from backend.utils.text_filters import strip_all_for_tts
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +38,15 @@ logger = logging.getLogger(__name__)
 # LLM 输出常带不应读出的标记：动作描述 *笑了笑*、注释 (悄声)、情感 / 内心独白
 # 标签等。在 synthesize 调用前用一组正则统一剥离，剥后空 / 仅标点 → 跳过合成。
 #
-# 顺序约束：``<thinking>`` 必须先剥（多行，可能包住其他模式），其余顺序无关。
+# v3-G chunk 4 hotfix-1：``strip_all_for_tts``（text_filters.py）覆盖 emotion /
+# thinking / state_update / tool_call_fallback 四道；本模块剩下的 patterns
+# 只保留 motion + 动作 / 注释 / 中括号——避免重复 + 在 text_filters 加新格式
+# 时不需要同步改这里。顺序：thinking 跨行最先剥（在 strip_all_for_tts 内部
+# 第二步），其余无关。
 # ---------------------------------------------------------------------------
 
-# (regex, flags) — 顺序敏感：thinking 跨行最先剥，其余顺序无关。
+# 仅保留不在 strip_all_for_tts 内的剩余模式（动作 / 注释 / 中括号 + motion 兜底）
 _PREPROCESS_PATTERNS: List[Pattern[str]] = [
-    re.compile(r"<thinking>[\s\S]*?</thinking>", re.IGNORECASE),
-    re.compile(r"<emotion>[^<]*</emotion>", re.IGNORECASE),
     re.compile(r"<motion>[^<]*</motion>", re.IGNORECASE),
     re.compile(r"\*[^*]+\*"),
     re.compile(r"\([^)]+\)"),
@@ -64,15 +67,22 @@ def preprocess_tts_text(text: str) -> str:
 
     Args:
         text: LLM 原文，可能含 ``*动作*`` / ``(注释)`` / ``<emotion>`` /
-              ``<thinking>`` 等标记。
+              ``<thinking>`` / ``<state_update>`` / ``<tool_call>`` /
+              ``<function_calls>`` / ``<invoke>`` / ```` ```json ```` 等标记。
 
     Returns:
         清理后的文本；如果剥离后为空或仅余标点 / 空白 → 返回 ``""``，
         调用方应跳过 ``synthesize``。
+
+    v3-G chunk 4 hotfix-1：先经 ``strip_all_for_tts`` 干掉 LLM 标签全家
+    （emotion / thinking / state_update / tool_call fallback），再走本地剩余
+    pattern 列表（motion / 动作 / 注释 / 中括号）。这是第三道 strip 链路——
+    chat.py 流式按段剥（第一道）+ ws.py 写库前剥（第二道）+ 这里 TTS 兜底
+    （第三道）。漏一道就会被 cosyvoice 念出来。
     """
     if not text:
         return ""
-    out = text
+    out = strip_all_for_tts(text)
     for pat in _PREPROCESS_PATTERNS:
         out = pat.sub("", out)
     # 行内多空格合并；保留换行（CosyVoice 不在意，且 split_sentences 上游已切句）
@@ -213,7 +223,12 @@ class _PreprocessingEngine(TTSBase):
     ) -> Optional[bytes]:
         cleaned = preprocess_tts_text(text)
         if not cleaned:
+            logger.info("[tts] synth skipped (empty after strip) raw=%r", text[:80])
             return None
+        # v3-G chunk 4 hotfix-1：日志验收点。e2e 跑场景时检查这一行，确保
+        # synth_text 不带 <tool_call> / <invoke> / <function_calls> /
+        # <state_update> / <emotion> / <thinking> / json 标签。
+        logger.info("[tts] synth_text=%r emotion=%s", cleaned[:120], emotion)
         return await self._inner.synthesize(cleaned, emotion=emotion)
 
 
