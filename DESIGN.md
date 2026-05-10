@@ -2231,6 +2231,138 @@ connectivity, ...}``：
 
 ---
 
+## 十五之J、网易云本地 mpv 自解码（v3.5 chunk 6b 起）
+
+### 背景
+
+v3-H chunk 1 上线 NCM URL Scheme 启动播放路径（``netease.play_song``
+等），autoplay 不可靠（NCM 客户端响应 URL Scheme 的 ``/play`` 后缀语义
+在多个版本间漂移）—— chunk 1 partial 状态封存。
+
+chunk 6b 替换路径：**Skyler 自己拿 song/url + mpv 本地播放**，自动播放真
+闭环。
+
+### 双路径并存
+
+| 维度 | chunk 1 ``netease.play_song(keyword)`` | chunk 6b ``netease.local_play_song(song_id)`` |
+|---|---|---|
+| 触发 | 搜关键词 + 启动 NCM | 拿 ID 直接 mpv 播 |
+| 自动播放 | ⚠️ 不可靠（NCM URL Scheme） | ✅ 真闭环 |
+| 歌词 / 动画 | ✅ NCM 客户端 | ❌ 无 |
+| 控制 | 媒体键 → NCM | 媒体键 → mpv |
+| LLM 默认 | 仅当用户明确要 NCM 时 | **首选**（system prompt 强引导） |
+
+### 架构
+
+```
+LLM → netease.local_play_song(song_id)
+  ↓
+NeteaseClient.get_song_url(song_id)   ← chunk 6b 新加
+  ↓ weapi POST /song/enhance/player/url/v1
+  ↓
+url + is_trial flag
+  ↓
+MpvPlayer.play(url, meta=...)
+  ↓ subprocess mpv --idle --input-ipc-server=<socket> --media-keys=yes
+  ↓ JSON IPC: loadfile, set_property force-media-title, etc.
+  ↓
+macOS NowPlaying Center 自动获取 mpv metadata（mpv 0.34+ 原生支持）
+  ↓
+系统通知中心 / Touch Bar / 媒体键 / nowplaying-cli 全部能看到
+```
+
+### MediaRemote degrade 升级
+
+**Spec 原计划** ``backend/integrations/media_remote.py`` 用 PyObjC 桥接
+``MPNowPlayingInfoCenter`` / ``MPRemoteCommandCenter``。
+
+**Audit 后取消**：
+
+* mpv 0.34+ 原生注册 NowPlaying（``--media-keys=yes``），Skyler 不需要
+  自写 PyObjC 桥
+* 节省 ~200 行 PyObjC 代码
+* 不需要 Skyler 进程持有 AVAudioSession / Info.plist / entitlement
+* 兼容 unsigned dev 模式 Python 进程
+
+实际是**升级**（不是 degrade）—— 比 spec 设想的方案更简洁稳健。
+
+### 错误码
+
+| code | 触发 |
+|---|---|
+| ``mpv_not_installed`` | binary 不在 PATH，提示 ``brew install mpv`` |
+| ``mpv_exec_failed`` | binary 在但跑不起来（Gatekeeper 首次拦截） |
+| ``cookie_required`` | NETEASE_MUSIC_U 没配 |
+| ``url_unavailable`` | VIP 下架 / 地区限制 / 已下线 |
+| ``netease_api_error`` | NCM API 限流 / cookie 失效 |
+| ``mpv_play_failed`` | mpv loadfile 失败（解码错 / 网络中断） |
+| ``mpv_command_failed`` | IPC 命令超时 / socket 断 |
+
+### 试听片段 (VIP)
+
+VIP 付费下架歌曲 NCM 返试听 URL (~30s)。capability 返 ``is_trial=True``
++ ``note: "试听片段（~30s）"``，LLM 如实告诉用户，不假装是完整版。
+
+---
+
+## 十五之K、小红书 URL 被动解析（v3.5 chunk 6c 起）
+
+### 工程红线（三处明文）
+
+| ✅ 做 | ❌ 拒绝 |
+|---|---|
+| 用户主动贴 URL → 拉单次 HTML | 主动搜索 / 推荐流 |
+| follow xhslink 短链 | 账号自动化 / login |
+| og:meta + ``__INITIAL_STATE__`` 解析 | 评论抓取 |
+| 域名白名单（仅 xiaohongshu.com / xhslink.com） | 批量爬虫 / 高频 |
+| 反爬识别 + 友好 error | 弹幕 / 私信 / 点赞 |
+
+**工程层面**：``backend/integrations/xiaohongshu.py`` **不暴露** search /
+recommend / fetch_homepage / list_followings 等方法。无主动调用路径 ⇒
+即便 prompt injection 也调不到。
+
+### 哲学
+
+小红书 anti-bot 强，主动爬有合规 + 反爬礼仪问题。Skyler 是个人陪伴助
+手，不是数据采集工具。如未来确实想接搜索类功能：另起 chunk + 用户明确
+同意 + 走 MCP server 隔离子进程（合规风险落在外部 server，Skyler 边界清晰）。
+
+### 数据源策略
+
+```
+HTTP 200 →
+  ├─ 优先 window.__INITIAL_STATE__（完整 title + desc + images + tags + author）
+  │   * undefined → null 修正（xhs JSON 不合标）
+  │   * 解析失败 fallback 截到最后一个 }
+  │   * 试 noteDetailMap / note.note / noteData.data.noteInfo 多条路径
+  ├─ fallback og:title + og:description + og:image（缩略版）
+  └─ 都没 → parse_failed
+```
+
+### 错误码
+
+| code | 触发 |
+|---|---|
+| ``invalid_url`` | 非 xiaohongshu.com / xhslink.com 域名 |
+| ``blocked_by_antibot`` | 412 / 418 / 403 反爬限流 |
+| ``parse_failed`` | 200 OK 但无元数据（私人 / 已删 / 模板变） |
+| ``timeout`` | 12s 网络超时 |
+| ``http_error`` | 其他 5xx |
+| ``network_error`` | DNS / 连接断 |
+| ``missing_url`` | 调用时未传 url |
+
+### 杀手用例
+
+LLM 看到用户贴小红书 URL → 调 ``xhs.parse_url`` → 拿到 title/text/images
+后**用自己的话**总结 / 翻译 / 回答用户问题。**不**原样输出 tag 列表 /
+emoji 噪声 / 完整 text（system prompt 强引导）。
+
+LLM 看到用户问主动搜索类问题 → **如实告诉用户**「Skyler 不主动爬小红书；
+你贴具体笔记链接给我就能解析」，**不要瞎编**（system prompt + capability
+description 双重红线明文）。
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建

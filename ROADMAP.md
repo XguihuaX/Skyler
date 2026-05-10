@@ -32,7 +32,8 @@
 | **v5-T2：训练自定义 voice（CosyVoice fine-tune + SoVITS 模型）** | 📋 远期 | 0% |
 | **v3.5 chunk 5：视觉跃迁包（背景层 + splash video）** | ✅ 完成（4 commit，2026-05-11） | 100% |
 | **v3.5 chunk 6a：B 站接入（11 capability + 字幕总结）** | ✅ 完成（4 commit，2026-05-11） | 100% |
-| **v3.5 chunk 6b/6c：网易云重做 + 小红书 URL 解析** | 📋 计划中 | 0% |
+| **v3.5 chunk 6b：网易云 mpv 自解码（6 个 local_* capability）** | ✅ 完成（5 commit，2026-05-11） | 100% |
+| **v3.5 chunk 6c：小红书 URL 被动解析（红线锁死）** | ✅ 完成（5 commit，2026-05-11） | 100% |
 | **v3.5 chunk 7：Skill 集成 demo（docx capability + Notion MCP）** | ✅ 完成（5 commit，2026-05-11） | 100% |
 | **v3.5 chunk 8：v4 屏幕感知（VLM 抽象 + Tauri 截图 + 像素差 + 黑名单）** | 📋 计划中 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |
@@ -753,7 +754,7 @@ commit"是 v3 整段最重要的 process invariant。
 | 媒体控制（nowplaying-cli）| ✅ chunk 1 完成（2026-05-08）| `brew install nowplaying-cli` + 5 个 capability，跨来源播控 |
 | B 站接入 | 📋 TODO | 独立链路；MCP client 或直接 integrations/bilibili.py |
 
-### v3-H chunk 1 — 网易云音乐接入 🟡 PARTIAL
+### v3-H chunk 1 — 网易云音乐接入 ✅ 自动播放问题已被 v3.5 chunk 6b 替代 (2026-05-11)
 
 **已交付**：
 - 网易云 web API client（weapi 加密）
@@ -964,21 +965,49 @@ DESIGN §13 已有完整设计。要点：
 * `<docs>`  docs(chunk6a) — DESIGN §十五之I + ROADMAP + bilibili-setup.md +
   Tech Debt 2 条
 
-#### 6b 网易云自动播放重做（方向 B 自解码）
+#### 6b 网易云 mpv 自解码 ✅ 完成 2026-05-11
 
-* chunk 1 已有 `song/url` weapi client
-* 加 mpv 本地播放（注册 macOS MediaRemote 兼容 nowplaying-cli）
-* 处理会员歌曲（试听 30s）/ 失效 url
-* 失去 NCM 歌词 / 动画但**自动播放真闭环**
-* 工程量：~1 天 / 4 commits
+* **Spec 偏差修正**：chunk 1 NeteaseClient 实际**没**有 song/url 方法
+  （audit 实测）。本 chunk 补 ``get_song_url`` weapi POST
+  ``/song/enhance/player/url/v1``
+* mpv subprocess + Unix-socket JSON IPC（**不**走 python-mpv ctypes —
+  避免 libmpv 共享库部署）
+* **MediaRemote 升级**：spec 计划自写 PyObjC 桥接，audit 后取消 ——
+  mpv 0.34+ 原生注册 NowPlaying（``--media-keys=yes``），通知中心 /
+  TouchBar / 媒体键 / nowplaying-cli 全部直接 work，节省 ~200 行 PyObjC
+  代码 + 不需 Skyler 进程 entitlement
+* **命名 pivot**：chunk 6b 6 capability 全加 ``local_`` 前缀避免与 chunk 1
+  ``netease.play_song(keyword)`` namespace collision。LLM system prompt 引导
+  默认走 ``local_*``；NCM 歌词路径作为可选保留
+* 错误归一：mpv_not_installed / mpv_exec_failed / cookie_required /
+  url_unavailable / netease_api_error / mpv_play_failed / mpv_command_failed
+* VIP 试听 (~30s) 透传 ``is_trial=True`` 让 LLM 提示用户
 
-#### 6c 小红书 URL 解析（保守姿态）
+##### 6b 交付清单
 
-* **只做被动 URL 解析**，绝不主动爬
-* 2-3 capability：xhs.parse_url / summarize_post / translate_post
-* prompt 引导 LLM 不主动调
-* 红线：账号自动化 / 主动爬首页搜索推荐
-* 工程量：~半天 / 2-3 commits
+* `bf9d8a1` feat(integrations) — netease.get_song_url + mpv subprocess+IPC wrapper
+* `3ed2005` feat(capabilities) — netease playback 6 ``local_*`` + system prompt
+* `b3a9177` test(chunk6b+6c) — 56 cases (mpv 23 + netease_playback 33)
+* `<docs>`  docs(chunk6b+6c) — DESIGN §十五之J + netease-playback-setup.md
+
+#### 6c 小红书 URL 被动解析 ✅ 完成 2026-05-11
+
+* **工程红线锁死**：``backend/integrations/xiaohongshu.py`` 不暴露
+  search / recommend / fetch_homepage / list_followings 等任何主动方法。
+  无主动调用路径 ⇒ 即便 prompt injection 也调不到
+* **只 1 个 capability** ``xhs.parse_url``（撤回 spec 的 ``summarize_post``
+  —— 总结是 LLM 本职，单独 cap 无价值）
+* 数据源：``window.__INITIAL_STATE__`` JSON（``undefined`` → ``null``
+  修正 + 截 ``}`` fallback + 多候选路径）→ og:meta fallback
+* URL 域名白名单：仅 xiaohongshu.com / xhslink.com（防 SSRF + 防误传）
+* 反爬识别：412/418/403 → ``blocked_by_antibot`` + "过几分钟再试" hint
+* System prompt 明文红线：用户问主动搜索时如实告诉无能力 + **不要瞎编**
+
+##### 6c 交付清单
+
+* `a3e4a1b` feat(chunk6c) — 小红书 URL 被动解析 + 系统 prompt 红线
+* `b3a9177` test(chunk6b+6c) — xiaohongshu 52 cases（其中红线 enforcement 4 cases）
+* `<docs>`  docs(chunk6b+6c) — DESIGN §十五之K + xiaohongshu-setup.md
 
 ---
 

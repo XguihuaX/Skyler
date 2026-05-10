@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **状态（2026-05）**：v3 ✅ + v3.5 chunk 5 ✅ + chunk 7 ✅ + chunk 6a ✅ 完成。chunk 6a 上线 11 个 B 站 capability，杀手 use case ``bilibili.get_subtitles`` + LLM → 视频总结端到端跑通（用户「帮我总结这个 B 站视频」自动闭环）。6 个无 cookie + 5 个 cookie capability（cookie 走 ``.env BILIBILI_SESSDATA``，与 netease ``MUSIC_U`` 同 pattern）。44+ capabilities、6 proactive triggers、700+ 测试 / 0 回归、4 套抽象——CapabilityRegistry / ProactiveTrigger ABC / 双向 MCP / SAFE path util。接下来：chunk 6b 网易云自解码 + chunk 6c 小红书 URL 解析 / chunk 8 v4 屏幕感知（VLM 抽象 + Tauri 截图 + 隐私黑名单）。
+> **状态（2026-05）**：v3 ✅ + v3.5 chunk 5 ✅ + chunk 7 ✅ + chunk 6 (a/b/c) ✅ 全部完成。媒体接入收尾：chunk 6b mpv 子进程 + Unix socket JSON IPC 自解码（6 个 ``netease.local_*`` capability，NCM 自动播放真闭环——通过 mpv 0.34+ 原生 macOS NowPlaying 注册，不需要 PyObjC 桥）；chunk 6c 小红书 URL 被动解析（单 ``xhs.parse_url``，模块层不暴露 search/recommend/fetch_homepage 等主动方法——红线锁在代码层而非仅 policy）。51+ capabilities、6 proactive triggers、950+ 测试 / 0 回归、5 套抽象——CapabilityRegistry / ProactiveTrigger ABC / 双向 MCP / SAFE path util / mpv-IPC wrapper。接下来：chunk 8 v4 屏幕感知（VLM 抽象 + Tauri 截图 + 隐私黑名单）。
 >
 > *项目原名 MomoOS，2026-05 重命名为 Skyler。*
 
@@ -330,7 +330,8 @@ Skyler 站在两个项目的肩膀上：
 | v3-G'：TTS UI + cosyvoice instruct emotion | ✅ 完成（5 commit + patch，2026-05-06）—— SSML 路径撤回，instruct 路径正典 |
 | v3.5 chunk 5：视觉跃迁包（角色背景层 + Tauri 启动 splash video） | ✅ 完成（2026-05-11，4 commit）|
 | v3.5 chunk 6a：B 站接入（11 capability + AI 字幕总结） | ✅ 完成（2026-05-11，4 commit）—— ``bilibili-api-python>=17.4`` 社区 fork 包 ``backend/integrations/bilibili.py`` (11 方法 + 三档健康检查 + 风控 code 映射) + ``backend/capabilities/bilibili.py`` (11 个 ``@register_capability``)；6 无 cookie + 5 cookie capability；``get_subtitles`` ⭐ 杀手 use case（B 站 2024-2025 风控收紧字幕 API，spec pivot 移到 cookie 组）；红线：投币 / 三连 / 评论 / 弹幕 / 下载；104 新测试 / 0 回归（704/704 across 22 suites）；详见 ``docs/bilibili-setup.md`` |
-| v3.5 chunk 6b/6c：网易云 mpv 自解码重做 + 小红书被动 URL 解析 | 📋 计划中 |
+| v3.5 chunk 6b：网易云 mpv 自解码（6 个 ``local_*`` capability） | ✅ 完成（2026-05-11，5 commit）—— ``NeteaseClient.get_song_url`` 补 weapi POST + ``backend/integrations/mpv_player.py`` subprocess + Unix socket JSON IPC（不走 python-mpv ctypes，避免 libmpv 共享库部署）+ 6 个 ``netease.local_*``；MediaRemote spec degrade 升级——mpv 0.34+ 原生 macOS NowPlaying 注册（``--media-keys=yes``），不需 PyObjC 桥（节省 ~200 行 + 无 entitlement 需求）；VIP 试听透传 ``is_trial=True``；与 chunk 1 NCM URL Scheme 并存（``local_`` 前缀避免 namespace 冲突）；56 新测试；详见 ``docs/netease-playback-setup.md`` |
+| v3.5 chunk 6c：小红书 URL 被动解析（红线锁在代码层） | ✅ 完成（2026-05-11，5 commit）—— 单一 ``xhs.parse_url`` capability；``backend/integrations/xiaohongshu.py`` **不暴露** search/recommend/fetch_homepage/list_followings 等任何主动方法（红线在模块层 enforce，不只是 policy）；域名白名单 + follow_redirects + 浏览器 UA 伪装；数据源 ``__INITIAL_STATE__`` → og:meta → parse_failed；反爬识别 412/418 → ``blocked_by_antibot``；system prompt 引导 LLM 主动搜索类问题如实告诉用户无能力**不要瞎编**；52 新测试（含 4 条红线 enforcement 断言）；详见 ``docs/xiaohongshu-setup.md`` |
 | v3.5 chunk 7：Skill 集成 demo（姿态 A docx capability + 姿态 B Notion MCP server） | ✅ 完成（2026-05-11，5 commit）—— 姿态 A docx 3 capability + ``backend/utils/safe_path.py`` 集中防御；姿态 B 扩展 chunk 1.5 ``backend/mcp/client.py``（``enable``/``disable``/DB env 注入）+ ``mcp_credentials`` / ``mcp_client_state`` 双表 + ``ExtensionsSection.tsx`` UI + ``@notionhq/notion-mcp-server`` 官方包；65 新测试 / 0 回归（556/556 across 16 suites）。新加 skill 参 ``docs/skills-extension-guide.md`` |
 | v3.5 chunk 8：v4 屏幕感知（VLM 抽象 + Tauri 截图 + 像素差预过滤 + 隐私黑名单） | 📋 计划中 |
 | v4：屏幕感知 | 📋 计划中 |
