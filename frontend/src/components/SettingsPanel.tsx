@@ -10,6 +10,7 @@ import {
   type ClipboardItem,
 } from '../lib/integrations';
 import CapabilityPanel from './CapabilityPanel';
+import ExtensionsSection from './ExtensionsSection';
 import MemoryManagerDrawer from './MemoryManagerDrawer';
 
 const BACKEND_BASE = 'http://127.0.0.1:8000';
@@ -1471,6 +1472,11 @@ export default function SettingsPanel() {
       <ProactiveSection showToast={showToast} />
 
       <ClipboardSection showToast={showToast} />
+
+      {/* v3.5 chunk 7 —— 扩展能力 (MCP servers)。docx capability 是姿态 A
+          内置 capability，不需要 UI（看 CapabilityPanel）；姿态 B 外部 MCP
+          server 列在这里供 toggle + 配凭证。 */}
+      <ExtensionsSection showToast={showToast} />
 
       <CharacterStateSection showToast={showToast} />
 
