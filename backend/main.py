@@ -62,6 +62,9 @@ from backend.database.migrations.v3_g_chunk4_strip_legacy_tags import (
 from backend.database.migrations.v3_5_chunk5a_character_background import (
     run_migration as migrate_v3_5_chunk5a_character_background,
 )
+from backend.database.migrations.v3_5_chunk7_mcp_credentials import (
+    run_migration as migrate_v3_5_chunk7_mcp_credentials,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -171,6 +174,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 1b14. V3.5 chunk 5a: characters.background_path 列（idempotent）──
     await migrate_v3_5_chunk5a_character_background()
+
+    # ── 1b15. V3.5 chunk 7: mcp_credentials + mcp_client_state 表 ────────
+    # 必须在 init_clients_from_config 之前（client.py 读 DB enabled override）
+    await migrate_v3_5_chunk7_mcp_credentials()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

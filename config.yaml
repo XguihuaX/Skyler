@@ -135,3 +135,19 @@ mcp_clients:
       BRAVE_API_KEY: ${BRAVE_API_KEY}
     enabled: false
     expose_via_skyler_server: false
+  # v3.5 chunk 7 姿态 B demo —— Notion 官方 MCP server。
+  # 包名：@notionhq/notion-mcp-server（Notion 官方维护，makenotion/notion-mcp-server）。
+  # 凭证 NOTION_API_KEY 由 SettingsPanel "扩展能力" section 配置后写入
+  # mcp_credentials 表；启动子进程时 client.py 自动注入到 env，覆盖此处可能
+  # 留空的 env 字段。
+  notion:
+    description: 搜索 / 创建 / 更新 Notion 页面（需要 NOTION_API_KEY，UI 配置）
+    transport: stdio
+    command: npx
+    args:
+    - -y
+    - '@notionhq/notion-mcp-server'
+    env_required:
+    - NOTION_API_KEY
+    enabled: false
+    expose_via_skyler_server: false

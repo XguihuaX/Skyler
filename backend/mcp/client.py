@@ -49,6 +49,8 @@ from backend.capabilities import (
     TriggerMode,
 )
 from backend.config import config_yaml
+# v3.5 chunk 7：DB 驱动的 credentials + runtime enable override
+from backend.mcp import credentials as _creds
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,15 @@ class _ClientHandle:
 
     def enabled(self) -> bool:
         return bool(self.conf.get("enabled", False))
+
+    def env_required(self) -> list[str]:
+        """v3.5 chunk 7：config.yaml 声明的必填凭证名列表。
+
+        UI 用这个判断哪些 key 还没配。Capability handler 不需要——子进程
+        启动前 ``_connect_one`` 自动把 DB 里所有 ``mcp_credentials`` 注入 env。
+        """
+        v = self.conf.get("env_required") or []
+        return [str(x) for x in v] if isinstance(v, list) else []
 
 
 _clients: dict[str, _ClientHandle] = {}
@@ -118,10 +129,15 @@ async def _connect_one(handle: _ClientHandle) -> None:
             # 尽早 fail —— 命令不存在时 stdio_client 会卡几秒
             if shutil.which(command) is None and not os.path.isabs(command):
                 raise FileNotFoundError(f"command not found in PATH: {command}")
+            # v3.5 chunk 7：env 三层叠加（后覆前）：
+            #   1. os.environ        —— PATH 等基础环境
+            #   2. config.yaml env   —— 兼容 chunk 1.5 旧路径（${BRAVE_API_KEY}）
+            #   3. DB credentials    —— UI 输入的 API key 等（最高优先级）
+            db_env = await _creds.get_env(handle.name)
             params = StdioServerParameters(
                 command=command,
                 args=conf.get("args") or [],
-                env={**os.environ, **(conf.get("env") or {})},
+                env={**os.environ, **(conf.get("env") or {}), **db_env},
                 cwd=conf.get("cwd"),
             )
             read_stream, write_stream = await stack.enter_async_context(
@@ -269,17 +285,29 @@ async def _disconnect_one(handle: _ClientHandle) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
+async def _effective_enabled(handle: "_ClientHandle") -> bool:
+    """v3.5 chunk 7: DB ``mcp_client_state`` override 优先于 config.yaml ``enabled``。
+
+    None / 缺行 → 走 config.yaml 默认（向后兼容 chunk 1.5 单一 enabled 字段）。
+    """
+    override = await _creds.get_enabled_override(handle.name)
+    if override is None:
+        return handle.enabled()
+    return override
+
+
 async def init_clients_from_config() -> None:
     """lifespan 启动钩子：按 config 启用所有 mcp_clients。
 
     单个 client 失败**不阻塞**整体 —— log warning + 标记 last_error 即可。
+    v3.5 chunk 7：``mcp_client_state`` DB override 优先于 ``config.yaml``。
     """
     clients_cfg = config_yaml.get("mcp_clients") or {}
     async with _lock:
         for name, conf in clients_cfg.items():
             handle = _ClientHandle(name, conf or {})
             _clients[name] = handle
-            if not handle.enabled():
+            if not await _effective_enabled(handle):
                 continue
             try:
                 await _connect_one(handle)
@@ -323,19 +351,72 @@ async def reconnect(name: str) -> None:
             raise
 
 
-def list_status() -> list:
-    """给 ``/api/mcp/clients/status`` 用。返回 pydantic-friendly dict 列表。"""
+# ---------------------------------------------------------------------------
+# v3.5 chunk 7：UI 驱动的 enable/disable（与 reconnect 区分——这俩持久化到 DB）
+# ---------------------------------------------------------------------------
+
+async def enable(name: str) -> None:
+    """启用 + 持久化 enabled=True + 立即尝试连接。
+
+    Raises:
+        KeyError: name 不在 config
+        Exception: 连接失败（last_error 已设；调用方应转 HTTP 500）
+    """
+    async with _lock:
+        if name not in _clients:
+            raise KeyError(name)
+        handle = _clients[name]
+        await _creds.set_enabled(name, True)
+        if handle.connected:
+            return
+        try:
+            await _connect_one(handle)
+        except Exception as exc:
+            handle.last_error = str(exc)
+            raise
+
+
+async def disable(name: str) -> None:
+    """禁用 + 持久化 enabled=False + 立即断开（如已连接）。
+
+    Raises:
+        KeyError: name 不在 config
+    """
+    async with _lock:
+        if name not in _clients:
+            raise KeyError(name)
+        handle = _clients[name]
+        await _creds.set_enabled(name, False)
+        if handle.connected:
+            await _disconnect_one(handle)
+
+
+async def list_status() -> list:
+    """给 ``/api/mcp/clients/status`` 用。返回 pydantic-friendly dict 列表。
+
+    v3.5 chunk 7 扩展：
+      - ``enabled`` 现在反映"effective"（DB override 优先于 config.yaml）
+      - ``env_required`` 列出 config 声明的必填凭证 key
+      - ``missing_credentials`` 列出"必填但 DB 里还没配"的 key（UI 用来禁
+         用 toggle 并提示"先配置凭证"）
+    """
     out = []
     for name, handle in _clients.items():
+        configured = set((await _creds.get_env(name)).keys())
+        required = handle.env_required()
+        missing = [k for k in required if k not in configured]
+        effective_enabled = await _effective_enabled(handle)
         out.append({
             "name": name,
             "description": handle.description(),
-            "enabled": handle.enabled(),
+            "enabled": effective_enabled,
             "connected": handle.connected,
             "transport": handle.transport(),
             "tool_count": handle.tool_count,
             "expose_via_server": handle.expose_via_server(),
             "last_error": handle.last_error,
+            "env_required": required,
+            "missing_credentials": missing,
         })
     return out
 
