@@ -141,8 +141,33 @@ export default function SplashOverlay({ onFinished }: SplashOverlayProps) {
         ref={videoRef}
         src={SPLASH_URL}
         autoPlay
-        muted
         playsInline
+        // chunk 5b hotfix-2：尝试带声音 autoplay。Tauri 2.11 + wry 0.55 在
+        // macOS 默认 ``autoplay: true``（wry/src/lib.rs:843），实际调
+        // ``WKWebViewConfiguration.setMediaTypesRequiringUserActionForPlayback
+        // (WKAudiovisualMediaTypes::None)`` (wry/src/wkwebview/mod.rs:361-364)
+        // —— 等价于 Safari 的 "Allow All Auto-Play"。Tauri runtime 没有
+        // override 该默认（tauri-runtime-wry-2.11.0/src/lib.rs:4815+ 不调
+        // .with_autoplay()）。所以带声音 autoplay 应该 work。
+        //
+        // 防御：``onCanPlay`` 里手动 .play() 并 catch promise rejection。
+        // 若浏览器策略仍拒（如系统 "Silent autoplay" 设置或 macOS update
+        // 行为收紧），自动降级到 muted=true 重试一次；再失败 → fade 退出
+        // （静默跳过，避免画面卡住）。
+        onCanPlay={(e) => {
+          const v = e.currentTarget;
+          const playPromise = v.play();
+          if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch(() => {
+              // autoplay-with-sound 被拒 → muted 重试
+              v.muted = true;
+              v.play().catch(() => {
+                // 二次失败 → fade 退场，避免冻屏
+                beginFade();
+              });
+            });
+          }
+        }}
         // 不 loop —— splash 一次性
         onEnded={beginFade}
         onError={beginFade}
