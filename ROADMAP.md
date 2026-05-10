@@ -30,6 +30,10 @@
 | **v5-D：autodl 部署 + 子 agent 隔离** | 📋 远期 | 0% |
 | **v5-T1：GPT-SoVITS 后端接通（依赖 v5-D）** | 📋 远期 | 0% |
 | **v5-T2：训练自定义 voice（CosyVoice fine-tune + SoVITS 模型）** | 📋 远期 | 0% |
+| **v3.5 chunk 5：视觉跃迁包（背景层 + splash video）** | 📋 计划中 | 0% |
+| **v3.5 chunk 6：媒体接入收尾（B 站 / 网易云重做 / 小红书 URL 解析）** | 📋 计划中 | 0% |
+| **v3.5 chunk 7：Skill 集成 demo（docx capability + Notion MCP）** | 📋 计划中 | 0% |
+| **v3.5 chunk 8：v4 屏幕感知（VLM 抽象 + Tauri 截图 + 像素差 + 黑名单）** | 📋 计划中 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |
 
 ---
@@ -883,6 +887,105 @@ DESIGN §13 已有完整设计。要点：
 - 不同 OS 客户端打包（Windows / Linux 见 DESIGN §二十）
 
 工作量评估：**等于把整个项目再写半遍**。除非真有强烈需求，否则建议永远停在 v5（远程后端 + 单设备 Mac 客户端）。
+
+---
+
+## v3.5 后续路线（v3 封盘后的连续推进）
+
+> v3 封盘后没有"必须立刻做"的事，全是"想做 vs 想做"。下面按用户感知 × 工程量 × 依赖关系排序。每个 chunk 之间无强依赖，**用户可调整顺序**。
+
+### chunk 5 — 视觉跃迁包（背景层 + splash video）📋
+
+**主题**：Skyler 的"看板娘陪伴"视觉感再升一档。
+
+#### 5a Live2D 角色背景层（per-character + 多媒体）
+
+* 当前：`CharacterView.tsx` 满铺 `<img src={character.jpeg} />` 静态图，所有角色共用
+* 目标：
+  - DB `characters` 表加 `background_path` VARCHAR
+  - frontend 按后缀分发：`.jpg/.png/.webp` → `<img>` / `.mp4/.webm` → `<video autoplay loop muted playsinline>`
+  - asset 目录 `frontend/public/backgrounds/<slug>/` 走 `.gitignore` IP 隔离 pattern（同 live2d/）
+  - SettingsPanel CharacterPanel 加 [背景] 字段 + 预览
+  - migration `v3_5_chunk5a_character_background.py`
+* 工程量：~半天 / 4-6 commits
+
+#### 5b 启动入场 splash video
+
+* 用户离线用 Grok / Sora / 其他工具生成 mp4/webm，丢进 `frontend/public/splash/intro.mp4`
+* **Skyler 工程不集成 video 生成 API**——只播放
+* Tauri 启动 → 全屏播放 → 结束 / 任意点击跳过 → fade in 主视图
+* 文件不存在则 silent skip
+* Settings 加"启动播放入场视频" toggle
+* 工程量：~半天 / 3-4 commits
+
+**5a + 5b 合一 cc-task**：共用 video 播放基础 + asset 管理。
+
+---
+
+### chunk 6 — 媒体接入收尾包（v3-H chunk 2 系列）📋
+
+#### 6a B 站接入
+
+* 用 `bilibili-api-python`（成熟社区库）
+* 7 个无 cookie capability：search_video / get_video_info / search_user / get_user_videos / hot_videos / get_ranking / get_subtitles
+* 4 个 cookie capability：get_my_history / get_my_followings / get_later_watch / get_favorites
+* **杀手 use case**：`get_subtitles` + LLM → 视频内容总结
+* 不做：直播弹幕 / 评论自动化 / 视频下载 / 投币
+* 工程量：~1 天 / 5 commits
+
+#### 6b 网易云自动播放重做（方向 B 自解码）
+
+* chunk 1 已有 `song/url` weapi client
+* 加 mpv 本地播放（注册 macOS MediaRemote 兼容 nowplaying-cli）
+* 处理会员歌曲（试听 30s）/ 失效 url
+* 失去 NCM 歌词 / 动画但**自动播放真闭环**
+* 工程量：~1 天 / 4 commits
+
+#### 6c 小红书 URL 解析（保守姿态）
+
+* **只做被动 URL 解析**，绝不主动爬
+* 2-3 capability：xhs.parse_url / summarize_post / translate_post
+* prompt 引导 LLM 不主动调
+* 红线：账号自动化 / 主动爬首页搜索推荐
+* 工程量：~半天 / 2-3 commits
+
+---
+
+### chunk 7 — Skill 集成 demo（个人乐高底盘真兑现）📋
+
+两条姿态各一个 demo：
+
+* **7a 姿态 A 本地 capability（docx）**：`python-docx` + 3 capability + SAFE 路径隔离 / chunk 1 calendar 同架构
+* **7b 姿态 B MCP server 一键启用（Notion）**：复用 chunk 1.5 client；config.yaml 加 server 配置即可；SettingsPanel [扩展能力] section 列推荐 server + [启用]
+
+7a + 7b 合一 cc-task —— 验证未来用户加任何 skill 都有路径，不用每次重新设计架构。
+
+工程量：~半天 / 4 commits
+
+---
+
+### chunk 8 — v4 屏幕感知 📋
+
+DESIGN §13 已有完整设计。要点：
+
+* VLM provider 抽象（**Qwen3.5-Plus 主选**——多模态降价后 ¥0.8/M tokens 输入，被动监听 ~¥9/月；Claude Vision / GPT-4o 备选）
+* Tauri Rust 端 `CGDisplayCreateImage` + 全局热键
+* 像素差 64x64 预过滤
+* 隐私黑名单（app name / window title）
+* WS 协议加 `screen` 上行 + `screen_comment` 下行
+* proactive engine 复用：屏幕事件作为新 trigger（"IDE 卡同一行 5 分钟" / "切应用频率异常"）
+
+工程量：2-3 天 / 8-10 commits / **单独 session 大 chunk**，不合并。
+
+---
+
+### 远期（不本次 session）
+
+* v5-D autodl 部署 + 子 agent 隔离
+* v5-T1 GPT-SoVITS 后端接通
+* v5-T2 训练自定义音色
+* v3-G chunk 5 per-trigger aggregator 真接通（lunch 饮食 memory / bedtime 今日 review）
+* v3-H chunk 1.x 增强（add_to_playlist 暴露 / like_current 两步保证）
 
 ---
 
