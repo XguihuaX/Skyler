@@ -471,6 +471,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         finally:
             await mcp_client_module.shutdown_clients()
 
+    # v3.5 chunk 6b：优雅停 mpv 子进程（如启动过）
+    try:
+        from backend.integrations.mpv_player import shutdown_player
+        await shutdown_player()
+    except Exception as exc:
+        logger.warning("[mpv] shutdown_player failed: %s", exc)
+
     await cron_scheduler.shutdown()
     await scheduler.stop()
 

@@ -293,6 +293,40 @@ class NeteaseClient:
 
     # -- URL scheme ---------------------------------------------------------
 
+    # v3.5 chunk 6b：返回可直接喂 mpv 的 song 播放 URL。
+    # 走 /song/enhance/player/url/v1（NCM web 网页播放器同款 endpoint），
+    # br 默认 320kbps（webdav 上限；VIP / 大会员 trial 时 br 会被自动 clamp）。
+    # 试听片段（VIP / 付费下架歌曲）API 返 freeTrialInfo 字段 + url 仍有效但
+    # 只有前 ~30s。is_trial 由上层 normalize 后透传给 capability，让 LLM 提示用户。
+    def get_song_url(self, song_id: int, br: int = 320000) -> dict:
+        """拿 song 直链播放 URL（用于 mpv 本地播放）。
+
+        返回 ``{url, br, type, size, is_trial, song_id}``。URL 失效（VIP 下架 /
+        地区限制）时 ``url`` 会是空字符串或 None —— 调用方需检查后做 fallback。
+        """
+        sid = int(song_id)
+        payload = {"ids": json.dumps([sid]), "br": int(br)}
+        data = self._weapi_post("/song/enhance/player/url/v1", payload)
+        items = data.get("data") or []
+        if not items:
+            return {
+                "song_id": sid,
+                "url": "",
+                "is_trial": False,
+                "note": "no data returned",
+            }
+        item = items[0] or {}
+        free_trial = item.get("freeTrialInfo") or item.get("freeTimeTrialPrivilege")
+        return {
+            "song_id": sid,
+            "url": item.get("url") or "",
+            "br": item.get("br"),
+            "type": item.get("type"),
+            "size": item.get("size"),
+            "is_trial": bool(free_trial),
+            "expires_at_hint": item.get("expi"),
+        }
+
     @staticmethod
     def play_url_scheme(kind: str, item_id: int) -> str:
         """拼装 ``orpheus://`` URL scheme。
