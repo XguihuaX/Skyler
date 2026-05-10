@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **状态（2026-05）**：v3 ✅ + v3.5 chunk 5 ✅ + chunk 7 ✅ 完成。chunk 7 兑现「个人乐高底盘」承诺——两条 skill 集成姿态全部上线：姿态 A（本地 capability，demo：docx via python-docx + SAFE 沙箱 + path traversal 防御）+ 姿态 B（MCP server 一键启用，demo：``@notionhq/notion-mcp-server`` 官方包 + UI 凭证写 ``mcp_credentials`` 表，新增 ``mcp_client_state`` 表持久化 enabled override）。33+ capabilities、6 proactive triggers、595+ 测试 / 0 回归、4 套抽象——CapabilityRegistry / ProactiveTrigger ABC / 双向 MCP / SAFE path util。接下来：chunk 6 媒体接入收尾（B 站 + 网易云自解码 + 小红书 URL 解析）/ chunk 8 v4 屏幕感知（VLM 抽象 + Tauri 截图 + 隐私黑名单）。
+> **状态（2026-05）**：v3 ✅ + v3.5 chunk 5 ✅ + chunk 7 ✅ + chunk 6a ✅ 完成。chunk 6a 上线 11 个 B 站 capability，杀手 use case ``bilibili.get_subtitles`` + LLM → 视频总结端到端跑通（用户「帮我总结这个 B 站视频」自动闭环）。6 个无 cookie + 5 个 cookie capability（cookie 走 ``.env BILIBILI_SESSDATA``，与 netease ``MUSIC_U`` 同 pattern）。44+ capabilities、6 proactive triggers、700+ 测试 / 0 回归、4 套抽象——CapabilityRegistry / ProactiveTrigger ABC / 双向 MCP / SAFE path util。接下来：chunk 6b 网易云自解码 + chunk 6c 小红书 URL 解析 / chunk 8 v4 屏幕感知（VLM 抽象 + Tauri 截图 + 隐私黑名单）。
 >
 > *项目原名 MomoOS，2026-05 重命名为 Skyler。*
 
@@ -329,7 +329,8 @@ Skyler 站在两个项目的肩膀上：
 | v3-G：生活 & 工具层（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 |
 | v3-G'：TTS UI + cosyvoice instruct emotion | ✅ 完成（5 commit + patch，2026-05-06）—— SSML 路径撤回，instruct 路径正典 |
 | v3.5 chunk 5：视觉跃迁包（角色背景层 + Tauri 启动 splash video） | ✅ 完成（2026-05-11，4 commit）|
-| v3.5 chunk 6：媒体接入收尾（B 站 capability + 网易云 mpv 自解码重做 + 小红书被动 URL 解析） | 📋 计划中 |
+| v3.5 chunk 6a：B 站接入（11 capability + AI 字幕总结） | ✅ 完成（2026-05-11，4 commit）—— ``bilibili-api-python>=17.4`` 社区 fork 包 ``backend/integrations/bilibili.py`` (11 方法 + 三档健康检查 + 风控 code 映射) + ``backend/capabilities/bilibili.py`` (11 个 ``@register_capability``)；6 无 cookie + 5 cookie capability；``get_subtitles`` ⭐ 杀手 use case（B 站 2024-2025 风控收紧字幕 API，spec pivot 移到 cookie 组）；红线：投币 / 三连 / 评论 / 弹幕 / 下载；104 新测试 / 0 回归（704/704 across 22 suites）；详见 ``docs/bilibili-setup.md`` |
+| v3.5 chunk 6b/6c：网易云 mpv 自解码重做 + 小红书被动 URL 解析 | 📋 计划中 |
 | v3.5 chunk 7：Skill 集成 demo（姿态 A docx capability + 姿态 B Notion MCP server） | ✅ 完成（2026-05-11，5 commit）—— 姿态 A docx 3 capability + ``backend/utils/safe_path.py`` 集中防御；姿态 B 扩展 chunk 1.5 ``backend/mcp/client.py``（``enable``/``disable``/DB env 注入）+ ``mcp_credentials`` / ``mcp_client_state`` 双表 + ``ExtensionsSection.tsx`` UI + ``@notionhq/notion-mcp-server`` 官方包；65 新测试 / 0 回归（556/556 across 16 suites）。新加 skill 参 ``docs/skills-extension-guide.md`` |
 | v3.5 chunk 8：v4 屏幕感知（VLM 抽象 + Tauri 截图 + 像素差预过滤 + 隐私黑名单） | 📋 计划中 |
 | v4：屏幕感知 | 📋 计划中 |

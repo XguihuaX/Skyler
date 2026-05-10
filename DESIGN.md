@@ -2136,6 +2136,101 @@ makenotion/notion-mcp-server）；env_required ``NOTION_API_KEY``；
 
 ---
 
+## 十五之I、B 站接入（v3.5 chunk 6a 起）
+
+### 姿态选择
+
+姿态 A 本地 capability（与 chunk 1 netease / chunk 7 docx 同架构）：
+
+* ``backend/integrations/bilibili.py`` —— 包 ``bilibili-api-python``（Nemo2011
+  社区 fork，v17.4.1 / 2025-12 stable）的 11 个 async 方法
+* ``backend/capabilities/bilibili.py`` —— 11 个 ``@register_capability``，
+  description 走 chunk 1.7 verbatim 强引导
+
+**为何不走姿态 B（MCP server）**：B 站官方没有 MCP server，社区也没成熟实
+现；自己包一层本地 capability 控制力更强（错误归一化 / 风控映射 / 字幕选
+优策略都可定制）。
+
+### 11 capability 全景
+
+| Capability | Cookie | 用途 |
+|---|---|---|
+| ``bilibili.search_video`` | 否 | 关键词搜视频 |
+| ``bilibili.get_video_info`` | 否 | BV/AV 号 → 元数据（看到 URL 默认调）|
+| ``bilibili.search_user`` | 否 | 搜 UP 主 |
+| ``bilibili.get_user_videos`` | 否 | UP 主投稿列表 |
+| ``bilibili.hot_videos`` | 否 | 首页热门 |
+| ``bilibili.get_ranking`` | 否 | 排行榜 |
+| ``bilibili.get_subtitles`` ⭐ | **是** | 拿字幕 → LLM 总结（杀手 use case） |
+| ``bilibili.get_my_history`` | **是** | 我的观看历史 |
+| ``bilibili.get_my_followings`` | **是** | 我关注的人 |
+| ``bilibili.get_later_watch`` | **是** | 稍后再看 |
+| ``bilibili.get_favorites`` | **是** | 我的收藏夹 |
+
+### 字幕策略 + 风控 audit
+
+**Spec pivot**：原计划 ``get_subtitles`` 无 cookie。Audit 实测 B 站 2024-2025
+风控收紧：
+
+* 库 ``Video.get_subtitle()`` 直接 ``raise CredentialNoSessdataException``
+* 绕过库直接 hit ``/x/player/v2`` 公开端点也返 ``subtitles: []`` 空列表
+  （无登录态时字幕被风控隐藏）
+
+实施方案：``get_subtitles`` 归类为 cookie-required。未配 SESSDATA 时返
+``cookie_required`` + ``hint`` 引导用户去 ``docs/bilibili-setup.md``。
+
+**字幕选优算法**（``_choose_subtitle``）：
+
+1. AI 字幕（``ai_type == 1`` 且 ``lan`` 含 ``zh``）—— 多数 B 站视频都有，
+   质量足够 LLM 总结
+2. UP 主上传中文字幕（``ai_type == 0`` 且 ``lan`` 含 ``zh``）
+3. 列表第一项 fallback
+4. 都没有 → ``source: 'none'`` + ``subtitle_text: ''``，让 LLM 自己回话
+   "这个视频没字幕"，**不允许瞎编内容**（system prompt 强引导）
+
+### 风控 code → 友好 error 映射
+
+| B 站 code | error key | 触发场景 |
+|---|---|---|
+| -352 | ``risk_control`` | 通用风控（频繁请求） |
+| -412, -509 | ``rate_limited`` | 限流 |
+| -403 | ``forbidden`` | 权限拒 |
+| -404, 62002 | ``not_found`` / ``video_unavailable`` | 视频删除 / 被封 |
+
+### 健康检查三档
+
+``health_check()`` 返 ``{status, library_present, cookie_configured,
+connectivity, ...}``：
+
+* **healthy**：lib 装了 + cookie 配了 + connectivity ok
+* **warn**：lib 装了 + (cookie 未配 OR connectivity fail) —— 仍能用部分
+  capability，UI 黄色徽章 + 引导
+* **error**：lib 没装 —— UI 红色徽章 + ``fix: pip install ...``
+
+### Cookie 走 .env vs DB（与 chunk 7 区分）
+
+| 来源 | 凭证存哪 | 适用 |
+|---|---|---|
+| chunk 7 MCP server | DB ``mcp_credentials`` 表，UI 输入 | 子进程，UI 可视化管理多个 server |
+| chunk 6a B 站 / chunk 1 网易云 | ``.env`` 环境变量 | 本地 capability，单用户单 cookie，重启偶尔重新粘 |
+
+未来若需要 UI 管理 B 站 / 网易云 cookie 也走 DB，可以新加
+``capability_credentials`` 表复用同 pattern；当前 MVP 不做。
+
+### 红线（chunk 6a 工程约定）
+
+不实现以下写 / 自动化操作（社区礼仪 + 风控敏感 + 用户授权范围明确）：
+
+* 投币 / 一键三连 / 点赞 / 收藏
+* 自动评论 / 弹幕发送
+* 视频下载 / 录屏
+* 关注 / 取关 / 私信
+* 直播弹幕监听 / 自动应援
+
+未来用户明确同意后可单独 chunk 加，但默认拒绝。
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建

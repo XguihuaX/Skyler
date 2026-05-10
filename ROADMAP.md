@@ -31,7 +31,8 @@
 | **v5-T1：GPT-SoVITS 后端接通（依赖 v5-D）** | 📋 远期 | 0% |
 | **v5-T2：训练自定义 voice（CosyVoice fine-tune + SoVITS 模型）** | 📋 远期 | 0% |
 | **v3.5 chunk 5：视觉跃迁包（背景层 + splash video）** | ✅ 完成（4 commit，2026-05-11） | 100% |
-| **v3.5 chunk 6：媒体接入收尾（B 站 / 网易云重做 / 小红书 URL 解析）** | 📋 计划中 | 0% |
+| **v3.5 chunk 6a：B 站接入（11 capability + 字幕总结）** | ✅ 完成（4 commit，2026-05-11） | 100% |
+| **v3.5 chunk 6b/6c：网易云重做 + 小红书 URL 解析** | 📋 计划中 | 0% |
 | **v3.5 chunk 7：Skill 集成 demo（docx capability + Notion MCP）** | ✅ 完成（5 commit，2026-05-11） | 100% |
 | **v3.5 chunk 8：v4 屏幕感知（VLM 抽象 + Tauri 截图 + 像素差 + 黑名单）** | 📋 计划中 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |
@@ -939,14 +940,29 @@ DESIGN §13 已有完整设计。要点：
 
 ### chunk 6 — 媒体接入收尾包（v3-H chunk 2 系列）📋
 
-#### 6a B 站接入
+#### 6a B 站接入 ✅ 完成 2026-05-11
 
-* 用 `bilibili-api-python`（成熟社区库）
-* 7 个无 cookie capability：search_video / get_video_info / search_user / get_user_videos / hot_videos / get_ranking / get_subtitles
-* 4 个 cookie capability：get_my_history / get_my_followings / get_later_watch / get_favorites
-* **杀手 use case**：`get_subtitles` + LLM → 视频内容总结
-* 不做：直播弹幕 / 评论自动化 / 视频下载 / 投币
-* 工程量：~1 天 / 5 commits
+* `bilibili-api-python>=17.4`（Nemo2011 社区 fork，2025-12 stable +
+  2026-01 pre-release，活跃维护）
+* **6 个无 cookie capability**：search_video / get_video_info /
+  search_user / get_user_videos / hot_videos / get_ranking
+* **5 个 cookie capability**（spec pivot：原计划 4+1，audit B 站 2024-2025
+  风控收紧字幕 API 后 `get_subtitles` 也归到 cookie 组）：
+  get_subtitles ⭐ / get_my_history / get_my_followings / get_later_watch /
+  get_favorites
+* **杀手 use case**：`get_subtitles` + LLM → 视频内容总结（用户「帮我
+  总结这个 B 站视频」自动闭环）
+* 红线：投币 / 三连 / 评论 / 弹幕 / 下载 / 关注（DESIGN §十五之I 明文）
+* SESSDATA cookie 走 `.env`（与 chunk 1 NETEASE_MUSIC_U 同 pattern，
+  不走 chunk 7 mcp_credentials 表 —— 本地 capability 非 MCP server）
+
+##### 交付清单
+
+* `8db9087` feat(integrations) — wrapper + 11 methods + 健康检查三档
+* `3a0855d` feat(capabilities) — 11 @register_capability + prompt 引导 + .env
+* `c87cbf9` test(chunk6a) — 104 cases (38 integration + 66 capabilities) 全 mock
+* `<docs>`  docs(chunk6a) — DESIGN §十五之I + ROADMAP + bilibili-setup.md +
+  Tech Debt 2 条
 
 #### 6b 网易云自动播放重做（方向 B 自解码）
 
@@ -1133,6 +1149,30 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
   Windows Credential Manager / GNOME Keyring）或引入 master password 派生
   加密。touchpoint：``backend/mcp/credentials.py`` ``get_env`` / ``upsert``
   内部加 cipher layer，外部 API 不变。
+
+### 字幕 / 长上下文
+- **超长 B 站字幕分段总结**（v3.5 chunk 6a 衍生 backlog）：当前
+  ``bilibili.get_subtitles`` 返完整字幕全文，不截断。长视频（> 1 小时 /
+  字幕 > 30k 字符）会吃掉 LLM context 大量 token。MVP 接受——qwen3.6-plus
+  / claude / deepseek 都有 200k+ context；B 站常见 5-30 分钟视频字幕
+  1-3k 字够安全。升级路径：滑动窗口分段 → 各段单独总结 → 终极合并总结
+  （map-reduce 风格）。touchpoint：``backend/integrations/bilibili.py``
+  ``get_subtitles`` 末尾加 ``_segment_and_summarize`` 可选 wrapper。
+
+### 配置架构
+- **``config.yaml`` 双写源**（v3.5 chunk 7 audit 时发现的 latent 风险）：
+  前端 SettingsPanel 通过 ``setConfigField`` 写 ``config.yaml`` 文件
+  （``tts.enabled`` / ``memory.long_term_enabled`` / ``search.enable_search``
+  等），git HEAD 不感知；用户改 settings 后 ``git status`` 会显示 dirty。
+  建议拆分：
+  - **静态配置**（``mcp_servers`` / ``mcp_clients`` / ``tts.cosyvoice.voices``
+    / ``proactive.triggers`` 的 cron 表达式 / scheduler.timezone）→ git
+    版本控制
+  - **运行时设置**（``tts.enabled`` / ``memory.*_enabled`` / 单用户偏好）
+    → DB 表存（参照 chunk 7 ``mcp_client_state`` pattern）
+  与 ``characters`` 双源（yaml + DB）同性质，v4 Scheme C 一起整改：删 yaml
+  运行时段、DB 单源、``setConfigField`` 改 DB-backed、git ``config.yaml``
+  锁住为模板。
 
 ---
 
