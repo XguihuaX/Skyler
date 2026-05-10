@@ -109,6 +109,7 @@ import backend.capabilities.clipboard         # noqa: F401, E402  v3-G chunk 3a
 import backend.capabilities.character_state   # noqa: F401, E402  v3-G chunk 3b
 import backend.capabilities.docx_ops          # noqa: F401, E402  v3.5 chunk 7 (姿态 A demo)
 import backend.capabilities.bilibili          # noqa: F401, E402  v3.5 chunk 6a (B 站接入)
+import backend.capabilities.netease_playback  # noqa: F401, E402  v3.5 chunk 6b (mpv 自解码)
 # v3-G chunk 4 Part C — proactive trigger pack（导入触发 register_stage2 副作用）
 import backend.proactive.triggers.lunch_call    # noqa: F401, E402
 import backend.proactive.triggers.dinner_call   # noqa: F401, E402
