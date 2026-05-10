@@ -29,3 +29,5 @@ pycryptodome>=3.20
 # v3-G chunk 3a — 剪贴板助手。AppKit (NSPasteboard) 在 macOS 上是 EventKit 的
 # 同 pyobjc 包 transitive 依赖，无需额外声明；非 macOS 走 pyperclip fallback。
 pyperclip>=1.8
+# v3.5 chunk 7 — docx capability（python-docx 处理 .docx 文档）
+python-docx>=1.0
