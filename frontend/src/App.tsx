@@ -6,6 +6,7 @@ import Widget from './modes/Widget';
 import Panel from './modes/Panel';
 import NotificationToast from './components/NotificationToast';
 import CharacterStatePanel from './components/CharacterStatePanel';
+import SplashOverlay from './components/SplashOverlay';
 import { AppApiContext, AppApi } from './contexts/appApi';
 import { applyModeWindowProps, fetchConfig } from './lib/window';
 import {
@@ -23,6 +24,10 @@ export { useAppApi } from './contexts/appApi';
 function App() {
   const mode = useAppStore((s) => s.mode);
   const [warming, setWarming] = useState(true);
+  // v3.5 chunk 5b：splash 完成前主视图 opacity=0；splash silent-skip 时
+  // SplashOverlay 内部立即 onFinished()，所以这里默认 false（"未完成"）但
+  // 几乎不会被用户察觉。
+  const [splashDone, setSplashDone] = useState(false);
 
   // V2.5-D — sync the Tauri window size to the persisted mode on first paint.
   // The store's `mode` is hydrated from localStorage at module init, but
@@ -168,7 +173,15 @@ function App() {
 
   return (
     <AppApiContext.Provider value={api}>
-      <div className="w-screen h-screen bg-transparent overflow-hidden relative">
+      <div
+        className="w-screen h-screen bg-transparent overflow-hidden relative"
+        style={{
+          // v3.5 chunk 5b：splash 期间主视图 fade-out；splash 跳过后 300ms 内
+          // fade-in。silent-skip 时几乎无感（splashDone 在 mount 同 tick 翻 true）。
+          opacity: splashDone ? 1 : 0,
+          transition: 'opacity 300ms ease-out',
+        }}
+      >
         {/* Widget-only top drag strip. Panel mode has its own TopBar (with
             data-tauri-drag-region) flush to the window top, so a global strip
             there would cover the close/minimize buttons. */}
@@ -206,6 +219,9 @@ function App() {
           </div>
         )}
       </div>
+      {/* v3.5 chunk 5b：splash overlay。z-index 高于一切（10000），自己管
+          自己的存在感（disabled / 404 → mount 同 tick 立即 onFinished）。 */}
+      {!splashDone && <SplashOverlay onFinished={() => setSplashDone(true)} />}
     </AppApiContext.Provider>
   );
 }

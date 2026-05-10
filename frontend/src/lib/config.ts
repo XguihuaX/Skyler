@@ -110,6 +110,9 @@ export interface CharacterRow {
   emotion_map_json:  string | null;
   motion_map_json:   string | null;
   hit_area_map_json: string | null;
+  // v3.5 chunk 5a: per-character 背景层 URL（image / video）。null = 用
+  // CharacterView 原 fallback 链（Live2D → 静态 jpeg），完全兼容旧角色。
+  background_path:   string | null;
   created_at: string | null;
 }
 
@@ -158,6 +161,8 @@ export async function createCharacter(body: {
   emotion_map_json?: string | null;
   motion_map_json?: string | null;
   hit_area_map_json?: string | null;
+  // v3.5 chunk 5a
+  background_path?: string | null;
 }): Promise<CharacterRow> {
   const res = await fetch(`${BACKEND_BASE}/api/characters/create`, {
     method: 'POST',
@@ -187,6 +192,8 @@ export async function patchCharacter(
     emotion_map_json?: string | null;
     motion_map_json?: string | null;
     hit_area_map_json?: string | null;
+    // v3.5 chunk 5a：null 表示清除，字符串覆盖
+    background_path?: string | null;
   },
 ): Promise<CharacterRow> {
   const res = await fetch(`${BACKEND_BASE}/api/characters/${id}`, {

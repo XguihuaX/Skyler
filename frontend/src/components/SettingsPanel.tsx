@@ -18,6 +18,9 @@ const LS_RECORDING_MODE   = 'momoos.recordingMode';
 const LS_VAD_THRESHOLD    = 'momoos.vadThreshold';
 const LS_SILENCE_TIMEOUT  = 'momoos.silenceTimeoutMs';   // stored in seconds
 const LS_MUTE_SPEAKING    = 'momoos.muteWhileSpeaking';
+// v3.5 chunk 5b：启动入场视频开关。default ON；false → SplashOverlay
+// mount 时立即 onFinished()，主视图无感。
+const LS_SPLASH_ENABLED   = 'momoos.splashEnabled';
 
 interface ToggleProps {
   label: string;
@@ -1321,6 +1324,10 @@ export default function SettingsPanel() {
   const defaultUserId      = useAppStore((s) => s.defaultUserId);
   const currentCharacterId = useAppStore((s) => s.currentCharacterId);
 
+  // v3.5 chunk 5b: splash 开关 —— 纯 localStorage（不走后端 config），下次启
+  // 动生效。当前会话不需要 reactivate，所以本组件只持有 setter。
+  const [splashEnabled, setSplashEnabled] = useState<boolean>(true);
+
   const recordingMode      = useAppStore((s) => s.recordingMode);
   const setRecordingMode   = useAppStore((s) => s.setRecordingMode);
   const vadThreshold       = useAppStore((s) => s.vadThreshold);
@@ -1364,10 +1371,21 @@ export default function SettingsPanel() {
       if (ms === 'true' || ms === 'false') {
         useAppStore.getState().setMuteWhileSpeaking(ms === 'true');
       }
+
+      // v3.5 chunk 5b：hydrate splash toggle，default true
+      const se = localStorage.getItem(LS_SPLASH_ENABLED);
+      if (se === 'true' || se === 'false') {
+        setSplashEnabled(se === 'true');
+      }
     } catch (e) {
       console.warn('[SettingsPanel] localStorage hydrate failed:', e);
     }
   }, []);
+
+  const onSplashEnabledChange = (v: boolean) => {
+    setSplashEnabled(v);
+    try { localStorage.setItem(LS_SPLASH_ENABLED, String(v)); } catch {/* ignore */}
+  };
 
   const remoteToggle = (
     field: 'longTermEnabled' | 'profileEnabled' | 'enableSearch' | 'ttsEnabled',
@@ -1497,6 +1515,22 @@ export default function SettingsPanel() {
           value={ttsEnabled}
           onChange={(next) => remoteToggle('ttsEnabled', 'tts.enabled', next, '启用 TTS')}
         />
+      </Section>
+
+      {/* v3.5 chunk 5b — 启动入场视频开关 */}
+      <Section title="启动">
+        <Toggle
+          label="启动播放入场视频"
+          value={splashEnabled}
+          onChange={onSplashEnabledChange}
+        />
+        <div
+          className="text-xs py-1.5"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          把 intro.mp4 放进 frontend/public/splash/ 目录，启动时自动播放（点击 / 按键跳过）。
+          文件不存在则 silent skip。
+        </div>
       </Section>
 
       <MemorySection
