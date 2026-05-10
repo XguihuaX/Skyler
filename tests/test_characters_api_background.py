@@ -41,11 +41,15 @@ def _build_app() -> FastAPI:
 async def _setup_db():
     await init_db()
     await run_migration()
-    # 清掉本测试段的残留
+    # 清掉本测试段的残留——按 id 范围 + 名字前缀 _bg_test_* 双清
+    # （test_create_with_background 用 POST 让 DB 分配 id，可能落在 700+ 段外）
     async with engine.begin() as conn:
         await conn.execute(text(
             "DELETE FROM characters WHERE id >= :i AND id < :j"
         ), {"i": TEST_ID_START, "j": TEST_ID_START + 100})
+        await conn.execute(text(
+            "DELETE FROM characters WHERE name LIKE '_bg_test_%'"
+        ))
 
 
 async def _cleanup_db():
@@ -53,6 +57,9 @@ async def _cleanup_db():
         await conn.execute(text(
             "DELETE FROM characters WHERE id >= :i AND id < :j"
         ), {"i": TEST_ID_START, "j": TEST_ID_START + 100})
+        await conn.execute(text(
+            "DELETE FROM characters WHERE name LIKE '_bg_test_%'"
+        ))
 
 
 # ---------------------------------------------------------------------------

@@ -185,7 +185,7 @@ async def test_init_failure_non_blocking():
          patch.object(mcp_client, "_connect_one", side_effect=_fake_connect_one):
         await mcp_client.init_clients_from_config()
 
-    statuses = {s["name"]: s for s in mcp_client.list_status()}
+    statuses = {s["name"]: s for s in await mcp_client.list_status()}
     check("ok-server connected", statuses["ok-server"]["connected"] is True)
     check("ok-server no last_error", statuses["ok-server"]["last_error"] is None)
     check("broken not connected", statuses["broken"]["connected"] is False)
@@ -247,12 +247,15 @@ async def test_list_status_shape():
     handle.tool_count = 5
     mcp_client._clients["x"] = handle
 
-    statuses = mcp_client.list_status()
+    statuses = await mcp_client.list_status()
     check("returns list of dict", isinstance(statuses, list) and len(statuses) == 1)
     s = statuses[0]
+    # v3.5 chunk 7：env_required / missing_credentials 字段新增
     expected_keys = {"name", "description", "enabled", "connected", "transport",
-                     "tool_count", "expose_via_server", "last_error"}
-    check("DTO keys complete", set(s.keys()) == expected_keys)
+                     "tool_count", "expose_via_server", "last_error",
+                     "env_required", "missing_credentials"}
+    check("DTO keys complete", set(s.keys()) == expected_keys,
+          f"got {set(s.keys())!r}")
     check("connected=True", s["connected"] is True)
     check("transport=stdio", s["transport"] == "stdio")
     check("expose_via_server=True", s["expose_via_server"] is True)
