@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **状态（2026-05）**：v3 ✅ 完成（v3-A 到 v3-H chunk 1 全量；30+ capabilities、6 proactive triggers、500+ 测试 / 0 回归、3 套抽象——CapabilityRegistry / ProactiveTrigger ABC / 双向 MCP——支撑全局）。接下来：chunk 5 视觉跃迁包（角色背景层 + 启动 splash video）/ chunk 6 媒体接入收尾（B 站 + 网易云自解码 + 小红书 URL 解析）/ chunk 7 skill 集成 demo（docx capability + Notion MCP server registry）/ chunk 8 v4 屏幕感知（VLM 抽象 + Tauri 截图 + 隐私黑名单）。
+> **状态（2026-05）**：v3 ✅ + v3.5 chunk 5 ✅ 完成（角色背景层 per-character + 启动 ``intro.mp4`` splash video，文件缺失 silent skip）。v3-A 到 v3-H chunk 1 + v3.5 chunk 5 全量；30+ capabilities、6 proactive triggers、530+ 测试 / 0 回归、3 套抽象——CapabilityRegistry / ProactiveTrigger ABC / 双向 MCP——支撑全局。接下来：chunk 6 媒体接入收尾（B 站 + 网易云自解码 + 小红书 URL 解析）/ chunk 7 skill 集成 demo（docx capability + Notion MCP server registry）/ chunk 8 v4 屏幕感知（VLM 抽象 + Tauri 截图 + 隐私黑名单）。
 >
 > *项目原名 MomoOS，2026-05 重命名为 Skyler。*
 
@@ -328,7 +328,7 @@ Skyler 站在两个项目的肩膀上：
 | v3-F'：主动对话 + 时间感知 | 📋 计划中 |
 | v3-G：生活 & 工具层（剪贴板 / 简报 / cron / 成长系统） | 📋 计划中 |
 | v3-G'：TTS UI + cosyvoice instruct emotion | ✅ 完成（5 commit + patch，2026-05-06）—— SSML 路径撤回，instruct 路径正典 |
-| v3.5 chunk 5：视觉跃迁包（角色背景层 + Tauri 启动 splash video） | 📋 计划中 |
+| v3.5 chunk 5：视觉跃迁包（角色背景层 + Tauri 启动 splash video） | ✅ 完成（2026-05-11，4 commit）|
 | v3.5 chunk 6：媒体接入收尾（B 站 capability + 网易云 mpv 自解码重做 + 小红书被动 URL 解析） | 📋 计划中 |
 | v3.5 chunk 7：Skill 集成 demo（姿态 A docx capability + 姿态 B Notion MCP server） | 📋 计划中 |
 | v3.5 chunk 8：v4 屏幕感知（VLM 抽象 + Tauri 截图 + 像素差预过滤 + 隐私黑名单） | 📋 计划中 |

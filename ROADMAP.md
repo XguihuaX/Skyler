@@ -30,7 +30,7 @@
 | **v5-D：autodl 部署 + 子 agent 隔离** | 📋 远期 | 0% |
 | **v5-T1：GPT-SoVITS 后端接通（依赖 v5-D）** | 📋 远期 | 0% |
 | **v5-T2：训练自定义 voice（CosyVoice fine-tune + SoVITS 模型）** | 📋 远期 | 0% |
-| **v3.5 chunk 5：视觉跃迁包（背景层 + splash video）** | 📋 计划中 | 0% |
+| **v3.5 chunk 5：视觉跃迁包（背景层 + splash video）** | ✅ 完成（4 commit，2026-05-11） | 100% |
 | **v3.5 chunk 6：媒体接入收尾（B 站 / 网易云重做 / 小红书 URL 解析）** | 📋 计划中 | 0% |
 | **v3.5 chunk 7：Skill 集成 demo（docx capability + Notion MCP）** | 📋 计划中 | 0% |
 | **v3.5 chunk 8：v4 屏幕感知（VLM 抽象 + Tauri 截图 + 像素差 + 黑名单）** | 📋 计划中 | 0% |
@@ -894,31 +894,46 @@ DESIGN §13 已有完整设计。要点：
 
 > v3 封盘后没有"必须立刻做"的事，全是"想做 vs 想做"。下面按用户感知 × 工程量 × 依赖关系排序。每个 chunk 之间无强依赖，**用户可调整顺序**。
 
-### chunk 5 — 视觉跃迁包（背景层 + splash video）📋
+### chunk 5 — 视觉跃迁包（背景层 + splash video）✅ 完成 2026-05-11
 
 **主题**：Skyler 的"看板娘陪伴"视觉感再升一档。
 
-#### 5a Live2D 角色背景层（per-character + 多媒体）
+#### 5a Live2D 角色背景层（per-character + 多媒体）✅
 
-* 当前：`CharacterView.tsx` 满铺 `<img src={character.jpeg} />` 静态图，所有角色共用
-* 目标：
-  - DB `characters` 表加 `background_path` VARCHAR
-  - frontend 按后缀分发：`.jpg/.png/.webp` → `<img>` / `.mp4/.webm` → `<video autoplay loop muted playsinline>`
-  - asset 目录 `frontend/public/backgrounds/<slug>/` 走 `.gitignore` IP 隔离 pattern（同 live2d/）
-  - SettingsPanel CharacterPanel 加 [背景] 字段 + 预览
-  - migration `v3_5_chunk5a_character_background.py`
-* 工程量：~半天 / 4-6 commits
+* DB：``characters.background_path TEXT NULL``，幂等迁移
+  ``v3_5_chunk5a_character_background.py``
+* Scanner：``backend/services/backgrounds_scanner.py`` + ``GET
+  /api/backgrounds``，与 ``live2d_scanner`` 完全对称（``.absolute()`` 不
+  ``.resolve()``，IP 资产 symlink 兼容）
+* CharacterView：背景层 ``z-0``（``<img>``/``<video>`` 按后缀分发），
+  Live2D canvas ``z-10`` 在背景之上；onError 静默回退原 fallback 链
+* CharacterPanel：[背景层] 下拉，第一项 "(无)" → 落库 NULL；右侧
+  120×80 实时预览
+* ``.gitignore`` IP 隔离 pattern 复用 ``live2d/``
 
-#### 5b 启动入场 splash video
+#### 5b 启动入场 splash video ✅
 
-* 用户离线用 Grok / Sora / 其他工具生成 mp4/webm，丢进 `frontend/public/splash/intro.mp4`
-* **Skyler 工程不集成 video 生成 API**——只播放
-* Tauri 启动 → 全屏播放 → 结束 / 任意点击跳过 → fade in 主视图
-* 文件不存在则 silent skip
-* Settings 加"启动播放入场视频" toggle
-* 工程量：~半天 / 3-4 commits
+* 用户离线用 Grok / Sora 生成 ``intro.mp4`` 丢进
+  ``frontend/public/splash/``——Skyler 工程**不集成**生成 API
+* ``SplashOverlay`` 组件：localStorage gate → fetch HEAD probe → 全屏
+  ``<video>`` → onEnded/click/keydown/onError 任一 fade 300ms 跳过
+* 文件不存在 / disabled → silent skip，控制台无 error
+* App.tsx 主视图 opacity 受 splashDone 控制，fade-in 300ms
+* SettingsPanel [启动] section 加 [启动播放入场视频] toggle
 
-**5a + 5b 合一 cc-task**：共用 video 播放基础 + asset 管理。
+#### 交付清单
+
+* `2534eb3` feat(chunk5a) — backend (migration + scanner API + .gitignore)
+* `b07fe1d` feat(chunk5) — frontend (CharacterView dispatch + Panel UI + SplashOverlay)
+* `1ef5c8d` test(chunk5) — 38 cases (5 migration + 21 scanner/API + 12 PATCH)
+* `<docs>`  docs(chunk5) — DESIGN §十五之G + ROADMAP + README
+
+测试 0 回归（character_state 19/19 · state_update 50/50 · tool_call_resilience
+65/65 · proactive_engine 21/21 · morning_briefing 30/30 · tts_strip_fallback
+57/57）。
+
+**5a + 5b 同 cc-task**：共用 video 播放基础 + asset 管理 + 同一对 IP 隔离
+``.gitignore`` 段。
 
 ---
 
