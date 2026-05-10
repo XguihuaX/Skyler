@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/status-v3--WIP-yellow)
 
-> **状态（2026-05）**：v3 ✅ + v3.5 chunk 5 ✅ 完成（角色背景层 per-character + 启动 ``intro.mp4`` splash video，文件缺失 silent skip）。v3-A 到 v3-H chunk 1 + v3.5 chunk 5 全量；30+ capabilities、6 proactive triggers、530+ 测试 / 0 回归、3 套抽象——CapabilityRegistry / ProactiveTrigger ABC / 双向 MCP——支撑全局。接下来：chunk 6 媒体接入收尾（B 站 + 网易云自解码 + 小红书 URL 解析）/ chunk 7 skill 集成 demo（docx capability + Notion MCP server registry）/ chunk 8 v4 屏幕感知（VLM 抽象 + Tauri 截图 + 隐私黑名单）。
+> **状态（2026-05）**：v3 ✅ + v3.5 chunk 5 ✅ + chunk 7 ✅ 完成。chunk 7 兑现「个人乐高底盘」承诺——两条 skill 集成姿态全部上线：姿态 A（本地 capability，demo：docx via python-docx + SAFE 沙箱 + path traversal 防御）+ 姿态 B（MCP server 一键启用，demo：``@notionhq/notion-mcp-server`` 官方包 + UI 凭证写 ``mcp_credentials`` 表，新增 ``mcp_client_state`` 表持久化 enabled override）。33+ capabilities、6 proactive triggers、595+ 测试 / 0 回归、4 套抽象——CapabilityRegistry / ProactiveTrigger ABC / 双向 MCP / SAFE path util。接下来：chunk 6 媒体接入收尾（B 站 + 网易云自解码 + 小红书 URL 解析）/ chunk 8 v4 屏幕感知（VLM 抽象 + Tauri 截图 + 隐私黑名单）。
 >
 > *项目原名 MomoOS，2026-05 重命名为 Skyler。*
 
@@ -330,7 +330,7 @@ Skyler 站在两个项目的肩膀上：
 | v3-G'：TTS UI + cosyvoice instruct emotion | ✅ 完成（5 commit + patch，2026-05-06）—— SSML 路径撤回，instruct 路径正典 |
 | v3.5 chunk 5：视觉跃迁包（角色背景层 + Tauri 启动 splash video） | ✅ 完成（2026-05-11，4 commit）|
 | v3.5 chunk 6：媒体接入收尾（B 站 capability + 网易云 mpv 自解码重做 + 小红书被动 URL 解析） | 📋 计划中 |
-| v3.5 chunk 7：Skill 集成 demo（姿态 A docx capability + 姿态 B Notion MCP server） | 📋 计划中 |
+| v3.5 chunk 7：Skill 集成 demo（姿态 A docx capability + 姿态 B Notion MCP server） | ✅ 完成（2026-05-11，5 commit）—— 姿态 A docx 3 capability + ``backend/utils/safe_path.py`` 集中防御；姿态 B 扩展 chunk 1.5 ``backend/mcp/client.py``（``enable``/``disable``/DB env 注入）+ ``mcp_credentials`` / ``mcp_client_state`` 双表 + ``ExtensionsSection.tsx`` UI + ``@notionhq/notion-mcp-server`` 官方包；65 新测试 / 0 回归（556/556 across 16 suites）。新加 skill 参 ``docs/skills-extension-guide.md`` |
 | v3.5 chunk 8：v4 屏幕感知（VLM 抽象 + Tauri 截图 + 像素差预过滤 + 隐私黑名单） | 📋 计划中 |
 | v4：屏幕感知 | 📋 计划中 |
 | v5-D / T1 / T2：autodl + GPT-SoVITS + 自定义 voice 训练 | 📋 长期 |

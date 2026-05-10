@@ -2029,6 +2029,113 @@ webview 上 codec 支持不稳（VP9/AV1 视系统），spec 只走 mp4。
 
 ---
 
+## 十五之H、Skill 集成姿态（v3.5 chunk 7 起）
+
+兑现「个人乐高底盘」承诺——演示两条独立姿态，未来加任何 skill 选其一即可，
+不必每次重新设计架构。
+
+### 姿态 A：本地 capability（docx demo）
+
+**何时选 A**：能力本身用 Python 库就能跑（python-docx / openpyxl /
+pdfplumber / pyperclip / pyautogui / ...）。直接用 Skyler 内置 capability
+基础设施。
+
+**架构**（与 chunk 0 capability_registry / chunk 1 calendar 完全对齐）：
+
+```
+LLM tool call (ChatAgent)
+  ↓ ToolRegistry.call(name, **kwargs)
+  ↓ async handler(**_kwargs)        ← @register_capability
+  ↓ safe_resolve(SAFE_DIR, filename) ← backend/utils/safe_path.py
+  ↓ python-docx / 其他库
+  ↓ return {result_dict} or {error: "<code>"}
+```
+
+**SAFE 沙箱契约**：
+
+* 沙箱根目录用户可见（``~/Documents/Skyler/<feature>/``）——用户直接 Finder
+  打开方便；与 google_calendar 的 ``~/.skyler/``（隐藏 dotdir，纯内部 token
+  存储）区分定位
+* ``ensure_sandbox_dir(base, mode=0o700)`` 集中实现 mkdir + chmod
+* ``safe_resolve(base, user_path, allow_subdirs=False)`` 集中实现 path
+  traversal 防御：``.resolve()`` + ``.relative_to(base)`` + 文件名 stem
+  校验（不允许 ``/`` / ``\`` / ``..`` / 绝对路径）
+* config.yaml ``skills.<feature>.safe_dir`` 可覆盖默认（dev / 测试 / 多
+  user 场景）
+
+**chunk 7 docx demo**：3 capability（create / read / append）@
+``~/Documents/Skyler/docs/``。filename auto-补 .docx 后缀；不支持图片 /
+表格 / 公式（V1 简化）。
+
+### 姿态 B：MCP server 一键启用（Notion demo）
+
+**何时选 B**：第三方 SaaS 自己提供 MCP server（Notion / Linear / Slack /
+GitHub / Sentry / Stripe ...）。复用 chunk 1.5 bidirectional MCP client，
+零新 client 代码。
+
+**架构**（chunk 1.5 + chunk 7 增量）：
+
+```
+config.yaml mcp_clients.<name>          ← server 元数据
+  ↓ init_clients_from_config()           ← chunk 1.5
+  ↓ _effective_enabled = DB override > config default ← chunk 7
+  ↓ _connect_one (env = os ∪ config ∪ DB credentials)
+  ↓ stdio_client(npx subprocess) | streamable_http
+  ↓ ClientSession.list_tools()
+  ↓ Capability per tool → CapabilityRegistry.register_runtime
+  ↓ ChatAgent 见到 ext.<server>.<tool> 与本地 capability 等价调用
+```
+
+**chunk 7 增量**（不重建 client，扩展现有架构）：
+
+* 表 ``mcp_credentials (server_name, key_name, value, updated_at)``——
+  UI 输入的 API key 写 DB，启动子进程时注入 env（不污染 .env）
+* 表 ``mcp_client_state (server_name, enabled, updated_at)``——UI toggle
+  持久化覆盖 config.yaml ``enabled`` 默认
+* ``backend/mcp/credentials.py`` async CRUD
+* ``backend/mcp/client.py`` 扩展：``_effective_enabled`` / ``enable(name)`` /
+  ``disable(name)`` + ``list_status`` 返 ``env_required`` /
+  ``missing_credentials``
+* ``backend/routes/mcp_api.py`` 扩展：``PUT .../enabled`` /
+  ``PUT .../credentials`` / ``GET .../credentials``（不返 value，只列
+  key + configured 状态）
+* ``ExtensionsSection.tsx`` —— SettingsPanel 新 section，列 server + toggle +
+  状态徽章 + [配置凭证] modal
+
+**chunk 7 Notion demo**：``@notionhq/notion-mcp-server``（官方 npm 包
+makenotion/notion-mcp-server）；env_required ``NOTION_API_KEY``；
+``expose_via_skyler_server=False``（不级联代理到外部）。
+
+### 决策树
+
+```
+新 skill 想接入？
+  ├─ 用 Python 库就能完成 → 姿态 A
+  │      （docx / Excel / PDF / 本地文件 / Apple Notes 通过 osascript ...）
+  ├─ 有官方 MCP server → 姿态 B
+  │      （Notion / Linear / Slack / GitHub / Stripe ...）
+  └─ 两种都行 → A（少一层进程 + 直接 SAFE 沙箱）
+```
+
+**反模式**：
+
+* 不要为只 wrap 一个 HTTP API 的简单功能写 MCP server（直接 capability
+  handler 一个 ``httpx`` 调用更省事）
+* 不要为 LLM 不会主动想用的能力做姿态 B（启动 npx 子进程有 30s 首次拉包
+  代价 + 占系统资源）
+
+### V1 限制 / Backlog
+
+* **凭证明文存储**——MVP；``ROADMAP Tech Debt`` 加「MCP 凭证加密（OS
+  keyring or master password）」backlog
+* **MCP server 市场 / 一键安装**——目前只列 config.yaml 已配置的 server，
+  不做发现 + 自动注册。用户加新 server 需手动改 config.yaml
+* **server 崩溃自动重启**——用户 toggle 即可，无 supervisor 循环
+* **凭证多 user 场景**——目前 single-user，``mcp_credentials`` 无 user_id
+  列；多 user 后端时需扩展
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建

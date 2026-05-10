@@ -32,7 +32,7 @@
 | **v5-T2：训练自定义 voice（CosyVoice fine-tune + SoVITS 模型）** | 📋 远期 | 0% |
 | **v3.5 chunk 5：视觉跃迁包（背景层 + splash video）** | ✅ 完成（4 commit，2026-05-11） | 100% |
 | **v3.5 chunk 6：媒体接入收尾（B 站 / 网易云重做 / 小红书 URL 解析）** | 📋 计划中 | 0% |
-| **v3.5 chunk 7：Skill 集成 demo（docx capability + Notion MCP）** | 📋 计划中 | 0% |
+| **v3.5 chunk 7：Skill 集成 demo（docx capability + Notion MCP）** | ✅ 完成（5 commit，2026-05-11） | 100% |
 | **v3.5 chunk 8：v4 屏幕感知（VLM 抽象 + Tauri 截图 + 像素差 + 黑名单）** | 📋 计划中 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |
 
@@ -966,16 +966,55 @@ DESIGN §13 已有完整设计。要点：
 
 ---
 
-### chunk 7 — Skill 集成 demo（个人乐高底盘真兑现）📋
+### chunk 7 — Skill 集成 demo（个人乐高底盘真兑现）✅ 完成 2026-05-11
 
-两条姿态各一个 demo：
+两条姿态各一个 demo，验证未来加任何 skill 都有清晰路径：
 
-* **7a 姿态 A 本地 capability（docx）**：`python-docx` + 3 capability + SAFE 路径隔离 / chunk 1 calendar 同架构
-* **7b 姿态 B MCP server 一键启用（Notion）**：复用 chunk 1.5 client；config.yaml 加 server 配置即可；SettingsPanel [扩展能力] section 列推荐 server + [启用]
+#### 7a 姿态 A：本地 capability（docx demo）✅
 
-7a + 7b 合一 cc-task —— 验证未来用户加任何 skill 都有路径，不用每次重新设计架构。
+* ``python-docx`` 依赖 + ``backend/capabilities/docx_ops.py`` 三 capability
+  （``docx.create`` / ``docx.read`` / ``docx.append``），与 chunk 0
+  capability registry 完全对齐
+* ``backend/utils/safe_path.py`` 集中 path traversal 防御
+  （``safe_resolve`` + ``ensure_sandbox_dir``）；docx 沙箱
+  ``~/Documents/Skyler/docs/``（用户可见 vs ``~/.skyler/`` 内部 token）
+* ``config.yaml skills.docx.safe_dir`` 可覆盖
 
-工程量：~半天 / 4 commits
+#### 7b 姿态 B：MCP server 一键启用（Notion demo）✅
+
+* **不重建** chunk 1.5 的 MCP client——扩展现有 ``backend/mcp/client.py`` +
+  ``routes/mcp_api.py``：
+  - ``mcp_credentials`` 表：UI 输入凭证写 DB，子进程启动时注入 env
+  - ``mcp_client_state`` 表：UI toggle 持久化 override config.yaml enabled
+  - 新 endpoints: ``PUT /api/mcp/clients/{name}/enabled`` /
+    ``PUT,GET /api/mcp/clients/{name}/credentials``
+* ``ExtensionsSection.tsx`` 在 SettingsPanel：列 server + 状态徽章 +
+  [配置凭证] modal；缺凭证时 toggle disabled
+* config.yaml 加 ``notion`` entry：``@notionhq/notion-mcp-server`` 官方
+  包，``env_required: [NOTION_API_KEY]``，``enabled: false``
+
+#### 决策树（DESIGN §十五之H 详）
+
+```
+新 skill 想接入？
+  ├─ Python 库能跑 → 姿态 A（直接 capability + SAFE 沙箱）
+  ├─ 第三方 SaaS 有官方 MCP → 姿态 B（config.yaml + UI 凭证）
+  └─ 两种都行 → A（少一层进程）
+```
+
+#### 交付清单
+
+* `a8c096e` feat(capabilities): docx + safe_path util + 3 capability
+* `1c62385` feat(mcp): credentials 表 + enable/disable + Notion config
+* `665e938` feat(frontend): ExtensionsSection + 凭证 modal
+* `f67920a` test(chunk7): 65 new + 2 regression fix
+* `<docs>`  docs(chunk7): DESIGN §十五之H + ROADMAP + skills-extension-guide
+
+测试 0 回归：16 suites 556/556 全过（docx_capabilities 31/31 + mcp_chunk7
+34/34 + 14 个既有 suite 全过含 mcp_client 28/28 / mcp_server 22/22 /
+capability_registry 18/18 / chunk 5 系列）。
+
+工程量：~1 个 session / 5 commits
 
 ---
 
@@ -1086,6 +1125,14 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
 ### 媒体接入
 - 网易云音乐自动播放重做（v3-H chunk 1 partial）
 - B 站 / Pollinations 表情包 / OpenClaw 等其他媒体源（v3-H 后续）
+
+### 安全 & 凭证
+- **MCP 凭证加密**（v3.5 chunk 7 衍生 backlog）：当前 ``mcp_credentials`` 表
+  明文存 API key。MVP 接受——SQLite 文件在 ``~/.skyler/`` 已具系统级权限
+  隔离，与 ``.env`` 风险等价。升级路径：接 OS keyring（macOS Keychain /
+  Windows Credential Manager / GNOME Keyring）或引入 master password 派生
+  加密。touchpoint：``backend/mcp/credentials.py`` ``get_env`` / ``upsert``
+  内部加 cipher layer，外部 API 不变。
 
 ---
 
