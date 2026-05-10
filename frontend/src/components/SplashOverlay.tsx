@@ -117,12 +117,23 @@ export default function SplashOverlay({ onFinished }: SplashOverlayProps) {
 
   return (
     <div
-      className="fixed inset-0 z-[10000]"
       style={{
-        background: 'black',
+        // chunk 5b hotfix：显式 fixed/inset/100vw·100vh 满铺 viewport。
+        // 之前用 className="fixed inset-0" + video w-full h-full —— 在某些
+        // Tauri 窗口尺寸 / DPR 组合下 video 父容器可能因父级 flex / overflow
+        // 规则被算成 0 高度。改成 100vw/100vh 直接绑 viewport，绕开父级
+        // layout 影响。
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100vw',
+        height: '100vh',
+        zIndex: 9999,
+        background: '#000',
         opacity: phase === 'fading' ? 0 : 1,
         transition: `opacity ${FADE_MS}ms ease-out`,
         pointerEvents: phase === 'fading' ? 'none' : 'auto',
+        overflow: 'hidden',
       }}
       onClick={beginFade}
     >
@@ -135,12 +146,28 @@ export default function SplashOverlay({ onFinished }: SplashOverlayProps) {
         // 不 loop —— splash 一次性
         onEnded={beginFade}
         onError={beginFade}
-        className="w-full h-full"
-        style={{ objectFit: 'cover' }}
+        style={{
+          // 显式 fixed + 100vw/100vh + objectFit: cover —— 与父容器各自独立
+          // 绑 viewport，video 元素的 intrinsic ratio 不影响布局。
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          objectFit: 'cover',
+        }}
       />
       <div
-        className="absolute bottom-6 right-6 text-xs select-none"
-        style={{ color: 'rgba(255,255,255,0.5)' }}
+        className="select-none"
+        style={{
+          position: 'fixed',
+          bottom: 24,
+          right: 24,
+          fontSize: 12,
+          color: 'rgba(255,255,255,0.5)',
+          zIndex: 1,  // 在 video 之上
+          pointerEvents: 'none',
+        }}
       >
         点击 / 按键跳过
       </div>
