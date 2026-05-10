@@ -49,6 +49,10 @@ class Character(Base):
     emotion_map_json  = Column(Text, nullable=True)
     motion_map_json   = Column(Text, nullable=True)
     hit_area_map_json = Column(Text, nullable=True)
+    # v3.5 chunk 5a: per-character 背景层 Vite static URL（如
+    # ``/backgrounds/tokyo_rain.mp4``）。NULL → CharacterView 继续走原
+    # fallback 链（Live2D → 静态 jpeg）。后缀决定前端用 <img> 还是 <video>。
+    background_path = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     conversations = relationship("Conversation", back_populates="character")

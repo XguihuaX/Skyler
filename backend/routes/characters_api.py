@@ -40,6 +40,9 @@ def _to_dict(c: Character) -> dict:
         "emotion_map_json":  c.emotion_map_json,
         "motion_map_json":   c.motion_map_json,
         "hit_area_map_json": c.hit_area_map_json,
+        # v3.5 chunk 5a: per-character 背景层 URL（image / video）。NULL =
+        # 用现有 fallback 链（Live2D / 静态 jpeg），CharacterView 透明处理。
+        "background_path":   c.background_path,
         "created_at": _fmt_dt(c.created_at),
     }
 
@@ -55,6 +58,8 @@ class CharacterCreateBody(BaseModel):
     emotion_map_json:  Optional[str] = None
     motion_map_json:   Optional[str] = None
     hit_area_map_json: Optional[str] = None
+    # v3.5 chunk 5a: 可选背景资产 URL。None / 空串都视为"未配置"。
+    background_path:   Optional[str] = None
 
 
 class CharacterPatchBody(BaseModel):
@@ -66,6 +71,8 @@ class CharacterPatchBody(BaseModel):
     emotion_map_json:  Optional[str] = None
     motion_map_json:   Optional[str] = None
     hit_area_map_json: Optional[str] = None
+    # v3.5 chunk 5a: PATCH 时传 None 表示清除；传字符串覆盖。
+    background_path:   Optional[str] = None
 
 
 @router.get("/characters/list")
@@ -99,6 +106,7 @@ async def create_character(
         emotion_map_json=body.emotion_map_json,
         motion_map_json=body.motion_map_json,
         hit_area_map_json=body.hit_area_map_json,
+        background_path=body.background_path,
     )
     session.add(c)
     await session.commit()
@@ -134,6 +142,10 @@ async def patch_character(
         c.motion_map_json = updates["motion_map_json"]
     if "hit_area_map_json" in updates:
         c.hit_area_map_json = updates["hit_area_map_json"]
+    if "background_path" in updates:
+        # 空串等价 NULL，避免 frontend "(无)" 传空串时落库残留 ""
+        bp = updates["background_path"]
+        c.background_path = bp if (isinstance(bp, str) and bp.strip()) else None
     await session.commit()
     await session.refresh(c)
     return _to_dict(c)

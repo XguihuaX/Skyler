@@ -59,9 +59,13 @@ from backend.database.migrations.v3_g_chunk3_character_states import (
 from backend.database.migrations.v3_g_chunk4_strip_legacy_tags import (
     run_migration as migrate_v3_g_chunk4_strip_legacy_tags,
 )
+from backend.database.migrations.v3_5_chunk5a_character_background import (
+    run_migration as migrate_v3_5_chunk5a_character_background,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
+from backend.routes.backgrounds_api import router as backgrounds_router
 from backend.routes.briefing_api import router as briefing_router
 from backend.routes.character_state_api import router as character_state_router
 from backend.routes.capabilities_api import router as capabilities_router
@@ -163,6 +167,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 1b13. V3-G chunk 4 D-3: 历史 chat_history 标签脏数据扫表剥离 ────
     await migrate_v3_g_chunk4_strip_legacy_tags()
+
+    # ── 1b14. V3.5 chunk 5a: characters.background_path 列（idempotent）──
+    await migrate_v3_5_chunk5a_character_background()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
@@ -485,6 +492,7 @@ app.include_router(conversations_router, prefix="/api", tags=["conversations"])
 app.include_router(characters_router,    prefix="/api", tags=["characters"])
 app.include_router(users_router,         prefix="/api", tags=["users"])
 app.include_router(live2d_router,        prefix="/api", tags=["live2d"])
+app.include_router(backgrounds_router,    prefix="/api", tags=["backgrounds"])
 app.include_router(tts_router,           prefix="/api", tags=["tts"])
 app.include_router(capabilities_router,  prefix="/api", tags=["capabilities"])
 app.include_router(integrations_router,  prefix="/api", tags=["integrations"])

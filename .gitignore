@@ -42,3 +42,19 @@ tools/output/
 frontend/public/live2d/*/
 !frontend/public/live2d/core/
 !frontend/public/live2d/hiyori/
+
+# ==============================
+# v3.5 chunk 5a: per-character backgrounds (IP 隔离)
+# ==============================
+# 默认排除所有用户素材（image / video）；只白名单 README + .gitkeep 让目录
+# 本身入库，避免 frontend/public/backgrounds/ 完全缺失。
+frontend/public/backgrounds/*
+!frontend/public/backgrounds/.gitkeep
+!frontend/public/backgrounds/README.md
+
+# ==============================
+# v3.5 chunk 5b: 启动入场 splash video（用户离线生成）
+# ==============================
+frontend/public/splash/*
+!frontend/public/splash/.gitkeep
+!frontend/public/splash/README.md
