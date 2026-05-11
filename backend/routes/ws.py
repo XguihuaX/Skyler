@@ -242,32 +242,55 @@ TOUCH_INSTRUCTION = (
 )
 
 
-def _format_chat_history(rows: list) -> str:
-    """Render chat_history rows as ``[role]: content`` lines, oldest-first.
+def _filter_user_messages(rows: list) -> list:
+    """v3.5 chunk 9 Part 1：profile_summary 输入只取 ``role='user'`` 行。
 
-    v3.5 chunk 6b hotfix-3：喂给 profile_summary LLM 前对每行 content 过一道
-    ``sanitize_suspicious_tags`` —— DB 写库层已加 sanitize（hotfix-3 Part 3），
-    但**输入端**这里再过一道是临时方案：覆盖 hotfix-3 之前已入库、尚未走
-    migration（或 migration 未来漏拦截某种格式）的污染行。chunk 9 重构
-    "输入只读 user 消息" 时本兜底可移除。
+    断 LLM 自循环：旧逻辑把 user + assistant 都喂 LLM 重写 profile，
+    导致角色（Momo / 八重）的回应被当作"用户特征"反推 →
+    in-context learning 自循环（chunk 6b hotfix-3 因 LLM 输出
+    ``<netease.daily_recommend>`` 入库后被当作用户表达回灌就是这条路径）。
+
+    新策略：只看用户**主动表达**的内容形成画像，assistant / system / tool
+    result 全部丢。这也消除了 hotfix-3 加的 ``_format_chat_history`` 输入端
+    sanitize 的主要触发源（assistant 行已不喂 LLM）。
+
+    user 行内自身的可疑标签（用户粘贴 HTML / code snippet 等）仍可能存在，
+    保留 ``SUSPICIOUS_TAG_RE`` sanitize 防御。
+    """
+    return [r for r in rows if (getattr(r, "role", None) == "user")]
+
+
+def _format_user_history(rows: list) -> str:
+    """格式化 user-only 行作 prompt 输入。
+
+    ``[role]:`` 前缀去掉 —— 输入已确认全是 user 消息，不需 role 标签；
+    LLM 不再有"对方说了 X，所以用户是 Y"的反推 footgun。
     """
     cleaned: list[str] = []
     for r in rows:
         content = r.content or ""
         if SUSPICIOUS_TAG_RE.search(content):
             content = sanitize_suspicious_tags(content).strip()
-        cleaned.append(f"[{r.role}]: {content}")
+        if content:
+            cleaned.append(f"- {content}")
     return "\n".join(cleaned)
 
 
 def _build_profile_prompt(old_summary: Optional[str], history_text: str) -> str:
-    """Build the incremental profile-update prompt fed to the planner LLM."""
-    return f"""下面是用户与 Momo 最近的对话记录。请基于这些对话和已有的印象，更新你（Momo）对这个用户形成的整体印象。
+    """Build the incremental profile-update prompt fed to the planner LLM.
+
+    v3.5 chunk 9 Part 1：输入改为**只读 user 消息**。prompt 文案明确告诉
+    LLM 不要基于角色回应反推，只看用户主动表达的内容。这是断
+    in-context learning 自循环的治本方案。
+    """
+    return f"""下面是用户最近说过的话。请基于这些用户主动表达的内容，更新对这个用户形成的整体印象。
+
+不要基于角色（Momo / 八重）的回应推断，只看用户**自己说过的话**。
 
 当前印象（如有）：
 {old_summary or "(暂无，第一次形成)"}
 
-最近对话：
+用户最近说的话：
 {history_text}
 
 输出规则：
@@ -281,90 +304,118 @@ def _build_profile_prompt(old_summary: Optional[str], history_text: str) -> str:
 新印象："""
 
 
+async def _compute_profile_summary(
+    user_id: str, *, min_user_rows: int = 10,
+) -> tuple[str, Optional[str]]:
+    """v3.5 chunk 9 Part 1：核心 profile 计算（无副作用 + endpoint 复用）。
+
+    Returns ``(status, summary_or_none)``：
+      * ("cleared", None)            —— 无 chat_history，已 SET NULL
+      * ("regenerated", new_summary) —— LLM 生成新 summary，已写库
+      * ("skip_too_few_rows", None)  —— user 消息 < min_user_rows，未触
+      * ("skip_llm_failed", None)    —— LLM 调用失败
+      * ("skip_llm_too_short", None) —— LLM 输出过短，未写库
+      * ("skip_llm_suspicious", None)—— LLM 输出含可疑 tag，保留旧 + 不写
+
+    Args:
+        min_user_rows: 至少需要 N 条 user 消息才触发 LLM 重算。background
+                       path 用 ``PROFILE_SUMMARY_MIN_ROWS`` 的"约一半"
+                       （现 20 → user 大致 10）；endpoint 强制触发可降到
+                       小值（甚至 1，让用户在少量对话后也能预览）。
+    """
+    async with AsyncSessionLocal() as session:
+        # v3-E1 Step Z.2：白名单只取 'normal' 行 —— touch / proactive 触发的
+        # 对话 user 占位（[touch]）+ AI 主动回复一句不应作为画像样本。
+        # 用白名单而非黑名单：未来新增 kind 时默认排除，不会沉默污染画像。
+        rows = await get_chat_history(
+            session, user_id,
+            limit=PROFILE_SUMMARY_HISTORY_LIMIT,
+            kinds=["normal"],
+        )
+
+    # v3.5 chunk 9 Part 1：只取 role='user' 行喂 LLM（断 in-context 自循环）
+    user_rows = _filter_user_messages(rows)
+
+    # 1. Empty history → clear the summary outright.
+    if len(rows) == 0:
+        async with AsyncSessionLocal() as session:
+            await update_profile_summary(session, user_id, None)
+        logger.info(
+            "[profile_summary] cleared for user=%s (no chat history)",
+            user_id,
+        )
+        return ("cleared", None)
+
+    # 2. Too few user messages — skip without touching the column.
+    if len(user_rows) < min_user_rows:
+        logger.info(
+            "[profile_summary] skip user=%s (only %d user rows, need >= %d)",
+            user_id, len(user_rows), min_user_rows,
+        )
+        return ("skip_too_few_rows", None)
+
+    # 3. Fold the new turns into the existing summary.
+    async with AsyncSessionLocal() as session:
+        old_summary = await get_profile_summary(session, user_id)
+
+    prompt = _build_profile_prompt(old_summary, _format_user_history(user_rows))
+
+    try:
+        response = await call_llm(
+            messages=[{"role": "user", "content": prompt}],
+            model=get_planner_model(),
+            stream=False,
+        )
+        new_summary = (response.choices[0].message.content or "").strip()
+    except LLMError as exc:
+        logger.error(
+            "[profile_summary] LLM call failed for user=%s: %s",
+            user_id, exc,
+        )
+        return ("skip_llm_failed", None)
+
+    if not new_summary or len(new_summary) < PROFILE_SUMMARY_MIN_OUTPUT_LEN:
+        logger.error(
+            "[profile_summary] empty/too-short LLM output for user=%s: %r",
+            user_id, new_summary,
+        )
+        return ("skip_llm_too_short", None)
+
+    # v3.5 chunk 6b hotfix-3：LLM 输出端 SUSPICIOUS_TAG_RE 命中 → **保留旧
+    # profile + log warning**，避免脏画像写库。chunk 9 Part 1 已让输入只读
+    # user 消息从源头杜绝大部分污染来源；本兜底仍保留作最后防御（用户在
+    # user 消息里粘贴含 XML 内容也可能间接引导 LLM 输出标签）。
+    suspicious_n = count_suspicious_tags(new_summary)
+    if suspicious_n > 0:
+        logger.warning(
+            "[sanitize] profile_summary LLM output had suspicious tags "
+            "hit=%d user=%s preview=%r — keeping old profile, discarding new",
+            suspicious_n, user_id, new_summary[:200],
+        )
+        return ("skip_llm_suspicious", None)
+
+    async with AsyncSessionLocal() as session:
+        await update_profile_summary(session, user_id, new_summary)
+    logger.info(
+        "[profile_summary] regenerated for user=%s len=%d",
+        user_id, len(new_summary),
+    )
+    return ("regenerated", new_summary)
+
+
 async def _regenerate_profile_summary(user_id: str) -> None:
-    """Refresh users.profile_summary from the latest chat_history.
+    """Background-path wrapper：每 N 轮自动触发，无返回值。
 
-    Behaviour:
-      * 0 rows  → clear the column (user wiped everything).
-      * <20 rows → skip (not enough signal yet).
-      * otherwise → call planner LLM with incremental prompt + old summary.
-
-    Always tolerant: any exception is logged at error level; the per-user
-    counter is reset in ``finally`` so a failure never wedges future passes.
+    与 endpoint 路径共用 ``_compute_profile_summary`` 核心，但本 wrapper：
+      * 不向 caller 抛出（exception 全吞 log）
+      * 在 ``finally`` 重置 turn_count counter（避免瞬时错误把 user 卡在
+        阈值之上）
+      * 用 background-path 的 min_user_rows 阈值
     """
     try:
-        async with AsyncSessionLocal() as session:
-            # v3-E1 Step Z.2：白名单只取 'normal' 行 —— touch / proactive 触发的
-            # 对话 user 占位（[touch]）+ AI 主动回复一句不应作为画像样本。
-            # 用白名单而非黑名单：未来新增 kind 时默认排除，不会沉默污染画像。
-            rows = await get_chat_history(
-                session, user_id,
-                limit=PROFILE_SUMMARY_HISTORY_LIMIT,
-                kinds=["normal"],
-            )
-
-        # 1. Empty history → clear the summary outright.
-        if len(rows) == 0:
-            async with AsyncSessionLocal() as session:
-                await update_profile_summary(session, user_id, None)
-            logger.info(
-                "[profile_summary] cleared for user=%s (no chat history)",
-                user_id,
-            )
-            return
-
-        # 2. Too little signal — skip without touching the column.
-        if len(rows) < PROFILE_SUMMARY_MIN_ROWS:
-            logger.info(
-                "[profile_summary] skip user=%s (only %d rows, need >= %d)",
-                user_id, len(rows), PROFILE_SUMMARY_MIN_ROWS,
-            )
-            return
-
-        # 3. Fold the new turns into the existing summary.
-        async with AsyncSessionLocal() as session:
-            old_summary = await get_profile_summary(session, user_id)
-
-        prompt = _build_profile_prompt(old_summary, _format_chat_history(rows))
-
-        try:
-            response = await call_llm(
-                messages=[{"role": "user", "content": prompt}],
-                model=get_planner_model(),
-                stream=False,
-            )
-            new_summary = (response.choices[0].message.content or "").strip()
-        except LLMError as exc:
-            logger.error(
-                "[profile_summary] LLM call failed for user=%s: %s",
-                user_id, exc,
-            )
-            return
-
-        if not new_summary or len(new_summary) < PROFILE_SUMMARY_MIN_OUTPUT_LEN:
-            logger.error(
-                "[profile_summary] empty/too-short LLM output for user=%s: %r",
-                user_id, new_summary,
-            )
-            return
-
-        # v3.5 chunk 6b hotfix-3：LLM 输出端 SUSPICIOUS_TAG_RE 命中 → **保留旧
-        # profile + log warning**，避免脏画像写库。chunk 9 重构会让"输入只读
-        # user 消息"从源头杜绝，那时这道兜底可移除。
-        suspicious_n = count_suspicious_tags(new_summary)
-        if suspicious_n > 0:
-            logger.warning(
-                "[sanitize] profile_summary LLM output had suspicious tags "
-                "hit=%d user=%s preview=%r — keeping old profile, discarding new",
-                suspicious_n, user_id, new_summary[:200],
-            )
-            return
-
-        async with AsyncSessionLocal() as session:
-            await update_profile_summary(session, user_id, new_summary)
-        logger.info(
-            "[profile_summary] regenerated for user=%s len=%d",
-            user_id, len(new_summary),
+        await _compute_profile_summary(
+            user_id,
+            min_user_rows=max(PROFILE_SUMMARY_MIN_ROWS // 2, 5),
         )
     except Exception as exc:
         logger.error(

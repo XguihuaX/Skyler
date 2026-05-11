@@ -254,8 +254,12 @@ async def test_part4_migration_idempotent():
 
 
 def test_part5_input_sanitize_format_chat_history():
-    print("\n[Part 5] _format_chat_history 输入端 sanitize")
-    from backend.routes.ws import _format_chat_history
+    print("\n[Part 5] profile prompt 输入端 sanitize（chunk 9 Part 1 user-only 后行为）")
+    # v3.5 chunk 9 Part 1：``_format_chat_history`` 被 ``_format_user_history``
+    # 取代（user-only 过滤 + 不带 [role]: 前缀）。assistant 行**完全不进**
+    # prompt 输入（断 in-context 自循环治本），user 行的可疑 tag 仍走
+    # sanitize 防御。
+    from backend.routes.ws import _format_user_history, _filter_user_messages
 
     class Row:
         def __init__(self, role, content):
@@ -267,15 +271,13 @@ def test_part5_input_sanitize_format_chat_history():
         Row("assistant",
             "<netease.daily_recommend></netease.daily_recommend>已放日推"),
     ]
-    formatted = _format_chat_history(rows)
-    # **新设计：输入端对所有 role 一起过 sanitize**（输入只读 LLM prompt，
-    # 不影响 DB；user 的可疑 tag 也不该喂 LLM 引导）
-    check("输出剥 <netease.",
-          "<netease." not in formatted)
-    check("输出剥 <should.not.touch />",
+    user_only = _filter_user_messages(rows)
+    formatted = _format_user_history(user_only)
+    check("assistant 行完全不进 prompt（user-only）",
+          "已放日推" not in formatted)
+    check("user 行可疑 tag 仍被 sanitize",
           "<should.not.touch" not in formatted)
     check("保留 user 正文", "user text" in formatted)
-    check("保留 assistant 正文", "已放日推" in formatted)
 
 
 def test_part5_output_guard_keeps_old_profile():
