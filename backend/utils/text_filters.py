@@ -106,6 +106,15 @@ _TOOL_CALL_FALLBACK_STRIP_PATTERNS = [
         r"```json\s*(\{[^`]*?\"name\"\s*:\s*\"[^\"]+\"[^`]*?\})\s*```",
         re.IGNORECASE,
     ),
+    # 5. v3.5 chunk 6b hotfix-3：capability-name-as-tag。
+    #    Qwen 偶发把 capability 名当 XML 标签输出（``<netease.daily_recommend />`` /
+    #    ``<netease.daily_recommend>{...}</netease.daily_recommend>``）。tag name
+    #    含 ``.`` 才匹配，防误删 HTML ``<div>`` 等普通标签。``\1`` 反向引用
+    #    保 open/close tag 一致。
+    re.compile(
+        r"<([a-z_][a-z_0-9]*\.[a-z_][a-z_0-9]*)(?:\s+[^>]*?)?(?:\s*/>|>[\s\S]*?</\1>)",
+        re.IGNORECASE,
+    ),
 ]
 
 
@@ -210,6 +219,16 @@ _OPEN_BLOCK_PAIRS = [
     ),
 ]
 
+# v3.5 chunk 6b hotfix-3：capability-name-as-tag（``<netease.daily_recommend>``）
+# 流式 partial 检测专用。``_OPEN_BLOCK_PAIRS`` 那种 open_re/close_re 写
+# 死的 pair 不适用——这里 open 与 close 必须同 tag name 反向引用，逐
+# match scan 才能判断。
+_CAPABILITY_OPEN_TAG_RE = re.compile(
+    # 负 lookbehind ``(?<!/)`` 排除自闭合 ``<x.y />`` —— 自闭合不需要 close tag。
+    r"<([a-z_][a-z_0-9]*\.[a-z_][a-z_0-9]*)(?:\s+[^>]*?)?(?<!/)>",
+    re.IGNORECASE,
+)
+
 
 def has_partial_open_tag(text: str) -> bool:
     """流式分句时用：buffer 末尾是否有未闭合标签起始。
@@ -233,4 +252,11 @@ def has_partial_open_tag(text: str) -> bool:
         for om in open_re.finditer(text):
             if not close_re.search(text, om.end()):
                 return True
+    # v3.5 chunk 6b hotfix-3：capability-name-as-tag open 后未闭合
+    for om in _CAPABILITY_OPEN_TAG_RE.finditer(text):
+        tag_name = om.group(1)
+        # 同名 close tag 必须出现在 open 之后
+        close_re = re.compile(rf"</{re.escape(tag_name)}>", re.IGNORECASE)
+        if not close_re.search(text, om.end()):
+            return True
     return False
