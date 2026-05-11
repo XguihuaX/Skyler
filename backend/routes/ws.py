@@ -241,8 +241,21 @@ TOUCH_INSTRUCTION = (
 
 
 def _format_chat_history(rows: list) -> str:
-    """Render chat_history rows as ``[role]: content`` lines, oldest-first."""
-    return "\n".join(f"[{r.role}]: {r.content}" for r in rows)
+    """Render chat_history rows as ``[role]: content`` lines, oldest-first.
+
+    v3.5 chunk 6b hotfix-3：喂给 profile_summary LLM 前对每行 content 过一道
+    ``sanitize_suspicious_tags`` —— DB 写库层已加 sanitize（hotfix-3 Part 3），
+    但**输入端**这里再过一道是临时方案：覆盖 hotfix-3 之前已入库、尚未走
+    migration（或 migration 未来漏拦截某种格式）的污染行。chunk 9 重构
+    "输入只读 user 消息" 时本兜底可移除。
+    """
+    cleaned: list[str] = []
+    for r in rows:
+        content = r.content or ""
+        if SUSPICIOUS_TAG_RE.search(content):
+            content = sanitize_suspicious_tags(content).strip()
+        cleaned.append(f"[{r.role}]: {content}")
+    return "\n".join(cleaned)
 
 
 def _build_profile_prompt(old_summary: Optional[str], history_text: str) -> str:
@@ -330,6 +343,18 @@ async def _regenerate_profile_summary(user_id: str) -> None:
             logger.error(
                 "[profile_summary] empty/too-short LLM output for user=%s: %r",
                 user_id, new_summary,
+            )
+            return
+
+        # v3.5 chunk 6b hotfix-3：LLM 输出端 SUSPICIOUS_TAG_RE 命中 → **保留旧
+        # profile + log warning**，避免脏画像写库。chunk 9 重构会让"输入只读
+        # user 消息"从源头杜绝，那时这道兜底可移除。
+        suspicious_n = count_suspicious_tags(new_summary)
+        if suspicious_n > 0:
+            logger.warning(
+                "[sanitize] profile_summary LLM output had suspicious tags "
+                "hit=%d user=%s preview=%r — keeping old profile, discarding new",
+                suspicious_n, user_id, new_summary[:200],
             )
             return
 
