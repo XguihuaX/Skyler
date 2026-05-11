@@ -107,6 +107,44 @@ def get_profile_enabled() -> bool:
     return (config_yaml.get("memory") or {}).get("profile_enabled", True)
 
 
+# ---------------------------------------------------------------------------
+# v3.5 chunk 9 Part 0：embedding 检索性能调优
+# ---------------------------------------------------------------------------
+
+
+def _embedding_cfg() -> dict:
+    return ((config_yaml.get("memory") or {}).get("embedding") or {})
+
+
+def get_embedding_device() -> str:
+    """``cpu`` / ``mps`` / ``auto``（auto 在 long_term._pick_device 解析）。"""
+    return str(_embedding_cfg().get("device", "auto")).lower()
+
+
+def get_embedding_short_input_threshold() -> int:
+    """user 输入字符数 < 此值时跳过 memory 检索。默认 10。"""
+    try:
+        return int(_embedding_cfg().get("short_input_threshold", 10))
+    except (TypeError, ValueError):
+        return 10
+
+
+def get_embedding_cache_size() -> int:
+    """embedding LRU 缓存最大条目数。默认 100。"""
+    try:
+        return int(_embedding_cfg().get("cache_size", 100))
+    except (TypeError, ValueError):
+        return 100
+
+
+def get_embedding_cache_ttl_seconds() -> int:
+    """embedding 缓存 entry TTL（秒）。默认 300。"""
+    try:
+        return int(_embedding_cfg().get("cache_ttl_seconds", 300))
+    except (TypeError, ValueError):
+        return 300
+
+
 def get_enable_search() -> bool:
     return (config_yaml.get("search") or {}).get("enable_search", True)
 
