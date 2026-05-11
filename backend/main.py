@@ -65,6 +65,9 @@ from backend.database.migrations.v3_5_chunk5a_character_background import (
 from backend.database.migrations.v3_5_chunk7_mcp_credentials import (
     run_migration as migrate_v3_5_chunk7_mcp_credentials,
 )
+from backend.database.migrations.v3_5_chunk6b_hotfix3_clean_polluted_memories import (
+    run_migration as migrate_v3_5_chunk6b_hotfix3,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -181,6 +184,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── 1b15. V3.5 chunk 7: mcp_credentials + mcp_client_state 表 ────────
     # 必须在 init_clients_from_config 之前（client.py 读 DB enabled override）
     await migrate_v3_5_chunk7_mcp_credentials()
+
+    # ── 1b16. V3.5 chunk 6b hotfix-3: 一次性清存量 SUSPICIOUS_TAG_RE 污染 ─
+    # 跑前自动备份 momoos.db → .backup-before-hotfix3（已存在则跳过）。幂等
+    # 清 chat_history (assistant) + memory.content + users.profile_summary。
+    await migrate_v3_5_chunk6b_hotfix3()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

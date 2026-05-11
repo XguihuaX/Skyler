@@ -11,6 +11,7 @@ frontend/dist/
 *.db-journal
 *.db-shm
 *.db-wal
+*.db.backup-*
 .env
 .DS_Store
 *.log
