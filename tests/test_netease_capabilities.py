@@ -79,6 +79,12 @@ class _FakeClient:
         ]
         self.like_will_succeed = True
 
+    # v3.5 chunk 6b hotfix-1：场景 capability 调用 _client().has_credentials()
+    # 走 mpv-availability 检查；fake client 默认返 False 让旧 test 维持
+    # URL Scheme 路径行为（autoplay 字段已改为基于 mpv 状态，旧断言会同步修）。
+    def has_credentials(self) -> bool:
+        return False
+
     def daily_recommend(self):
         self.calls.append(("daily",))
         return self.daily_recs
@@ -122,8 +128,13 @@ async def test_daily_recommend_opens_first():
     check("opened first song URL with /play", opened_urls == ["orpheus://song/100/play"])
     check("first_song id=100", out["first_song"]["id"] == 100)
     check("songs sample limited to 5", len(out["songs"]) == 2)
-    check("autoplay triggered", out.get("autoplay") is True)
-    check("trigger called exactly once", len(trigger_calls) == 1)
+    # v3.5 chunk 6b hotfix-1：URL Scheme fallback 路径下 autoplay 诚实置 False
+    # （mpv 未装时 URL Scheme 唤起 NCM 不会自动播；之前 _trigger_ncm_play
+    # 实测无效，本 hotfix 移除该调用 + 改返 false）
+    check("autoplay False (honest URL-scheme fallback)", out.get("autoplay") is False)
+    check("backend url_scheme", out.get("backend") == "url_scheme")
+    check("hint present for mpv install", "mpv" in (out.get("hint") or ""))
+    check("trigger no longer called on fallback path", len(trigger_calls) == 0)
 
 
 async def test_daily_recommend_empty_returns_error():
@@ -191,8 +202,10 @@ async def test_play_song_searches_and_opens():
     check("opened True", out["opened"] is True)
     check("opened song URL with /play", opened_urls == ["orpheus://song/999/play"])
     check("song id=999", out["song"]["id"] == 999)
-    check("autoplay triggered", out.get("autoplay") is True)
-    check("trigger called once", len(trigger_calls) == 1)
+    # v3.5 chunk 6b hotfix-1：fallback 路径 autoplay 诚实置 False
+    check("autoplay False (URL-scheme fallback)", out.get("autoplay") is False)
+    check("backend url_scheme", out.get("backend") == "url_scheme")
+    check("trigger no longer called on fallback", len(trigger_calls) == 0)
     # search call sent
     search_calls = [c for c in fake.calls if c[0] == "search"]
     check("search called", len(search_calls) == 1)
@@ -239,21 +252,25 @@ async def test_play_playlist_lists_only():
 
 
 async def test_play_playlist_by_id_opens():
-    print("\n[netease caps — play_playlist_by_id open + trigger autoplay]")
+    print("\n[netease caps — play_playlist_by_id open（URL Scheme fallback）]")
+    fake = _FakeClient()  # has_credentials → False → 走 URL Scheme fallback
     opened_urls = []
     trigger_calls = []
     async def fake_open(url):
         opened_urls.append(url); return True
     async def fake_trigger():
         trigger_calls.append(True); return True
-    with patch.object(caps, "_open_url", side_effect=fake_open), \
+    with patch.object(nm, "get_client", return_value=fake), \
+         patch.object(caps, "_open_url", side_effect=fake_open), \
          patch.object(caps, "_trigger_ncm_play", side_effect=fake_trigger):
         out = await caps.play_playlist_by_id(playlist_id=42)
     check("opened True", out["opened"] is True)
     check("URL = orpheus://playlist/42/play", opened_urls == ["orpheus://playlist/42/play"])
     check("playlist_id echoed", out["playlist_id"] == 42)
-    check("autoplay triggered", out.get("autoplay") is True)
-    check("trigger called once", len(trigger_calls) == 1)
+    # v3.5 chunk 6b hotfix-1：fallback 路径 autoplay 诚实置 False
+    check("autoplay False (URL-scheme fallback)", out.get("autoplay") is False)
+    check("backend url_scheme", out.get("backend") == "url_scheme")
+    check("trigger no longer called", len(trigger_calls) == 0)
 
 
 # ---------------------------------------------------------------------------
