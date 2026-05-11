@@ -1038,10 +1038,14 @@ async def _build_messages(
         if summary:
             system_parts.append("【用户画像】\n" + summary)
 
-    # ---- 3. Long-term memory Top-5 (config-gated, per-character) ----
+    # ---- 3. Long-term memory Top-5 (config-gated) ----
+    # v3.5 chunk 9 Part 3：去 character_id 隔离 —— memory 改为 user 级共享，
+    # 事实跨角色统一（"我猫叫 Mochi" 跟 Momo 说一次，切八重也能召回）。
+    # save_memory tool 仍写 character_id 做 audit metadata（commit 6 UI 角标
+    # 显示来源角色），但检索路径**只按 user_id 过滤**。
     if _long_term_enabled:
         relevant = await search_relevant_memories(
-            user_id, query=text, top_k=5, character_id=character_id,
+            user_id, query=text, top_k=5,
         )
         if relevant:
             mems = [f"- {m.content}" for m in relevant]

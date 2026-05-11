@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trash2, X } from 'lucide-react';
+import { fetchCharacters, type CharacterRow } from '../lib/config';
 
 const BACKEND_BASE = 'http://127.0.0.1:8000';
 
@@ -20,6 +21,8 @@ interface MemoryRow {
   content: string;
   type: string;
   created_at: string | null;
+  // v3.5 chunk 9 Part 3：来源 character_id（drawer 用角标显示）。
+  character_id: number | null;
 }
 
 interface ConfirmModalProps {
@@ -77,7 +80,12 @@ function ConfirmModal({ text, onConfirm, onCancel }: ConfirmModalProps) {
 interface Props {
   open: boolean;
   userId: string;
-  characterId: number | null;
+  /**
+   * v3.5 chunk 9 Part 3 起 drawer **不再按 character 过滤** memory（memory 改
+   * user 级共享，UI 显示来源角标）。本字段保留作 SettingsPanel 兼容传参，
+   * 未来若加"按 character 筛选" toggle 可复用，当前**未使用**。
+   */
+  characterId?: number | null;
   onClose: () => void;
   onCountChange?: (count: number) => void;
 }
@@ -96,7 +104,8 @@ interface Props {
 export default function MemoryManagerDrawer({
   open,
   userId,
-  characterId,
+  // chunk 9 Part 3：保留接收但不使用（见 Props interface 注释）
+  characterId: _characterId,
   onClose,
   onCountChange,
 }: Props) {
@@ -106,13 +115,16 @@ export default function MemoryManagerDrawer({
   const [filter, setFilter] = useState<FilterValue>('all');
   const [pendingDelete, setPendingDelete] = useState<MemoryRow | null>(null);
   const [pendingClearAll, setPendingClearAll] = useState(false);
+  // v3.5 chunk 9 Part 3：character_id → name 映射给来源角标用。
+  const [charMap, setCharMap] = useState<Record<number, string>>({});
 
   const fetchMemories = useCallback(async () => {
     setLoading(true);
     setErrorText(null);
     try {
+      // v3.5 chunk 9 Part 3：memory 改 user 级共享，drawer 默认拉**全部**
+      // （不按当前 character 过滤）。每条 entry 用 character_id 角标显示来源。
       const params = new URLSearchParams({ user_id: userId });
-      if (characterId !== null) params.set('character_id', String(characterId));
       const url = `${BACKEND_BASE}/api/memory/list?${params.toString()}`;
       const r = await fetch(url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -127,7 +139,25 @@ export default function MemoryManagerDrawer({
     } finally {
       setLoading(false);
     }
-  }, [userId, characterId, onCountChange]);
+  }, [userId, onCountChange]);
+
+  // characters 列表用于 character_id → name 角标映射
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const chars = await fetchCharacters();
+        if (cancelled) return;
+        const m: Record<number, string> = {};
+        chars.forEach((c: CharacterRow) => { m[c.id] = c.name; });
+        setCharMap(m);
+      } catch (e) {
+        console.warn('[MemoryManagerDrawer] fetchCharacters failed:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open]);
 
   // Refetch each time the drawer opens; gives the user the latest snapshot
   // even after a chat turn that just saved a memory.
@@ -309,6 +339,26 @@ export default function MemoryManagerDrawer({
                         }}
                       >
                         {m.type}
+                      </span>
+                      {/* v3.5 chunk 9 Part 3：来源 character 角标。character_id
+                          NULL（legacy 行 / 系统记的）显示 "—"；查得到 name 显
+                          示 "由 <name> 记"；查不到 ID 显示 "由 #<id> 记"。 */}
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded"
+                        style={{
+                          background: 'var(--color-bg-elevated)',
+                          color: 'var(--color-text-secondary)',
+                          border: '1px solid var(--color-border-subtle)',
+                        }}
+                        title={
+                          m.character_id == null
+                            ? '系统 / 旧 entry'
+                            : `character_id=${m.character_id}`
+                        }
+                      >
+                        {m.character_id == null
+                          ? '系统'
+                          : `由 ${charMap[m.character_id] ?? `#${m.character_id}`} 记`}
                       </span>
                       <span
                         className="text-xs"

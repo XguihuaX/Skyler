@@ -97,6 +97,13 @@ async def list_memories(
     active_only: bool = Query(True),
     session: AsyncSession = Depends(get_session),
 ) -> List[dict]:
+    """v3.5 chunk 9 Part 3：默认返 user 级**全部** memory（不按当前角色过滤）。
+
+    ``character_id`` query param 仍保留 —— 用户在 MemoryManagerDrawer 若
+    主动按角色筛选可显式传值；不传则返当前 user 在所有角色下的 memory。
+    save_memory tool 仍记录 character_id（来源 audit），UI 通过 ``[由 Momo
+    记] / [由八重神子记]`` 角标显示来源。
+    """
     rows = await get_all_memories(
         session,
         _uid(user_id),
