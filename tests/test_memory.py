@@ -86,6 +86,19 @@ async def test_short_term():
 async def test_long_term():
     print("\n[LongTermMemory]")
 
+    # v3.5 chunk 9 Part 0：``search_relevant_memories`` 加了短输入 gate
+    # （默认 ``threshold = 10``）短查询直接返 ``[]``。本测试用 4-char 中文
+    # query（"音乐喜好" / "运动习惯"）测语义检索本身，不测 gate；把
+    # threshold 临时降到 0 让 query 走完整路径。gate 行为单独由
+    # ``test_build_messages_perf.py`` 验证。
+    from backend.config import config_yaml as _cfg
+    _orig_threshold = _cfg.get("memory", {}).get("embedding", {}).get(
+        "short_input_threshold"
+    )
+    _cfg.setdefault("memory", {}).setdefault("embedding", {})[
+        "short_input_threshold"
+    ] = 0
+
     # Encoding smoke-test
     vec = await _encode("猫咪喜欢睡觉")
     check("encode returns float32 ndarray", isinstance(vec, np.ndarray) and vec.dtype == np.float32)
@@ -112,6 +125,11 @@ async def test_long_term():
     # Empty user
     empty = await search_relevant_memories("nonexistent_user", "anything")
     check("empty user returns []", empty == [])
+
+    # restore threshold
+    _cfg["memory"]["embedding"]["short_input_threshold"] = (
+        _orig_threshold if _orig_threshold is not None else 10
+    )
 
 # ---------------------------------------------------------------------------
 # Main

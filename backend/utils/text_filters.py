@@ -170,6 +170,51 @@ _EMOTION_BLOCK_RE = re.compile(
 )
 
 
+# v3.5 chunk 9 Part 0.5：motion strip helper（与 emotion / state_update 同 spirit）
+#
+# chunk 9 Part 0.5 audit 发现 4 个 Skyler 自有 meta tag 中 motion 漏了
+# 写库前 strip：
+#
+#   meta tag       | TTS chain | 写库链 | 状态
+#   -------------- | --------- | ------ | -------------------------------
+#   <emotion>      | ✓         | ✓      | hotfix-4 已补
+#   <thinking>     | ✓         | ✓      | v3-F 回归修补
+#   <state_update> | ✓         | ✓      | chunk 3b 落地即补
+#   <motion>       | ✗         | ✗      | **本 commit 补**
+#
+# motion 由 chat.py ``_parse_motion`` 流式按段 emit Live2D 触发事件给
+# 前端，**剥的版本仅 emit 给 TTS**；full_reply 入库时仍含字面文本
+# ``<motion>害羞</motion>``，由 chunk 9 hotfix-3 Part 3 SUSPICIOUS_TAG_RE
+# 兜底剥 + 每轮 log ``[sanitize] suspicious tags hit=1`` warning（log 噪声）。
+#
+# 与 emotion 一致语义：配对 ``<motion>X</motion>`` + 自闭合 ``<motion/>``
+# / ``<motion />``（容许 attrs），大小写不敏感。
+
+_MOTION_BLOCK_RE = re.compile(
+    r"<motion\b[^>]*?/>"                               # 自闭合
+    r"|<motion\b[^>]*?>[\s\S]*?</motion>",             # 配对
+    re.IGNORECASE,
+)
+
+
+def strip_motion(text: str) -> str:
+    """删除所有 ``<motion>X</motion>`` 标签 + 自闭合变体。
+
+    覆盖路径（与 ``strip_emotion`` 同契约）：
+      * TTS preprocessor（``strip_all_for_tts``）—— 防 TTS 念出标签
+      * 写库前（``_update_memory`` / ``_save_interrupted_turn``）—— 防
+        chat_history 入库带字面 motion 文本，避免触发 SUSPICIOUS 兜底
+        warning。
+
+    主路径下 ``backend.agents.chat._parse_motion`` 在每句末检测 + emit
+    Live2D 动作给前端；写库链这层是双保险（边界漏网：流式 cancel 截断 /
+    LLM 多打一次 / 跨句 boundary 落点）。
+    """
+    if not text:
+        return text
+    return _MOTION_BLOCK_RE.sub("", text)
+
+
 def strip_emotion(text: str) -> str:
     """删除所有 ``<emotion>X</emotion>`` 标签 + 自闭合变体。
 
@@ -189,18 +234,19 @@ def strip_emotion(text: str) -> str:
 
 
 def strip_all_for_tts(text: str) -> str:
-    """全套 strip：emotion + thinking + state_update + tool_call fallback。
+    """全套 strip：emotion + thinking + state_update + motion + tool_call fallback。
 
     送 cosyvoice / edge / sovits 之前所有 sentence 必须先经此函数。
     chunk 4 hotfix-1 之前 TTS preprocessor 只覆盖 emotion / thinking /
-    state_update 三道；chunk 4 引入 tool_call fallback 后这里成第六道
-    strip——少一道就会被念出来。
+    state_update 三道；chunk 4 引入 tool_call fallback；chunk 9 Part 0.5
+    补 motion——4 个 Skyler 自有 meta tag + tool_call fallback 共 5 道。
     """
     if not text:
         return text
     out = strip_emotion(text)
     out = strip_thinking(out)
     out = strip_state_update(out)
+    out = strip_motion(out)
     out = strip_tool_call_fallback(out)
     return out
 

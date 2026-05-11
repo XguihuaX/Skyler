@@ -372,12 +372,14 @@ See [**ROADMAP.md**](ROADMAP.md) for the full prioritized roadmap.
    - 修法：扫 7 文件改成当前 API / 删过时测试
    - 工程量：1–2 小时
 
-2. **`_build_messages` 性能退化 1000x**（chunk 1.6 → v3-H chunk 1 实测：4ms → 4487ms）
-   - 嫌疑路径：某个新 capability 在 prompt 注入时做昂贵 IO（同步 health_check 远程 API？）
-   - 影响：每轮 chat 启动延迟 +4s，用户体感"Momo 反应慢"
-   - 修法：profile `_build_messages` 一次，找出热点 → 移到 background warm cache
-   - 工程量：2–4 小时
-   - 触发：v3-G 主线封盘前必修
+2. ~~**`_build_messages` 性能退化 1000x**~~ ✅ chunk 9 Part 0 已优化（2026-05-12）
+   - 旧现象：chunk 1.6 → v3-H chunk 1 首条消息 4ms → 4487ms
+   - 真根因：embedding 模型 preload 未完成时 lazy load 阻塞首条消息（10s）；不是 per-turn 退化
+   - chunk 9 Part 0 渐进优化（3 项零风险）：
+     - 短输入（< 10 chars）跳过 memory 检索：~67ms → 0.47ms（**~140x**）
+     - embedding LRU + TTL 缓存：~67ms → 0.01ms（**~6700x**，cache hit）
+     - device=auto → cpu（mps 与 cpu 短文本 median 相同但 cpu 更稳）
+   - 残留风险：模型 preload 未完时首条消息仍 lazy load（10s）—— chunk 10 / backlog "preload-gate 或 not-ready 跳过"
 
 ### 低
 
