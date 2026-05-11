@@ -359,6 +359,72 @@ See [**ROADMAP.md**](ROADMAP.md) for the full prioritized roadmap.
 
 ---
 
+## ⚠️ Known Problems / 已知问题
+
+按优先级排列。日常运行不阻塞，但未来需要处理。详细 backlog 散落条目散见 [ROADMAP.md §Tech Debt & Backlog](ROADMAP.md#tech-debt--backlog) / [DESIGN.md §十四之B](DESIGN.md)；本块是 manual 验收期间发现的活跃 issue 汇总。
+
+### 中
+
+1. **7 个 pre-existing test failures**（2026-05-11 chunk 6b hotfix-2 audit 发现）
+   - 文件：`test_chat_agent` / `test_database` / `test_integration` / `test_llm_client` / `test_memory_agent` / `test_memory` / `test_ws_helpers`
+   - 根因：chunk 0–4 累积过程中漏维护，引用已删/改名 API（`upsert_personality` / `DEFAULT_MODEL` / `_personality_to_dict` / `_run_plan`）
+   - 影响：每次 hotfix 的 "0 regression" 声明带 false positive（实际新代码 0 regression，但旧测试仍红）
+   - 修法：扫 7 文件改成当前 API / 删过时测试
+   - 工程量：1–2 小时
+
+2. **`_build_messages` 性能退化 1000x**（chunk 1.6 → v3-H chunk 1 实测：4ms → 4487ms）
+   - 嫌疑路径：某个新 capability 在 prompt 注入时做昂贵 IO（同步 health_check 远程 API？）
+   - 影响：每轮 chat 启动延迟 +4s，用户体感"Momo 反应慢"
+   - 修法：profile `_build_messages` 一次，找出热点 → 移到 background warm cache
+   - 工程量：2–4 小时
+   - 触发：v3-G 主线封盘前必修
+
+### 低
+
+3. **网易云 mpv 真播降级 url_scheme**（2026-05-11 chunk 6b hotfix-3 验收发现）
+   - 现象：NCM 客户端弹出 + 显示歌名，用户手动点播放（理想是 mpv 后台真播）
+   - 根因：chunk 6b hotfix-2 自实现的 `NeteaseClient.get_song_url` weapi 签名错，所有歌返回 `{"msg":"参数错误","code":400}`
+   - 影响：用户体验降一档；功能可用（Momo 引导用户手动点）
+   - 修法：用 `pyncm` 库重写 `get_song_url`
+   - 阻塞：`pyncm` 在用户环境安装失败（PyPI / 镜像在 Python ssl 路径被截断，疑代理 TUN 劫持）—— 长期 backlog
+   - 工程量：2–3 小时（若 `pyncm` 解决）
+
+4. **MCP 凭证 V1 plaintext 存 SQLite**（v3.5 chunk 7 衍生 backlog）
+   - 现状：`mcp_credentials` 表明文存 API key；与 `.env` 风险等价（SQLite 文件在 `~/.skyler/` 已具系统级权限隔离）
+   - 升级路径：接 OS keyring（macOS Keychain / Windows Credential Manager / GNOME Keyring）或 master password 派生加密
+   - Touchpoint：`backend/mcp/credentials.py` `get_env` / `upsert` 内部加 cipher layer，外部 API 不变
+
+5. **`config.yaml` 双写源**（v3.5 chunk 7 audit 发现）
+   - 前端 SettingsPanel 通过 `setConfigField` 写 `config.yaml`（`tts.enabled` / `memory.long_term_enabled` / `search.enable_search` 等），git HEAD 不感知 → 用户改 settings 后 `git status` 显示 dirty
+   - 修法：拆静态配置（git 版本控制）vs 运行时设置（DB 表存，参照 chunk 7 `mcp_client_state` pattern）
+   - 与第 6 条同性质，建议 v4 一起整改
+
+6. **`characters.yaml` vs DB 双源真相**（v3-E1 留 v4 Scheme C 修）
+   - 当前 Scheme B（DB 主 + YAML fallback）—— `_build_messages` 优先 DB persona，YAML fallback
+   - 计划 Scheme C（v3-G 末或 v4）：删 yaml、DB 单源、迁移脚本、`switch_character` 改 DB query、`prompt_manager` 改 DB-backed
+
+7. **超长 B 站字幕分段总结**（v3.5 chunk 6a 衍生 backlog）
+   - 现状：`bilibili.get_subtitles` 返完整字幕全文不截断
+   - MVP 接受：qwen3.6-plus / claude / deepseek 都 200k+ context；B 站常见 5–30 分钟视频字幕 1–3k 字够安全
+   - 升级路径：滑动窗口分段 → 各段单独总结 → 终极合并总结（map-reduce 风格）
+   - Touchpoint：`backend/integrations/bilibili.py` `get_subtitles` 末尾加 `_segment_and_summarize` 可选 wrapper
+
+8. **cosyvoice WS 建链 5s 超时**（v3-G' 衍生 backlog）
+   - 现状：dashscope SDK 默认 5s WebSocket 建链超时（`speech_synthesizer.py:526` 写死 `self.__connect(5)`，无外部参数化入口）
+   - 影响：弱网 / 跨境 / VPN 抖动场景下经常 `TimeoutError`，单句 TTS 直接失败
+   - 修法（择一）：（A）生产侧 monkeypatch（hack 痕迹）/（B）`_blocking_synthesize` 退避重试 / （C）升级 dashscope SDK 看上游是否暴露 timeout 参数 / （D）迁 SDK 的 streaming_call + 自管连接池
+
+9. **Python 3.10 + `google-api-core` 兼容窗口**
+   - `google-api-core` 已宣布 2026-10-04 起停止支持 Python 3.10
+   - 影响：到期前 Google Calendar 集成依赖会卡在旧版本，安全补丁停摆
+   - 修法：升级到 Python 3.11+（`pyproject.toml` / setup guide / CI 同步）
+
+10. **剪贴板内容写入 log（隐私）**（chunk 3a 起）
+    - 现状：clipboard watcher 调试日志会带 content preview；生产环境若 log 级别开 INFO 可能记录剪贴板敏感内容（密码 / token 等）
+    - 修法：watcher / capabilities 内部 log 改成 hash / length / type，content 仅 DEBUG 级（默认 WARNING+ 不记）
+
+---
+
 ## Inspirations
 
 Skyler is built on lessons from two projects:
