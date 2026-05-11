@@ -69,6 +69,9 @@ from backend.llm.client import LLMError, call_llm
 from backend.memory.short_term import short_term_memory
 from backend.tts import get_tts_engine, tts_manager  # noqa: F401  (manager 保留作为旧路径)
 from backend.utils.text_filters import (
+    SUSPICIOUS_TAG_RE,
+    count_suspicious_tags,
+    sanitize_suspicious_tags,
     strip_state_update,
     strip_thinking,
     strip_tool_call_fallback,
@@ -485,6 +488,17 @@ async def _update_memory(
     # v3-G chunk 4 hotfix-1：tool_call_resilience 已 strip 过 full_reply，但
     # 当 reply 直接来自 partial 路径或绕过 resilience 调用时这里再 strip 一道。
     reply = strip_tool_call_fallback(strip_state_update(strip_thinking(reply)))
+    # v3.5 chunk 6b hotfix-3：通用 unknown-tag sanitize 末尾兜底。
+    # **只对 assistant 行** —— 用户消息原样保留（HTML / code snippet 等）。
+    # 命中即 log warning + strip，让维护者看到 LLM 模式变化。
+    if reply:
+        _suspicious_n = count_suspicious_tags(reply)
+        if _suspicious_n > 0:
+            logger.warning(
+                "[sanitize] suspicious tags hit=%d user=%s preview=%r",
+                _suspicious_n, user_id, reply[:200],
+            )
+            reply = sanitize_suspicious_tags(reply).strip()
     try:
         await short_term_memory.add(user_id, "user",      user_text)
         await short_term_memory.add(user_id, "assistant", reply)
@@ -572,9 +586,18 @@ async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
     # v3-G chunk 3b：同步剥 <state_update>。
     # v3-G chunk 4 hotfix-1：同步剥 fallback tool_call 标签（中断时 reply_parts
     # 已是逐句 strip 过的，但保留双保险——主路径写库前同样 3 道全过）。
+    # v3.5 chunk 6b hotfix-3：末尾再过一道通用 unknown-tag sanitize。
     full_reply = strip_tool_call_fallback(
         strip_state_update(strip_thinking("".join(state.reply_parts)))
     ).strip()
+    if full_reply:
+        _suspicious_n = count_suspicious_tags(full_reply)
+        if _suspicious_n > 0:
+            logger.warning(
+                "[sanitize] suspicious tags (interrupted) hit=%d user=%s preview=%r",
+                _suspicious_n, user_id, full_reply[:200],
+            )
+            full_reply = sanitize_suspicious_tags(full_reply).strip()
     interrupted_at = datetime.utcnow()
 
     try:

@@ -230,6 +230,61 @@ _CAPABILITY_OPEN_TAG_RE = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+# v3.5 chunk 6b hotfix-3：通用 unknown-tag sanitize（白名单思路）
+#
+# 黑名单 strip（emotion/thinking/state_update/tool_call/capability_tag）只能
+# 覆盖已知模式 —— 未来 LLM 还会发明新格式（实测：``<netease.daily_recommend>``
+# 字面文本两次"放日推"测试都中招）。
+#
+# 本规则反过来：**任何**形如 ``<name>...</name>`` 或 ``<name />`` 的低置信
+# XML 都算可疑（assistant 回复正常文本不该出现这类标签），命中即剥。
+#
+# 仅在 ``role=assistant`` 写库前 + ``_save_interrupted_turn`` partial reply
+# 写库前 + ``_regenerate_profile_summary`` 双向应用，不动 ``role=user``
+# （用户可能正经发 HTML / code snippet）。
+#
+# 命中即 log warning（telemetry），让维护者看到 LLM 行为变化 + 调出新模式
+# 时能补回黑名单规则。
+# ---------------------------------------------------------------------------
+
+#: 任何 ``<name>...</name>``（以字母 / 下划线开头，可含 ``.`` 与 digits / _ 后续字符）
+#: 或对应自闭合 ``<name />``。用 ``\1`` 反向引用确保开闭 tag 同名。
+#:
+#: 设计取舍：
+#:   * tag name 必须以字母/下划线开头 → ``<3`` ``<=`` 等 emoticon / 运算符不命中。
+#:   * 容许 ``.`` 让 capability-name-as-tag 一并被兜住。
+#:   * 不要求 ``.`` —— 这样 ``<tool_call>`` ``<emotion>`` 等也会被命中
+#:     （即便已被前面 strip 链清掉，这里再剥一道是双保险）。
+SUSPICIOUS_TAG_RE = re.compile(
+    r"<([a-z_][a-z_0-9.]*)[^>]*>[\s\S]*?</\1>"     # 配对 tag（\1 反向引用同名）
+    r"|<[a-z_][a-z_0-9.]*[^>]*?/>",                # 自闭合（容许 attrs）
+    re.IGNORECASE,
+)
+
+
+def count_suspicious_tags(text: str) -> int:
+    """统计可疑 tag 数（不修改文本）。
+
+    给迁移 / profile_summary 输出验收判定 / 测试断言用。空 / None → 0。
+    """
+    if not text:
+        return 0
+    return len(SUSPICIOUS_TAG_RE.findall(text))
+
+
+def sanitize_suspicious_tags(text: str) -> str:
+    """剥所有 ``SUSPICIOUS_TAG_RE`` 命中段。空 / None 原样返回。
+
+    本函数**不 log** —— caller 负责打 warning + 调出现频。这样：
+      * 迁移路径可静默清理（每行命中已合并日志）
+      * ws.py 写库前路径上每命中 log 一次 [sanitize] suspicious tags warning
+    """
+    if not text:
+        return text
+    return SUSPICIOUS_TAG_RE.sub("", text)
+
+
 def has_partial_open_tag(text: str) -> bool:
     """流式分句时用：buffer 末尾是否有未闭合标签起始。
 
