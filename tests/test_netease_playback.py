@@ -91,7 +91,7 @@ async def test_play_song_mpv_missing():
 async def test_play_song_cookie_missing():
     print("\n[local_play_song — mpv OK 但 cookie 未配]")
     fake_client = MagicMock()
-    fake_client.has_credentials = MagicMock(return_value=False)
+    fake_client.has_credentials = False
     with patch.object(caps._mpv, "health_check",
                       AsyncMock(return_value={"status": "healthy"})), \
          patch.object(caps._nem, "get_client", return_value=fake_client):
@@ -102,7 +102,7 @@ async def test_play_song_cookie_missing():
 async def test_play_song_url_unavailable():
     print("\n[local_play_song — song/url 返空 url]")
     fake_client = MagicMock()
-    fake_client.has_credentials = MagicMock(return_value=True)
+    fake_client.has_credentials = True
     fake_client.get_song_url = MagicMock(return_value={
         "song_id": 12345, "url": "", "is_trial": False,
     })
@@ -116,7 +116,7 @@ async def test_play_song_url_unavailable():
 async def test_play_song_happy():
     print("\n[local_play_song — happy 路径 mpv 播+ trial flag]")
     fake_client = MagicMock()
-    fake_client.has_credentials = MagicMock(return_value=True)
+    fake_client.has_credentials = True
     fake_client.get_song_url = MagicMock(return_value={
         "song_id": 12345, "url": "http://m.music.com/a.mp3",
         "is_trial": True, "br": 320000,
@@ -164,7 +164,7 @@ async def test_pause_resume_stop():
 async def test_play_playlist_happy():
     print("\n[local_play_playlist — first plays + rest queued]")
     fake_client = MagicMock()
-    fake_client.has_credentials = MagicMock(return_value=True)
+    fake_client.has_credentials = True
     fake_client.playlist_detail = MagicMock(return_value={"tracks": [
         {"id": 1, "name": "Song A", "ar": [{"name": "Artist A"}]},
         {"id": 2, "name": "Song B", "ar": [{"name": "Artist B"}]},
@@ -196,7 +196,7 @@ async def test_play_playlist_happy():
 async def test_play_playlist_empty():
     print("\n[local_play_playlist — 空歌单 → empty_playlist]")
     fake_client = MagicMock()
-    fake_client.has_credentials = MagicMock(return_value=True)
+    fake_client.has_credentials = True
     fake_client.playlist_detail = MagicMock(return_value={"tracks": []})
     with patch.object(caps._mpv, "health_check",
                       AsyncMock(return_value={"status": "healthy"})), \

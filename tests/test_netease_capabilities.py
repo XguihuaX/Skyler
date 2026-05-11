@@ -79,11 +79,12 @@ class _FakeClient:
         ]
         self.like_will_succeed = True
 
-    # v3.5 chunk 6b hotfix-1：场景 capability 调用 _client().has_credentials()
-    # 走 mpv-availability 检查；fake client 默认返 False 让旧 test 维持
-    # URL Scheme 路径行为（autoplay 字段已改为基于 mpv 状态，旧断言会同步修）。
-    def has_credentials(self) -> bool:
-        return False
+    # v3.5 chunk 6b hotfix-2：真实 NeteaseClient.has_credentials 是 @property，
+    # 此处用实例属性同样满足 `if not client.has_credentials` 读取语义（fake
+    # 默认 False → URL Scheme fallback 路径）。早期写成方法导致 hotfix-1 prod
+    # 代码 .has_credentials() 调一个 bool runtime 炸 —— 这里修对齐 property
+    # 形态，下次 fake 复用不会再踩同坑。
+    has_credentials: bool = False
 
     def daily_recommend(self):
         self.calls.append(("daily",))

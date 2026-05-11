@@ -86,7 +86,7 @@ async def play_song(song_id: int = 0, **_kwargs: Any) -> dict:
     mpv_h = await _mpv.health_check()
     if mpv_h.get("status") == "error":
         return mpv_h  # mpv_not_installed + hint
-    if not _nem.get_client().has_credentials():
+    if not _nem.get_client().has_credentials:
         return {
             "error": "cookie_required",
             "hint": "请在 .env 配置 NETEASE_MUSIC_U（详见 docs/netease-music-setup.md）",
@@ -160,7 +160,7 @@ async def play_playlist(
     mpv_h = await _mpv.health_check()
     if mpv_h.get("status") == "error":
         return mpv_h
-    if not _nem.get_client().has_credentials():
+    if not _nem.get_client().has_credentials:
         return {
             "error": "cookie_required",
             "hint": "请在 .env 配置 NETEASE_MUSIC_U",

@@ -142,7 +142,7 @@ async def _mpv_available_and_cookie_ok() -> bool:
     用于场景 capability 在调真实播放前的预检；返 False 时立即走 URL
     Scheme fallback，不会触发 mpv subprocess spawn。
     """
-    if not _client().has_credentials():
+    if not _client().has_credentials:
         return False
     h = await _mpv.health_check()
     return h.get("status") == "healthy"
@@ -190,9 +190,7 @@ async def _try_mpv_play_song_queue(songs: list[dict]) -> dict:
     if not sid:
         return {"played": False, "reason": "first_song_missing_id"}
     title = first.get("name") or first.get("title") or ""
-    artist = ", ".join(
-        a.get("name", "") for a in (first.get("ar") or first.get("artists") or [])
-    )
+    artist = _join_artist_names(first.get("ar") or first.get("artists"))
     player = _mpv.get_player()
     player.queue_clear()
     res = await _try_mpv_play_single(int(sid), title=title, artist=artist)
@@ -210,9 +208,7 @@ async def _try_mpv_play_song_queue(songs: list[dict]) -> dict:
             if not u:
                 continue
             t_title = t.get("name") or t.get("title") or f"NCM {tid}"
-            t_artist = ", ".join(
-                a.get("name", "") for a in (t.get("ar") or t.get("artists") or [])
-            ) or "网易云音乐"
+            t_artist = _join_artist_names(t.get("ar") or t.get("artists")) or "网易云音乐"
             player.queue_extend([{
                 "url": u,
                 "meta": {"title": t_title, "artist": t_artist},
@@ -226,6 +222,29 @@ async def _try_mpv_play_song_queue(songs: list[dict]) -> dict:
         "first_song_id": int(sid),
         "is_trial": res.get("is_trial", False),
     }
+
+
+def _join_artist_names(items) -> str:
+    """提取并 join 艺人名 —— 兼容 raw NCM dict 形态 (``[{name: ...}]``，
+    weapi 原始字段) 与集成层 ``_normalize_song`` 已转好的字符串列表
+    (``[str]``，``daily_recommend / personal_fm / search / playlist_detail``
+    出口形态)。
+
+    hotfix-1 写死 ``a.get("name")`` 假设永远是 dict，runtime 拿到 normalize
+    后的字符串列表立刻 ``AttributeError: 'str' object has no attribute
+    'get'``。本 helper 用 isinstance 分流，单元测试覆盖两种 shape。
+    """
+    names: list[str] = []
+    for a in items or []:
+        if isinstance(a, dict):
+            n = a.get("name") or ""
+        elif isinstance(a, str):
+            n = a
+        else:
+            continue
+        if n:
+            names.append(n)
+    return ", ".join(names)
 
 
 def _mpv_unavailable_hint() -> str:
@@ -405,9 +424,7 @@ async def play_song(keyword: str, **_kwargs) -> dict:
     # mpv-first
     if await _mpv_available_and_cookie_ok():
         title = song.get("name") or ""
-        artist = ", ".join(
-            a.get("name", "") for a in (song.get("ar") or song.get("artists") or [])
-        )
+        artist = _join_artist_names(song.get("ar") or song.get("artists"))
         res = await _try_mpv_play_single(int(song["id"]), title=title, artist=artist)
         if res.get("played"):
             return {

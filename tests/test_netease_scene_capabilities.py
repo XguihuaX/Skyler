@@ -62,8 +62,10 @@ class _MpvFakeClient:
             {"id": 4002, "name": "Pl 2", "ar": []},
         ]
 
-    def has_credentials(self) -> bool:
-        return True
+    # v3.5 chunk 6b hotfix-2：对齐真实 NeteaseClient.has_credentials @property
+    # 语义 —— 属性读取（而非方法调用）。早期方法形态使 prod 代码 .has_credentials()
+    # 调一个 bool 在 runtime 炸 ('bool' object is not callable)。
+    has_credentials: bool = True
 
     def daily_recommend(self):
         return self.daily_recs
@@ -248,7 +250,7 @@ async def test_mpv_availability_combined():
               await caps._mpv_available_and_cookie_ok() is True)
 
     # cookie missing → False (短路，不调 health_check)
-    fake.has_credentials = MagicMock(return_value=False)
+    fake.has_credentials = False
     with patch.object(nm, "get_client", return_value=fake), \
          patch.object(caps._mpv, "health_check",
                       AsyncMock(return_value={"status": "healthy"})):
@@ -256,7 +258,7 @@ async def test_mpv_availability_combined():
               await caps._mpv_available_and_cookie_ok() is False)
 
     # cookie OK + mpv not_installed → False
-    fake.has_credentials = MagicMock(return_value=True)
+    fake.has_credentials = True
     with patch.object(nm, "get_client", return_value=fake), \
          patch.object(caps._mpv, "health_check",
                       AsyncMock(return_value={"status": "error",
