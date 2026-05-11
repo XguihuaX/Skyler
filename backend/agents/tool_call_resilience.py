@@ -8,6 +8,7 @@ Qwen3.6（DashScope OpenAI-compatible 通道）在 tool calling 时偶发把 too
 * ``<tool_call>{"name": "X", "arguments": {...}}</tool_call>``    Qwen 内部 XML
 * ``<function_calls><invoke name="X"><parameter name="K">V</parameter></invoke></function_calls>``  Anthropic 风格
 * `````json\n{"name": "X", "arguments": ...}\n`````  Markdown JSON 块
+* ``<netease.daily_recommend>...</netease.daily_recommend>`` capability-name-as-tag （chunk 6b hotfix-3 加）
 
 ChatAgent 的主循环按 OpenAI 协议看 ``finish_reason='tool_calls'`` 决定执
 行——这些 fallback 形式跑到 ``delta.content``，ChatAgent 完全意识不到，
@@ -77,6 +78,33 @@ _ANTHROPIC_PARAM_RE = re.compile(
 _MARKDOWN_JSON_RE = re.compile(
     r"```json\s*(\{[^`]*?\"name\"\s*:\s*\"[^\"]+\"[^`]*?\})\s*```",
     re.DOTALL | re.IGNORECASE,
+)
+
+#: v3.5 chunk 6b hotfix-3：capability-name-as-tag。
+#:
+#: Qwen3.6 偶发把 capability name 当 XML 标签直接打到 ``delta.content``：
+#:
+#:   <netease.daily_recommend></netease.daily_recommend>
+#:   <netease.daily_recommend />
+#:   <netease.daily_recommend>{"keyword": "夜空"}</netease.daily_recommend>
+#:
+#: 三种 hotfix-1/2 之前的 fallback regex 都不匹配 → 没真调 + 没 strip →
+#: 字面 XML 进 chat_history → in-context learning 自循环。
+#:
+#: 匹配规则：
+#:   * tag name 必须含 ``.``（capability 命名风格 ``ns.method``），防止
+#:     与普通 HTML 标签 ``<div>`` 等冲突。
+#:   * 支持自闭合 ``<x.y/>`` 与配对 ``<x.y>...</x.y>``；inner content 视为
+#:     JSON args（容错：空 / 仅空白 / 解析失败 → ``{}``）。
+#:   * 大小写不敏感、跨多行；用 ``\1`` 反向引用确保 open/close tag 一致。
+_CAPABILITY_TAG_RE = re.compile(
+    r"<([a-z_][a-z_0-9]*\.[a-z_][a-z_0-9]*)"   # group 1: capability name (含 dot)
+    r"(?:\s+[^>]*?)?"                          # attrs（忽略）
+    r"(?:"
+    r"\s*/>"                                   # 自闭合
+    r"|>(.*?)</\1>"                            # group 2: inner content
+    r")",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -236,6 +264,67 @@ async def detect_and_execute_fallback_tool_calls(
             logger.warning("[tool_resilience] markdown_json parse failed: %s", exc)
 
     cleaned = _MARKDOWN_JSON_RE.sub("", cleaned)
+
+    # ─── 4. Capability-name-as-tag （v3.5 chunk 6b hotfix-3）────────────────
+    # 必须放在 anthropic_invoke 之后：那条规则匹配 ``<invoke name="X">``
+    # 而 ``<X.Y>...</X.Y>`` 不会被它误吃；但反过来若先扫 capability-tag，
+    # 形如 ``<function_calls><invoke name="x.y">`` 不会有 ``.`` 因而不命中
+    # 本规则——顺序安全。
+    for m in _CAPABILITY_TAG_RE.finditer(cleaned):
+        try:
+            name = (m.group(1) or "").strip()
+            inner = (m.group(2) or "").strip() if m.lastindex and m.lastindex >= 2 else ""
+            if not name:
+                continue
+            if name not in _tool_registry_dict:
+                logger.info(
+                    "[tool_resilience] capability_tag: tool %r not registered, skipping",
+                    name,
+                )
+                continue
+            args: dict[str, Any] = {}
+            if inner:
+                # 容错：双重编码 / 单引号 / 解析失败 → {}
+                try:
+                    parsed = json.loads(inner)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                    elif isinstance(parsed, str):
+                        try:
+                            inner_again = json.loads(parsed)
+                            if isinstance(inner_again, dict):
+                                args = inner_again
+                        except json.JSONDecodeError:
+                            pass
+                except json.JSONDecodeError:
+                    # 退一步尝试把单引号替换成双引号
+                    try:
+                        parsed = json.loads(inner.replace("'", '"'))
+                        if isinstance(parsed, dict):
+                            args = parsed
+                    except json.JSONDecodeError:
+                        args = {}
+            try:
+                result = await _call_with_context(
+                    ToolRegistry, name, args, user_id=user_id, character_id=character_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[tool_resilience] capability_tag exec failed name=%s: %s",
+                    name, exc,
+                )
+                result = {"error": str(exc)}
+            executed.append({
+                "pattern": "capability_tag", "name": name, "args": args, "result": result,
+            })
+            logger.info(
+                "[tool_resilience] fallback=capability_tag tool=%s args=%s",
+                name, json.dumps(args, ensure_ascii=False)[:200],
+            )
+        except Exception as exc:
+            logger.warning("[tool_resilience] capability_tag parse failed: %s", exc)
+
+    cleaned = _CAPABILITY_TAG_RE.sub("", cleaned)
     cleaned = cleaned.strip()
     return cleaned, executed
 
