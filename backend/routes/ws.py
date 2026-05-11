@@ -72,6 +72,7 @@ from backend.utils.text_filters import (
     SUSPICIOUS_TAG_RE,
     count_suspicious_tags,
     sanitize_suspicious_tags,
+    strip_emotion,
     strip_state_update,
     strip_thinking,
     strip_tool_call_fallback,
@@ -512,7 +513,13 @@ async def _update_memory(
     # strip 兜底。chunk 2.6 footgun 教训：双保险 + TTS preprocessor 第三道。
     # v3-G chunk 4 hotfix-1：tool_call_resilience 已 strip 过 full_reply，但
     # 当 reply 直接来自 partial 路径或绕过 resilience 调用时这里再 strip 一道。
-    reply = strip_tool_call_fallback(strip_state_update(strip_thinking(reply)))
+    # v3.5 chunk 6b hotfix-4：补 strip_emotion（chunk 4 契约第 2 道入库前必须
+    # 完整覆盖 Skyler 自有 meta tag：emotion / state_update / thinking）；之前
+    # 漏 emotion 致每轮 SUSPICIOUS 兜底报 warning，治标不治本。emotion 放在
+    # 链尾 SUSPICIOUS 之前，让合法 tag 走合法路径剥，SUSPICIOUS 只兜未知格式。
+    reply = strip_emotion(
+        strip_tool_call_fallback(strip_state_update(strip_thinking(reply)))
+    )
     # v3.5 chunk 6b hotfix-3：通用 unknown-tag sanitize 末尾兜底。
     # **只对 assistant 行** —— 用户消息原样保留（HTML / code snippet 等）。
     # 命中即 log warning + strip，让维护者看到 LLM 模式变化。
@@ -611,10 +618,11 @@ async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
     # v3-G chunk 3b：同步剥 <state_update>。
     # v3-G chunk 4 hotfix-1：同步剥 fallback tool_call 标签（中断时 reply_parts
     # 已是逐句 strip 过的，但保留双保险——主路径写库前同样 3 道全过）。
+    # v3.5 chunk 6b hotfix-4：补 strip_emotion（与 _update_memory 同契约）。
     # v3.5 chunk 6b hotfix-3：末尾再过一道通用 unknown-tag sanitize。
-    full_reply = strip_tool_call_fallback(
+    full_reply = strip_emotion(strip_tool_call_fallback(
         strip_state_update(strip_thinking("".join(state.reply_parts)))
-    ).strip()
+    )).strip()
     if full_reply:
         _suspicious_n = count_suspicious_tags(full_reply)
         if _suspicious_n > 0:

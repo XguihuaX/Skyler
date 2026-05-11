@@ -143,17 +143,45 @@ def strip_tool_call_fallback(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# emotion strip（防御性补：chat.py 已在第一句解析 + 剥，这里只是 TTS 兜底）
+# emotion strip
+#
+# chunk 4 hotfix-1 之前：本函数只作 ``strip_all_for_tts`` TTS 路径兜底，
+# chat.py ``_parse_emotion`` 流式按句剥已是主路径。
+#
+# v3.5 chunk 6b hotfix-4：实测发现入库链 ``_update_memory`` /
+# ``_save_interrupted_turn`` **没调** ``strip_emotion`` —— ``<emotion>happy
+# </emotion>`` 字面文本进 chat_history，由 Part 3 SUSPICIOUS_TAG_RE 兜底剥，
+# 但每轮触发 ``[sanitize] suspicious tags`` warning（log 噪声）。本 commit
+# 修正：入库链补 ``strip_emotion`` 作合法剥（emotion 是 Skyler 自有 meta
+# tag），让 SUSPICIOUS 只兜未知格式。
+#
+# Regex 容错（对齐 ``_STATE_UPDATE_RE`` 形态）：
+#   - 配对 ``<emotion>X</emotion>``：``[\s\S]*?`` 容许 X 含 ``<`` （比旧
+#     ``[^<]*`` 更稳，匹配 ``<emotion><thinking>...</thinking></emotion>``
+#     这种 LLM 乱嵌套）
+#   - 自闭合 ``<emotion/>`` / ``<emotion />``（容许 attrs）
+#   - 大小写不敏感
 # ---------------------------------------------------------------------------
 
-_EMOTION_BLOCK_RE = re.compile(r"<emotion>[^<]*</emotion>", re.IGNORECASE)
+_EMOTION_BLOCK_RE = re.compile(
+    r"<emotion\b[^>]*?/>"                              # 自闭合
+    r"|<emotion\b[^>]*?>[\s\S]*?</emotion>",           # 配对
+    re.IGNORECASE,
+)
 
 
 def strip_emotion(text: str) -> str:
-    """删除所有 ``<emotion>X</emotion>`` 标签。
+    """删除所有 ``<emotion>X</emotion>`` 标签 + 自闭合变体。
 
-    主路径下 ``backend.agents.chat._parse_emotion`` 在第一句即剥；本函数仅
-    作为 ``strip_all_for_tts`` 的成员防御边界漏网（截断、模型乱打多次等）。
+    覆盖路径：
+      * TTS preprocessor（``strip_all_for_tts``）—— 防 cosyvoice 念出标签
+      * **写库前**（``_update_memory`` / ``_save_interrupted_turn``，
+        hotfix-4 起）—— 防 chat_history 入库带 emotion 字面文本，避免触发
+        Part 3 SUSPICIOUS_TAG_RE 兜底的 ``[sanitize] suspicious tags`` warning。
+
+    主路径下 ``backend.agents.chat._parse_emotion`` 在第一句即剥并 emit
+    ``emotion_tag`` 消息给前端；写库链这层是双保险（边界漏网：流式 cancel
+    截断 / LLM 多打一次 / 跨句 boundary 落点）。
     """
     if not text:
         return text
