@@ -112,6 +112,132 @@ def _client() -> nm.NeteaseClient:
 
 
 # ---------------------------------------------------------------------------
+# v3.5 chunk 6b hotfix-1：场景类 capability fall through 到 mpv
+# ---------------------------------------------------------------------------
+#
+# 背景：chunk 6b 只改了显式 ``netease.play_*`` 为 ``local_play_*``，**没动**
+# 场景类（daily_recommend / personal_fm / play_song(keyword) /
+# play_playlist_by_id）。这些仍走 URL Scheme + ``_trigger_ncm_play`` 兜底，
+# 用户实测 NCM 客户端跳转后**不自动播放指定歌曲**（只接管系统媒体键），
+# capability 却返 ``autoplay: true`` 误导 LLM 回话"已在播放"。
+#
+# 修法：把"播单曲 / 播单首+其余入队"抽成共享 helper，按 mpv 健康检查
+# 三档分支：
+#   * mpv healthy + cookie OK → 走 chunk 6b mpv 真闭环，``autoplay=True``
+#     诚实（mpv 真在放）
+#   * mpv 缺 / cookie 缺 / song_url 失败 → fallback URL Scheme 唤起 NCM，
+#     但 ``autoplay=False`` + ``hint`` 字段提示用户「需要 brew install mpv
+#     才能自动播放指定歌曲」
+#
+# 不改 chunk 6b 已 push 的 mpv 路径（``netease.local_*``），只在 chunk 1
+# capability 内部 fall through 进去。capability 名 + 返回 schema 向后兼容
+# （opened/autoplay/songs 字段保留）。
+
+from backend.integrations import mpv_player as _mpv  # v3.5 chunk 6b
+
+
+async def _mpv_available_and_cookie_ok() -> bool:
+    """组合检查：mpv binary + cookie，两侧任一失败返 False。
+
+    用于场景 capability 在调真实播放前的预检；返 False 时立即走 URL
+    Scheme fallback，不会触发 mpv subprocess spawn。
+    """
+    if not _client().has_credentials():
+        return False
+    h = await _mpv.health_check()
+    return h.get("status") == "healthy"
+
+
+async def _try_mpv_play_single(song_id: int, *, title: str = "", artist: str = "") -> dict:
+    """单曲 mpv 播放（song_id → song_url → mpv.play）。
+
+    成功：``{played: True, is_trial: bool, song_id, url}``
+    失败：``{played: False, reason: 'url_unavailable' | 'mpv_error', detail}``
+    调用方据此决定整体 capability 返 ``autoplay=True/False``。
+    """
+    try:
+        info = await asyncio.to_thread(_client().get_song_url, int(song_id))
+    except Exception as exc:
+        return {"played": False, "reason": "netease_api_error", "detail": str(exc)[:120]}
+    url = info.get("url") or ""
+    if not url:
+        return {"played": False, "reason": "url_unavailable", "song_id": int(song_id)}
+    try:
+        await _mpv.get_player().play(url, meta={
+            "title": title or f"NCM {song_id}",
+            "artist": artist or "网易云音乐",
+        })
+    except Exception as exc:
+        return {"played": False, "reason": "mpv_error", "detail": str(exc)[:120]}
+    return {
+        "played": True,
+        "is_trial": bool(info.get("is_trial")),
+        "song_id": int(song_id),
+        "url": url[:80],
+    }
+
+
+async def _try_mpv_play_song_queue(songs: list[dict]) -> dict:
+    """播放 song 列表第一首 + 其余入 mpv 队列。``songs`` 必须含 ``id``。
+
+    成功：``{played: True, queued: int, first_song_id, is_trial}``
+    失败：``{played: False, reason, detail}``（不入任何队列）
+    """
+    if not songs:
+        return {"played": False, "reason": "empty_song_list"}
+    first = songs[0]
+    sid = first.get("id") or first.get("song_id")
+    if not sid:
+        return {"played": False, "reason": "first_song_missing_id"}
+    title = first.get("name") or first.get("title") or ""
+    artist = ", ".join(
+        a.get("name", "") for a in (first.get("ar") or first.get("artists") or [])
+    )
+    player = _mpv.get_player()
+    player.queue_clear()
+    res = await _try_mpv_play_single(int(sid), title=title, artist=artist)
+    if not res.get("played"):
+        return res
+    queued = 1
+    # 后续 best-effort 入队（单曲失败跳过；与 local_play_playlist 同 pattern）
+    for t in songs[1:]:
+        tid = t.get("id") or t.get("song_id")
+        if not tid:
+            continue
+        try:
+            info = await asyncio.to_thread(_client().get_song_url, int(tid))
+            u = info.get("url") or ""
+            if not u:
+                continue
+            t_title = t.get("name") or t.get("title") or f"NCM {tid}"
+            t_artist = ", ".join(
+                a.get("name", "") for a in (t.get("ar") or t.get("artists") or [])
+            ) or "网易云音乐"
+            player.queue_extend([{
+                "url": u,
+                "meta": {"title": t_title, "artist": t_artist},
+            }])
+            queued += 1
+        except Exception as exc:
+            logger.warning("[netease scene] queue extend skip id=%s: %s", tid, exc)
+    return {
+        "played": True,
+        "queued": queued,
+        "first_song_id": int(sid),
+        "is_trial": res.get("is_trial", False),
+    }
+
+
+def _mpv_unavailable_hint() -> str:
+    return (
+        "未自动播放指定歌曲：需要 mpv 才能 Skyler 内嵌自解码自动播放。"
+        "macOS: ``brew install mpv``；Linux: ``apt install mpv``。"
+        "装好后 Skyler 会优先用 mpv，无需重启。NCM 客户端已唤起（仅作 fallback，"
+        "用户需手动点播放）。详见 docs/netease-playback-setup.md"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 1. 今日推荐
 # ---------------------------------------------------------------------------
 
@@ -119,9 +245,16 @@ def _client() -> nm.NeteaseClient:
     name="netease.daily_recommend",
     display_name="网易云日推",
     description=(
-        "拉取网易云今日推荐歌单（30 首）并立刻在本地网易云 App 开始播放。"
-        "当用户说\"放日推 / 听今天的推荐 / 给我来点新歌\"时调用，**不**需要"
-        "用户给关键词，纯个性化推荐。返回 ``opened`` 与首批 ``songs``。"
+        "拉取网易云今日推荐歌单（30 首）并**自动播放**。当用户说\"放日推 / "
+        "听今天的推荐 / 给我来点新歌\"时调用，**不**需要用户给关键词。\n\n"
+        "实际播放路径优先级（自动 fall through）：\n"
+        "  1. **mpv 装好 + MUSIC_U cookie OK** → Skyler 内嵌 mpv 自解码真"
+        "自动播放（``autoplay: true`` 诚实生效）；\n"
+        "  2. **mpv 没装 / cookie 缺 / song URL 失败** → 唤起 NCM 客户端作"
+        "fallback，返 ``autoplay: false`` + ``hint`` 引导用户装 mpv。\n\n"
+        "**调用后看返回的 ``autoplay`` 字段决定回话**：true 时直说"
+        "「已经在播第 X 首日推」；false 时如实告诉用户「网易云客户端"
+        "已经打开，但自动播放需要装 mpv...」。"
     ),
     category="music",
     consumers=[Consumer.CHAT_AGENT],
@@ -133,13 +266,40 @@ def _client() -> nm.NeteaseClient:
 async def daily_recommend(**_kwargs) -> dict:
     songs = await asyncio.to_thread(_client().daily_recommend)
     if not songs:
-        return {"opened": False, "songs": [], "error": "日推为空（账号未登录或当日数据缺失）"}
-    # 唤起第一首即开播日推队列（网易云 App 自动接管后续 29 首）
+        return {"opened": False, "autoplay": False, "songs": [],
+                "error": "日推为空（账号未登录或当日数据缺失）"}
     first = songs[0]
+
+    # 优先 mpv 自动播放
+    if await _mpv_available_and_cookie_ok():
+        res = await _try_mpv_play_song_queue(songs[:30])
+        if res.get("played"):
+            return {
+                "opened": True,
+                "autoplay": True,
+                "backend": "mpv",
+                "first_song": first,
+                "songs": songs[:5],
+                "queued": res.get("queued"),
+                "is_trial": res.get("is_trial", False),
+            }
+        # mpv 路径失败 → 落 URL Scheme fallback
+        logger.warning(
+            "[netease daily_recommend] mpv play failed (%s), falling back to URL Scheme",
+            res.get("reason"),
+        )
+
+    # URL Scheme fallback：开 NCM 客户端，autoplay 诚实置 False
     url = nm.NeteaseClient.play_url_scheme("song", int(first["id"]))
     opened = await _open_url(url)
-    autoplay = await _trigger_ncm_play() if opened else False
-    return {"opened": opened, "autoplay": autoplay, "first_song": first, "songs": songs[:5]}
+    return {
+        "opened": opened,
+        "autoplay": False,
+        "backend": "url_scheme",
+        "first_song": first,
+        "songs": songs[:5],
+        "hint": _mpv_unavailable_hint(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -150,9 +310,13 @@ async def daily_recommend(**_kwargs) -> dict:
     name="netease.personal_fm",
     display_name="网易云私人 FM",
     description=(
-        "开启网易云私人 FM / 心动模式（无限流推荐，越听越懂你）。当用户说"
-        "\"随便放点 / 听点新的 / 私人电台\"等无明确目标的请求时调用。"
-        "App 接管后续逻辑——调用方拿到首批信息即可，不需要持续轮询。"
+        "开启网易云私人 FM / 心动模式（无限流推荐）。用户说\"随便放点 / "
+        "听点新的 / 私人电台\"等无明确目标时调用。\n\n"
+        "实际路径：mpv 装好 → Skyler 内嵌播 FM 首批 ~5 首 + 队列；mpv 没装"
+        " → 唤起 NCM 客户端 ``orpheus://personalFM`` （NCM 接管 FM 模式，"
+        "原生支持 autoplay），``autoplay: false`` 但 NCM 自己会播。\n\n"
+        "看 ``autoplay`` 字段：true 是 Skyler mpv 在播；false 是 NCM 客户端"
+        "在播（也 OK，FM scheme 是 NCM 自带 autoplay 语义之一）。"
     ),
     category="music",
     consumers=[Consumer.CHAT_AGENT],
@@ -163,12 +327,44 @@ async def daily_recommend(**_kwargs) -> dict:
 )
 async def personal_fm(**_kwargs) -> dict:
     songs = await asyncio.to_thread(_client().personal_fm)
-    # orpheus://personalFM 直接进入私人 FM 模式（社区 canonical 形式；
-    # 进入 FM 即触发播放，不需要 /play 后缀，详见 play_url_scheme docstring）
+
+    if await _mpv_available_and_cookie_ok():
+        res = await _try_mpv_play_song_queue(songs[:10])
+        if res.get("played"):
+            return {
+                "opened": True,
+                "autoplay": True,
+                "backend": "mpv",
+                "songs": songs[:5],
+                "queued": res.get("queued"),
+                "is_trial": res.get("is_trial", False),
+            }
+        logger.warning(
+            "[netease personal_fm] mpv play failed (%s), falling back",
+            res.get("reason"),
+        )
+
+    # URL Scheme fallback：personalFM 是 NCM 自带 autoplay 的特例
+    # （和单曲/歌单不一样：FM scheme 唤起后 NCM 真会自动播 FM 模式）
     opened = await _open_url("orpheus://personalFM")
     if not opened and songs:
-        opened = await _open_url(nm.NeteaseClient.play_url_scheme("song", int(songs[0]["id"])))
-    return {"opened": opened, "songs": songs[:5]}
+        opened = await _open_url(
+            nm.NeteaseClient.play_url_scheme("song", int(songs[0]["id"]))
+        )
+    return {
+        "opened": opened,
+        # autoplay 字段诚实：Skyler 没在播；NCM FM 模式自己会播
+        # 但 Skyler 无法直接确认其状态，所以 autoplay=False 表示"Skyler
+        # 路径下未触发 mpv 播放"。NCM 端能否真播由 client 自己决定。
+        "autoplay": False,
+        "backend": "url_scheme_fm",
+        "songs": songs[:5],
+        "note": (
+            "唤起了 NCM 客户端 personalFM 模式。NCM 客户端原生支持 FM "
+            "autoplay，开后即播。Skyler 自身未触发播放（装 mpv 后默认走 "
+            "Skyler 内嵌路径）。"
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -202,12 +398,42 @@ async def personal_fm(**_kwargs) -> dict:
 async def play_song(keyword: str, **_kwargs) -> dict:
     songs = await asyncio.to_thread(_client().search, keyword, "song", 5)
     if not songs:
-        return {"opened": False, "song": None, "error": f"网易云没搜到「{keyword}」"}
+        return {"opened": False, "autoplay": False, "song": None,
+                "error": f"网易云没搜到「{keyword}」"}
     song = songs[0]
+
+    # mpv-first
+    if await _mpv_available_and_cookie_ok():
+        title = song.get("name") or ""
+        artist = ", ".join(
+            a.get("name", "") for a in (song.get("ar") or song.get("artists") or [])
+        )
+        res = await _try_mpv_play_single(int(song["id"]), title=title, artist=artist)
+        if res.get("played"):
+            return {
+                "opened": True,
+                "autoplay": True,
+                "backend": "mpv",
+                "song": song,
+                "alternatives": songs[1:],
+                "is_trial": res.get("is_trial", False),
+            }
+        logger.warning(
+            "[netease play_song(keyword)] mpv play failed (%s), falling back",
+            res.get("reason"),
+        )
+
+    # URL Scheme fallback
     url = nm.NeteaseClient.play_url_scheme("song", int(song["id"]))
     opened = await _open_url(url)
-    autoplay = await _trigger_ncm_play() if opened else False
-    return {"opened": opened, "autoplay": autoplay, "song": song, "alternatives": songs[1:]}
+    return {
+        "opened": opened,
+        "autoplay": False,
+        "backend": "url_scheme",
+        "song": song,
+        "alternatives": songs[1:],
+        "hint": _mpv_unavailable_hint(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -273,10 +499,45 @@ async def play_playlist(**_kwargs) -> dict:
 )
 async def play_playlist_by_id(playlist_id: int, **_kwargs) -> dict:
     pid = int(playlist_id)
+
+    if await _mpv_available_and_cookie_ok():
+        try:
+            detail = await asyncio.to_thread(_client().playlist_detail, pid)
+        except Exception as exc:
+            logger.warning(
+                "[netease play_playlist_by_id] playlist_detail failed (%s), falling back",
+                str(exc)[:120],
+            )
+        else:
+            tracks = detail.get("tracks") or []
+            if tracks:
+                res = await _try_mpv_play_song_queue(tracks[:50])
+                if res.get("played"):
+                    return {
+                        "opened": True,
+                        "autoplay": True,
+                        "backend": "mpv",
+                        "playlist_id": pid,
+                        "queued": res.get("queued"),
+                        "first_song_id": res.get("first_song_id"),
+                        "is_trial": res.get("is_trial", False),
+                    }
+                logger.warning(
+                    "[netease play_playlist_by_id] mpv queue play failed (%s), falling back",
+                    res.get("reason"),
+                )
+
+    # URL Scheme fallback
     url = nm.NeteaseClient.play_url_scheme("playlist", pid)
     opened = await _open_url(url)
-    autoplay = await _trigger_ncm_play() if opened else False
-    return {"opened": opened, "autoplay": autoplay, "playlist_id": pid, "url": url}
+    return {
+        "opened": opened,
+        "autoplay": False,
+        "backend": "url_scheme",
+        "playlist_id": pid,
+        "url": url,
+        "hint": _mpv_unavailable_hint(),
+    }
 
 
 # ---------------------------------------------------------------------------
