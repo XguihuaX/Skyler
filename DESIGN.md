@@ -2303,6 +2303,43 @@ macOS NowPlaying Center 自动获取 mpv metadata（mpv 0.34+ 原生支持）
 VIP 付费下架歌曲 NCM 返试听 URL (~30s)。capability 返 ``is_trial=True``
 + ``note: "试听片段（~30s）"``，LLM 如实告诉用户，不假装是完整版。
 
+### mpv-default 策略（chunk 6b hotfix-1 补齐）
+
+chunk 6b 落地后还有 4 个**场景类** capability（不是显式 ``play_*``，是
+LLM 凭语义触发的「日推 / 私人 FM / 关键词点播 / 按 ID 播歌单」）走的还是
+chunk 1 的 URL Scheme 路径。这些 capability 当时返 ``autoplay: true`` ——
+但 NCM 客户端响应 ``orpheus://song/<id>/play`` **只接管系统媒体键**，不
+真的开播指定歌曲。LLM 拿到 ``autoplay: true`` 后回话「已经在放啦」 ⇒
+**假成功**。
+
+hotfix-1 把这 4 个 capability 统一改成 mpv-first fall-through：
+
+| 路径 | 触发条件 | ``backend`` | ``autoplay`` | 额外字段 |
+|---|---|---|---|---|
+| mpv 真闭环 | mpv 健康 + ``MUSIC_U`` cookie OK + song URL 可拿 | ``"mpv"`` | ``true`` | ``queued`` / ``is_trial`` |
+| URL Scheme fallback | 其余任何条件不满足 | ``"url_scheme"`` | ``false`` | ``hint`` 引导装 mpv |
+| 特殊：personalFM | URL Scheme fallback 时唤起 ``orpheus://personalFM`` | ``"url_scheme_fm"`` | ``false`` | ``note`` 说明 NCM 自带 FM autoplay |
+
+**核心契约**：``autoplay`` 字段从此**只表 Skyler 自身状态**（mpv 是否真
+在播），不试图代表 NCM 客户端的状态。NCM 客户端能否真播由 client 自己
+决定，Skyler 无法可靠观测——所以诚实置 false，让 LLM 转告用户「需要装
+mpv 才能真自动播」。
+
+**helper 抽出**（``backend/capabilities/netease_music.py`` 顶部）：
+
+* ``_mpv_available_and_cookie_ok()`` —— 复用 ``mpv_player.health_check``
+  + ``NeteaseClient.has_credentials``，两侧任一失败短路返 False
+* ``_try_mpv_play_single(song_id, title, artist)`` —— get_song_url + mpv.play
+  原子动作，返 ``{played, is_trial, ...}``
+* ``_try_mpv_play_song_queue(songs)`` —— 第一首立 play + 其余 best-effort
+  入队（与 ``netease.local_play_playlist`` 同 pattern）
+* ``_mpv_unavailable_hint()`` —— 友好引导文案
+
+**audit 副产物**：全 backend 0 个 ``music://`` scheme 引用。用户曾报告
+「让 Momo 播日推开了 Mac 自带音乐」—— **非代码 bug**：macOS 默认 app
+handler 在 NCM 客户端未注册 orpheus URL Scheme 时，会按用户偏好回退到
+默认音频 app。这是装机/系统设置问题，不是 Skyler 实现错。
+
 ---
 
 ## 十五之K、小红书 URL 被动解析（v3.5 chunk 6c 起）

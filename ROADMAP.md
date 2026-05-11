@@ -990,6 +990,34 @@ DESIGN §13 已有完整设计。要点：
 * `b3a9177` test(chunk6b+6c) — 56 cases (mpv 23 + netease_playback 33)
 * `<docs>`  docs(chunk6b+6c) — DESIGN §十五之J + netease-playback-setup.md
 
+##### 6b hotfix-1 ✅ 完成 2026-05-11 — 场景 capability fall-through mpv + autoplay 字段诚实
+
+* **问题**：chunk 6b push 后验收发现 ``netease.daily_recommend`` 仍走 chunk 1
+  URL Scheme 路径，返 ``autoplay: true`` 但 NCM 客户端实际**不自动播放指定
+  歌曲**（只接管系统媒体键），LLM 收到 autoplay:true 后回"已在放"造成假成功
+* **scope**：chunk 6b Pivot #2 只改了显式 ``netease.play_*`` → ``local_play_*``,
+  没动 4 个场景 capability（daily_recommend / personal_fm / play_song(keyword)
+  / play_playlist_by_id）
+* **修法**：在 ``backend/capabilities/netease_music.py`` 顶部新加共享 helper
+  （``_mpv_available_and_cookie_ok`` / ``_try_mpv_play_single`` /
+  ``_try_mpv_play_song_queue`` / ``_mpv_unavailable_hint``）；4 个场景
+  capability fall-through 模式：mpv healthy + cookie OK → mpv 真闭环 +
+  ``autoplay: true``；其余 → URL Scheme + ``autoplay: false`` + ``hint`` 引导装 mpv
+* **向后兼容**：``opened`` / ``autoplay`` / ``songs`` / ``song`` /
+  ``alternatives`` / ``playlist_id`` 字段全部保留，仅新增 ``backend`` /
+  ``hint`` / ``queued`` / ``is_trial``
+* **音乐 scheme audit**：全 backend 0 个 ``music://`` 引用（用户报告"Mac
+  自带音乐被打开"非代码 bug，是 macOS handler 在 NCM 未注册 orpheus 时的
+  默认 app 回退）
+* **system prompt**：``_TOOL_PROMPT_ADDENDUM`` 【音乐类】段新增 verbatim
+  引导，让 LLM 看返回 ``backend`` / ``autoplay`` 字段诚实回话
+
+###### hotfix-1 交付清单
+
+* `2d63a4a` fix(capabilities) — 网易云场景类 fall through 到 mpv + autoplay 字段诚实
+* `<tests+docs>` test(scene) + docs(hotfix) — scene capability 35 cases
+  + chunk 1 mod 6 cases + DESIGN §十五之J mpv-default 策略
+
 #### 6c 小红书 URL 被动解析 ✅ 完成 2026-05-11
 
 * **工程红线锁死**：``backend/integrations/xiaohongshu.py`` 不暴露
