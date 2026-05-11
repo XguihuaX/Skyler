@@ -12,6 +12,7 @@ import {
 import CapabilityPanel from './CapabilityPanel';
 import ExtensionsSection from './ExtensionsSection';
 import MemoryManagerDrawer from './MemoryManagerDrawer';
+import UserProfileSection from './UserProfileSection';
 
 const BACKEND_BASE = 'http://127.0.0.1:8000';
 
@@ -1550,6 +1551,11 @@ export default function SettingsPanel() {
       />
 
       <ProfileSection userId={defaultUserId} showToast={showToast} />
+
+      {/* v3.5 chunk 9 Part 2 — 用户画像 (profile_summary) section。与 ProfileSection
+          (基础信息：昵称 + 语言) 区分：本 section 显示 ``users.profile_summary``
+          长文本 + [手动编辑] / [清空] / [立刻重新生成] 三按钮。 */}
+      <UserProfileSection userId={defaultUserId} showToast={showToast} />
 
       <MemoryManagerDrawer
         open={memoryManagerOpen}
