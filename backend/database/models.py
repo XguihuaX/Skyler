@@ -91,6 +91,9 @@ class Memory(Base):
     expires_at = Column(DateTime, nullable=True)    # NULL = permanent; set for transient states
     character_id = Column(Integer, ForeignKey("characters.id"), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
+    # v3.5 chunk 9 Part 4：forgetting curve 元数据
+    access_count = Column(Integer, nullable=False, default=0, server_default="0")
+    last_accessed_at = Column(DateTime, nullable=True)  # NULL → 视同 created_at
 
     user = relationship("User", back_populates="memories")
 

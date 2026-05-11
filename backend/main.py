@@ -68,6 +68,9 @@ from backend.database.migrations.v3_5_chunk7_mcp_credentials import (
 from backend.database.migrations.v3_5_chunk6b_hotfix3_clean_polluted_memories import (
     run_migration as migrate_v3_5_chunk6b_hotfix3,
 )
+from backend.database.migrations.v3_5_chunk9_memory_forgetting_curve import (
+    run_migration as migrate_v3_5_chunk9_memory_forgetting_curve,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -189,6 +192,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 跑前自动备份 momoos.db → .backup-before-hotfix3（已存在则跳过）。幂等
     # 清 chat_history (assistant) + memory.content + users.profile_summary。
     await migrate_v3_5_chunk6b_hotfix3()
+
+    # ── 1b17. V3.5 chunk 9 Part 4: memory.access_count + last_accessed_at ──
+    # forgetting curve 元数据。``ALTER TABLE ADD COLUMN`` 幂等。老 entry 用
+    # ``last_accessed_at = created_at`` 回填一次，让衰减从创建时起算。
+    await migrate_v3_5_chunk9_memory_forgetting_curve()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

@@ -30,6 +30,15 @@ memory:
     short_input_threshold: 10
     cache_size: 100
     cache_ttl_seconds: 300
+  # v3.5 chunk 9 Part 4：forgetting curve
+  #   score = relevance * (1 + log(1 + access_count)) / (1 + age_days * decay)
+  #   threshold      score < N 的 entry 不进 top-k（保留 DB，可被后续召回）
+  #   age_decay      每天衰减系数（0.01 = 100 天后约半权）
+  #   enabled=false  退回旧 pure-cosine 排序（用于调试 / 用户偏好关闭衰减）
+  forgetting_curve:
+    enabled: true
+    threshold: 0.3
+    age_decay_factor: 0.01
 search:
   enable_search: true
 cache:

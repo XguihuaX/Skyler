@@ -26,6 +26,7 @@ v3.5 chunk 9 Part 0：性能加固（零风险三项）
 """
 import asyncio
 import logging
+import math
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -34,14 +35,18 @@ from typing import List, Optional
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
+from sqlalchemy import text
 
 from backend.config import (
     get_embedding_cache_size,
     get_embedding_cache_ttl_seconds,
     get_embedding_device,
     get_embedding_short_input_threshold,
+    get_forgetting_curve_age_decay,
+    get_forgetting_curve_enabled,
+    get_forgetting_curve_threshold,
 )
-from backend.database import AsyncSessionLocal
+from backend.database import AsyncSessionLocal, engine
 from backend.database.services import add_memory, get_all_memories
 from backend.database.models import Memory
 
@@ -197,6 +202,49 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / denom)
 
 
+# ---------------------------------------------------------------------------
+# v3.5 chunk 9 Part 4：forgetting curve score
+# ---------------------------------------------------------------------------
+
+
+def forgetting_curve_score(
+    relevance: float,
+    access_count: int,
+    age_days: float,
+    *,
+    decay: Optional[float] = None,
+) -> float:
+    """score = relevance * (1 + log(1 + access_count)) / (1 + age_days * decay)
+
+    * 同 relevance 下，被频繁召回的 entry score 更高（log 渐进，不让爆款
+      永久霸榜）。
+    * 老 entry score 衰减但不为 0（divisor 始终 > 1）。
+    * ``decay`` 默认从 config 读 ``age_decay_factor``，测试可显式传值。
+    """
+    d = decay if decay is not None else get_forgetting_curve_age_decay()
+    bonus = 1.0 + math.log(1 + max(0, access_count))
+    decay_div = 1.0 + max(0.0, age_days) * d
+    return float(relevance) * bonus / decay_div
+
+
+async def _bump_access_counters(memory_ids: list[int]) -> None:
+    """召回成功的 entries 更新 access_count + last_accessed_at。
+
+    单次 UPDATE 批量处理，async-safe。
+    """
+    if not memory_ids:
+        return
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE memory SET access_count = COALESCE(access_count, 0) + 1, "
+                "last_accessed_at = :now "
+                "WHERE id IN (" + ",".join(str(int(i)) for i in memory_ids) + ")"
+            ),
+            {"now": datetime.utcnow()},
+        )
+
+
 async def add_memory_with_embedding(
     user_id: str,
     content: str,
@@ -273,23 +321,53 @@ async def search_relevant_memories(
     query_vec = await _encode(q_stripped)
     enc_ms = (time.perf_counter() - t_enc) * 1000
 
-    # ── 3. Cosine + top-k ──────────────────────────────────────────────────
+    # ── 3. Score (cosine + chunk 9 Part 4 forgetting curve) + top-k ───────
     t_cos = time.perf_counter()
+    fc_on = get_forgetting_curve_enabled()
+    fc_threshold = get_forgetting_curve_threshold() if fc_on else float("-inf")
+    fc_decay = get_forgetting_curve_age_decay()
+    now = datetime.utcnow()
+
     scored: List[tuple[float, Memory]] = []
     for mem in all_memories:
         if not mem.embedding:
             continue
         mem_vec = np.frombuffer(mem.embedding, dtype=np.float32)
-        score = _cosine(query_vec, mem_vec)
+        relevance = _cosine(query_vec, mem_vec)
+        if fc_on:
+            # age_days = (now - last_accessed_at).days；NULL 视同 created_at
+            anchor = mem.last_accessed_at or mem.created_at
+            age_days = max(0.0, (now - anchor).total_seconds() / 86400.0) if anchor else 0.0
+            score = forgetting_curve_score(
+                relevance,
+                int(mem.access_count or 0),
+                age_days,
+                decay=fc_decay,
+            )
+        else:
+            score = relevance
+        if score < fc_threshold:
+            continue
         scored.append((score, mem))
     scored.sort(key=lambda x: x[0], reverse=True)
     cos_ms = (time.perf_counter() - t_cos) * 1000
 
+    top = scored[:top_k]
     total_ms = (time.perf_counter() - t_total) * 1000
     logger.info(
-        "[TIME] search_relevant sql=%.1fms encode=%.1fms cosine=%.1fms "
-        "total=%.1fms candidates=%d top_k=%d",
-        sql_ms, enc_ms, cos_ms, total_ms, len(all_memories), top_k,
+        "[TIME] search_relevant sql=%.1fms encode=%.1fms score=%.1fms "
+        "total=%.1fms candidates=%d kept=%d top_k=%d fc=%s",
+        sql_ms, enc_ms, cos_ms, total_ms, len(all_memories), len(scored),
+        top_k, "on" if fc_on else "off",
     )
 
-    return [mem for _, mem in scored[:top_k]]
+    # ── 4. Bump access counters on returned entries ───────────────────────
+    if fc_on and top:
+        try:
+            await _bump_access_counters([m.id for _, m in top])
+        except Exception as exc:
+            logger.warning(
+                "[memory] _bump_access_counters failed: %s", exc,
+            )
+
+    return [mem for _, mem in top]

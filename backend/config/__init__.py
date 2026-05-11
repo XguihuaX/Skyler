@@ -145,6 +145,37 @@ def get_embedding_cache_ttl_seconds() -> int:
         return 300
 
 
+# ---------------------------------------------------------------------------
+# v3.5 chunk 9 Part 4：forgetting curve
+# ---------------------------------------------------------------------------
+
+
+def _forgetting_curve_cfg() -> dict:
+    return ((config_yaml.get("memory") or {}).get("forgetting_curve") or {})
+
+
+def get_forgetting_curve_enabled() -> bool:
+    """是否启用 forgetting curve 加权 + 阈值（默认 True）。False 退回纯
+    cosine 排序。"""
+    return bool(_forgetting_curve_cfg().get("enabled", True))
+
+
+def get_forgetting_curve_threshold() -> float:
+    """score 低于此值 → 不进 top-k。默认 0.3。"""
+    try:
+        return float(_forgetting_curve_cfg().get("threshold", 0.3))
+    except (TypeError, ValueError):
+        return 0.3
+
+
+def get_forgetting_curve_age_decay() -> float:
+    """每天衰减系数。默认 0.01。"""
+    try:
+        return float(_forgetting_curve_cfg().get("age_decay_factor", 0.01))
+    except (TypeError, ValueError):
+        return 0.01
+
+
 def get_enable_search() -> bool:
     return (config_yaml.get("search") or {}).get("enable_search", True)
 
