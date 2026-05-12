@@ -96,12 +96,19 @@ const CharacterStatePanel = memo(function CharacterStatePanel({
     // UX-001：Panel 模式 TopBar 高度 = h-10 (40px) + z-50；旧 top: 12px 让
     // CharacterStatePanel 物理上落在 TopBar 0-40px 范围内并被它压住（panel
     // z-30 < TopBar z-50）。这里把 top 抬到 ``calc(TopBar_h + 8px)``，状
-    // 态条整体放在 TopBar 下方右侧，不再被 TopBar 遮。z-index 维持 30 即
-    // 可（不需要浮在 TopBar 之上）。
-    // Widget 模式无 TopBar，沿用右下角不变。
+    // 态条整体放在 TopBar 下方，不再被 TopBar 遮。z-index 维持 30 即可
+    // （不需要浮在 TopBar 之上）。
+    //
+    // UX-003 commit 3: Panel 模式从 ``right: 16px`` 改 ``left: 16px``。
+    // 原因: Panel mode CharacterView 区域右上角 ``absolute top-4 right-4 z-30``
+    // 是 ``[ScrollText] 历史`` 按钮(modes/Panel.tsx)。旧位置让情绪条挡到
+    // 历史按钮 hover/点击区。左上角实测完全空闲(CharacterView ``absolute
+    // inset-0 z-0`` 满铺背景,无其他 positioned 元素),挪过去无冲突。
+    //
+    // Widget 模式无 TopBar / 无历史按钮,沿用右下角不变。
     ...(position === 'widget'
       ? { right: '8px', bottom: '8px' }
-      : { right: '16px', top: '48px' }),
+      : { left: '16px', top: '48px' }),
   };
 
   return (
