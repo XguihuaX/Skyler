@@ -2273,6 +2273,32 @@ config.yaml mcp_clients.<name>          ← server 元数据
 makenotion/notion-mcp-server）；env_required ``NOTION_API_KEY``；
 ``expose_via_skyler_server=False``（不级联代理到外部）。
 
+**UX-001 增量**（2026-05-12，per-tool 级 override）：
+
+* 表 ``mcp_tool_state (server_name, tool_name, enabled, updated_at)``——
+  与 chunk 7 ``mcp_client_state`` 完全平行，区别是粒度落到单个 capability
+  （即 ``ext.<server>.<tool>``）。只存差异：表里没行 = enabled=True。
+* ``backend/mcp/tool_state.py`` 4 个 async API（is_enabled / list_overrides
+  / set_enabled / delete_for_server）。
+* ``backend/mcp/client.py`` ``_ClientHandle`` 加 ``tools: list[dict]``，
+  ``_connect_one`` 拉 ``list_tools`` 后用 ``list_overrides`` 一次性查 DB，
+  enabled=False 的 tool **不 register CapabilityRegistry**（LLM 不可见）
+  + 仍记录到 ``handle.tools`` 让 UI 渲染。
+* ``set_tool_enabled`` 公开 API + ``PUT /api/mcp/clients/{name}/tools/
+  {tool_name}/enabled`` 路由 ——
+  False→True：拉 session.list_tools 找原 tool 对象 → register_runtime；
+  True→False：unregister_runtime ``ext.<server>.<tool>``。
+* ``list_status()`` 返回每行加 ``tools`` 字段。
+* ``ExtensionsSection.tsx`` 改 accordion：每 server 默认折叠成单行 +
+  ``X/Y cap`` 角标；点 caret 展开看 capability 列表 + 单 cap toggle。
+  server 关时 tool 行 visible 但 toggle 禁用（``disabled={!client.enabled
+  || ...}``），状态条 ``value={tool.enabled && server.enabled}`` 让"server
+  关 = 全部 cap 视觉上关闭"在 render-time 表达，per-tool override 仍持久
+  在 DB 里，重新启用 server 时记得用户上次的偏好。
+
+UX-001 没改 ``mcp_credentials`` / ``mcp_client_state`` schema —— chunk 7
+原生功能不动，只在其上 layered per-tool 一级。
+
 ### 决策树
 
 ```

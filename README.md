@@ -448,6 +448,10 @@ See [**ROADMAP.md**](ROADMAP.md) for the full prioritized roadmap.
 > ~~**用户画像污染**~~（"温柔陪伴 / 亲密关系 / 细腻敏感" 等反推词写入 profile_summary）✅ chunk 11 治本（2026-05-12）—— LLM 输出严格按 JSON schema，validator hard-reject 违规输出，注入用机械模板而非 LLM。
 >
 > ~~**LLM hallucinate save_memory**~~（chunk 9 跨角色共享后放大）✅ chunk 10 治本（2026-05-12）—— memory 入库主路径改成 server-side worker（每 5 分钟 batch 提取 + 10 道 filter），``save_memory`` tool 降级为"用户明确说要记"的显式入口；entry 上打 ``extraction_source`` 区分来源，MemoryManagerDrawer UI 角标可见。
+>
+> ~~**MCP Settings 一条 capability 一行 → 列表过长**~~ ✅ UX-001 治本（2026-05-12）—— ``ExtensionsSection`` 改 accordion，每 server 默认折叠成单行（含 ``X/Y cap`` 角标）；展开后看 capability 列表 + 单 cap toggle。新增 ``mcp_tool_state`` 表 + ``PUT /api/mcp/clients/{name}/tools/{tool}/enabled`` 路由持久化 per-tool override；server 关时所有 tool toggle 自动 disable 不需要清表（``_connect_one`` 时根据 override skip register 即可）。
+>
+> ~~**情绪 UI 被 TopBar 挡**~~ ✅ UX-001 治本（2026-05-12）—— Panel 模式 ``CharacterStatePanel`` ``top: 12px`` 落在 TopBar (h-10 / z-50) 的 0-40px 范围内被压住。改 ``top: 48px`` 让状态条整体放到 TopBar 下方右侧，z-index 维持 30（不需要浮到 TopBar 之上盖 CharacterSwitcher dropdown）。
 
 ---
 
