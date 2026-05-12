@@ -2701,6 +2701,97 @@ ActivityWatcher 的 listener fn ``activity_smart_handler``：
 
 ---
 
+## 十五之M、CapabilityPanel accordion + category 计数（UX-002 起）
+
+### 设计目标
+
+UX-001 + hotfix-6 把 SettingsPanel 底部 ``ExtensionsSection`` MCP servers 区改
+成 accordion 单行折叠后，**剩余主体** —— ``CapabilityPanel.tsx`` 内 67
+capability 仍按 category 平铺成大卡片（每卡 ~180 行 markup：icon / 名 /
+description / 谁能调 / 触发 / Google OAuth footer / refresh），导致 Settings
+Panel 整体高度 N 屏。UX-002 把这部分也 accordion 化，目标 ~1-2 屏。
+
+### 抽象层
+
+新组件 ``frontend/src/components/CapabilityRow.tsx`` —— **单层 accordion row**，
+与 UX-001 ``ClientRow``/``ToolList`` 平行但**不复用**（后者 MCP-specific 双层
+server-tool 关系）。Props：
+
+```
+name              capability 唯一标识符（key + data-capability 属性）
+displayName       显示名
+briefDescription  折叠态小灰字（caller 自己 trim，CapabilityPanel 走 _briefDesc
+                  ~50 字符 + 标点边界截断）
+statusBadge?      折叠态右侧 ReactNode（健康灯 / 文字 / ext 角标，caller 填）
+leftIcon?         折叠态最左侧 icon（CapabilityIcon 等）
+expandedContent   展开态完整 body（caller 填——description / 谁能调 / 触发 /
+                  error / refresh）
+defaultExpanded?  default **false**（UX-002 硬约束：全折叠启动）
+```
+
+实现要点：
+
+* ``useState<boolean>(defaultExpanded)`` —— 无 derived state
+* ``{expanded && (<div>...{expandedContent}</div>)}`` —— 短路 gate（防回归
+  到默认全展开）
+* aria-expanded + aria-label='折叠'/'展开' + data-capability={name} 无障碍 +
+  DOM lookup 友好
+
+### CapabilityPanel 重构
+
+* **删 MCP banner / 外部 clients section**（243 行）—— 跟 SettingsPanel 底部
+  ``ExtensionsSection`` (UX-001 + hotfix-6) 信息重复。``mcp_external`` category
+  的 capability（filesystem ×14 + brave-search ×2）仍在 capability 主列表里
+  显示，每行 ``[ext · source_server]`` 角标区分
+* **``CapabilityCard`` rename → ``CapabilityDetail``**：body-only，不再渲染
+  icon/name/health header（已由 CapabilityRow 折叠态承担）
+* category header 加 ``{N} cap`` 计数 badge
+* **calendar 特殊 UI 归位到 category-level**：新组件
+  ``CalendarGoogleAuthBadge`` 挂在 calendar header 右侧（紧邻 ``[测试简报]``
+  按钮）。``CardProps`` 砍掉 ``googleStatus`` / ``onGoogleAuth`` /
+  ``onGoogleRevoke`` / ``googleBusy`` 4 props，``CapabilityDetail`` 签名
+  收紧到 ``{cap, onRefresh}: CardProps`` 两参
+
+### Layout 示意
+
+```
+CALENDAR  [8 cap]       [Google: 已授权 · user@…]  [重新授权]  🧪 [测试简报]
+ ▶ today_events (apple)                                    ● 健康
+ ▶ today_events (google)                                   ● 健康
+ ▶ upcoming_events (apple)                                 ● 健康
+ …
+
+MEDIA     [23 cap]
+ ▶ bilibili.search_video                                   ● 健康
+ …
+
+MCP_EXTERNAL  [16 cap]
+ ▶ ext.filesystem.read_file      [ext · filesystem]        ● 健康
+ …
+```
+
+每行点 caret 展开 → 看 description 整段 + 谁能调 / 触发 badge + error 文字
+（如有）+ [刷新状态] 按钮。
+
+### 不动的
+
+* SettingsPanel 自己的 8 个 ``<Section title=...>`` 块（Memory / TTS / 角色状态
+  / 主动陪伴 / 剪贴板 / 基础信息 / ASR-VAD / 启动）—— 配置项不应折叠
+* SettingsPanel 底部 ``<ExtensionsSection>``（UX-001 + hotfix-6 已 accordion）
+* 后端任何代码（``/api/capabilities`` 响应 schema 不变）
+
+### 兼容 + 防回归
+
+* 测试 fixture ``panel``/``src``：**剥掉行 + block 注释**后再 grep —— 让
+  "删 ``MCPServerBanner``" 这类解释性注释里出现的标识符不触发假阳性
+* commit 1 ``test_no_default_expanded_override`` 测试断言 CapabilityPanel **不传**
+  ``defaultExpanded`` —— 依赖 commit 1 锁的 default false 实现"全折叠"
+* commit 2 ``test_capability_icon_only_once`` 测试断言 ``<CapabilityIcon`` 在
+  panel 内只出现 1 处（CapabilityRow leftIcon slot），防 CapabilityDetail 又
+  内联 icon 导致折叠态 + 展开态都显示
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建
