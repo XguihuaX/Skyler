@@ -2864,6 +2864,54 @@ hotfix-7 定型约定:
 
 ---
 
+## 十五之O、macOS app name i18n + config.yaml 幂等契约（hotfix-8 起）
+
+### macOS NSWorkspace localizedName i18n
+
+``backend/integrations/activity_monitor.get_active_app()`` 调
+``NSWorkspace.sharedWorkspace().frontmostApplication().localizedName()``。
+该 API 在**中文 locale macOS** 上对带 ``Contents/Resources/zh-Hans.lproj/
+InfoPlist.strings`` 的 bundle 返**本地化字符串** ——
+
+* Apple Terminal.app → ``'终端'``(实测中文 macOS)
+* Apple Xcode → ``'Xcode'``(无 zh lproj 翻译)
+* VSCode / Cursor / JetBrains / Sublime / Atom / Nova / 第三方编辑器 →
+  英文(无 zh lproj)
+
+**契约**:任何 app-name set(``_IDE_APPS`` / ``_MUSIC_APPS`` / 等)在
+扩展时只对 **Apple 自家原生 app**(Terminal / Xcode / Music / Pages /
+Numbers / iMessage / etc.)需要 audit + 加中文 alias。第三方 app 不需要,
+因为它们的 bundle 不带 zh lproj。
+
+实测 audit table 见 README Known Problems hotfix-8 closure 条目 + 
+``tests/test_hotfix8_ide_i18n.py`` 13 条断言。
+
+### config.yaml 幂等契约
+
+cc-task spec 描述的"restore user's runtime tweaks" / "merge config"等
+post-commit 操作必须**幂等**:
+
+1. **检测后追加**:``cat >> file << EOF`` 前先 ``grep "^<key>:" file``,
+   存在则 skip(不重复 append)
+2. **声明式合并**:用 ``yq merge --inplace --type-deep`` 或类似工具替代
+   shell heredoc 拼接(yq 会合并同 key 而非追加)
+3. **strict YAML 测试**:本地 + CI 测试期间用自实现 ``StrictLoader``
+   (mimic serde_yaml) 检测 duplicate key,而非默认 permissive
+   ``yaml.safe_load``(silently 取最后一个,掩盖 bug)
+4. **CC harness restore 流程审计**:每次 docs commit 末尾 restore 用户
+   tweaks 时,先 ``git stash`` + apply 而不是从 tmp snapshot 重新 append
+
+hotfix-8 实测教训:chunk 8a commit 9 restore 脚本对一个**已经含**
+activity_watcher block 的快照又 ``cat >> EOF`` 第二次追加,工作树出现
+两个 bit-identical block。Python ``yaml.safe_load`` permissive 没暴露,
+Rust ``serde_yaml`` strict 在 Tauri ``write_config_field`` 调用时报
+``parse yaml: duplicate entry with key "activity_watcher"``,导致所有
+config 写入 toggle 全失败。**hotfix-7 error normalize 暴露了真因**,
+hotfix-8 修了实例 + 加 ``.gitignore`` ``config.yaml.backup-before-*``
+pattern + README Known Problems #16 backlog 留 root-cause 修法。
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建
