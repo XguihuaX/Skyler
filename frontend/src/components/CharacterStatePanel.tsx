@@ -93,9 +93,15 @@ const CharacterStatePanel = memo(function CharacterStatePanel({
     pointerEvents: 'auto',
     minWidth: '120px',
     transition: 'all 0.15s ease',
+    // UX-001：Panel 模式 TopBar 高度 = h-10 (40px) + z-50；旧 top: 12px 让
+    // CharacterStatePanel 物理上落在 TopBar 0-40px 范围内并被它压住（panel
+    // z-30 < TopBar z-50）。这里把 top 抬到 ``calc(TopBar_h + 8px)``，状
+    // 态条整体放在 TopBar 下方右侧，不再被 TopBar 遮。z-index 维持 30 即
+    // 可（不需要浮在 TopBar 之上）。
+    // Widget 模式无 TopBar，沿用右下角不变。
     ...(position === 'widget'
       ? { right: '8px', bottom: '8px' }
-      : { right: '16px', top: '12px' }),
+      : { right: '16px', top: '48px' }),
   };
 
   return (
