@@ -47,6 +47,7 @@ from backend.agents.chat import (
     ChatAgent,
     _parse_emotion,
     _parse_motion,
+    _parse_state_update,
     _parse_thinking,
 )
 from backend.config import config_yaml, get_tts_enabled
@@ -59,7 +60,7 @@ from backend.database.services import (
 )
 from backend.memory.short_term import short_term_memory
 from backend.tts import get_tts_engine
-from backend.utils.text_filters import strip_thinking
+from backend.utils.text_filters import strip_all_for_tts, strip_thinking
 
 logger = logging.getLogger(__name__)
 
@@ -226,12 +227,63 @@ async def _load_character(character_id: Optional[int]) -> Optional[Character]:
         return None
 
 
+async def _apply_proactive_state_update(
+    push_fn,
+    user_id: str,
+    character_id: int,
+    parsed: dict,
+    proactive_meta: dict,
+) -> None:
+    """hotfix-7：proactive 路径的 state_update apply + push 双保险。
+
+    ``push_fn(msg: dict)`` 用各 trigger 流程自带的 ``_push`` helper（包了
+    connection_manager.push）。功能等价 ws.py main 路径 ``_apply_and_push_
+    state_update``，但参数 shape 不一样（主路径直收 ``ws: WebSocket``）。
+
+    与主路径同模板：任一子步骤失败 silent + log，不阻塞 stream。
+    services.update_character_state 已校验 enum / clamp delta / 截断长度。
+    """
+    try:
+        from backend.database.services import update_character_state
+        async with AsyncSessionLocal() as session:
+            new_state = await update_character_state(
+                session, character_id,
+                mood=parsed.get("mood"),
+                intimacy_delta=parsed.get("intimacy_delta"),
+                thought=parsed.get("thought"),
+                activity=parsed.get("activity"),
+            )
+        await push_fn({
+            "type": "state_update",
+            "character_id": int(character_id),
+            "mood": new_state.mood,
+            "intimacy": new_state.intimacy,
+            "thought": new_state.current_thought,
+            "activity": new_state.current_activity,
+            **proactive_meta,
+        })
+        logger.info(
+            "[state_update] proactive user=%s char=%s applied %s → mood=%s intimacy=%d",
+            user_id, character_id, parsed,
+            new_state.mood, new_state.intimacy,
+        )
+    except Exception:
+        logger.exception(
+            "[state_update] proactive apply/push failed user=%s char=%s parsed=%s",
+            user_id, character_id, parsed,
+        )
+
+
 def _strip_format_tags(text: str) -> str:
-    """剥离 emotion / motion / thinking 标签 —— 持久化前的最后一道清洗。"""
-    text = strip_thinking(text)
-    text = re.sub(r"<emotion>.*?</emotion>", "", text, flags=re.DOTALL).strip()
-    text = re.sub(r"<motion>[^<]*</motion>", "", text).strip()
-    return text
+    """剥离全套 Skyler meta tag —— 持久化前的最后一道清洗。
+
+    hotfix-7：之前只剥 emotion / motion / thinking 三档，漏 state_update +
+    tool_call fallback。某些边界（流式 cancel 截断 / LLM 多打一次 / 跨句
+    boundary 落点）会让 state_update 字面文本进 chat_history。改用
+    ``strip_all_for_tts`` 走 5 道完整 strip 链路（emotion / thinking /
+    state_update / motion / tool_call fallback），写库前与 TTS 路径同一兜底。
+    """
+    return strip_all_for_tts(text).strip()
 
 
 async def run_trigger(
@@ -360,6 +412,17 @@ async def run_trigger(
                     "value": parsed_motion,
                     **proactive_meta,
                 })
+
+            # hotfix-7：state_update tag per-segment 剥离 + apply。chunk 3b
+            # ws.py 主路径已挂 _parse_state_update + _apply_and_push_state_update；
+            # proactive 路径漏挂导致 ``<state_update mood="..." />`` 字面字符串
+            # 进入 text_chunk push。修法：在 text_chunk push 之前剥并 apply，
+            # 与主路径同语义。
+            parsed_state, sentence = _parse_state_update(sentence)
+            if parsed_state and target_char_id is not None:
+                await _apply_proactive_state_update(
+                    _push, user_id, target_char_id, parsed_state, proactive_meta,
+                )
 
             if not sentence.strip():
                 continue
@@ -672,6 +735,13 @@ async def run_wake_call_trigger(
             parsed_motion, sentence = _parse_motion(sentence)
             if parsed_motion:
                 await _push({"type": "motion", "value": parsed_motion, **proactive_meta})
+
+            # hotfix-7：state_update tag per-segment 剥离 + apply（同 run_trigger）。
+            parsed_state, sentence = _parse_state_update(sentence)
+            if parsed_state and target_char_id is not None:
+                await _apply_proactive_state_update(
+                    _push, user_id, target_char_id, parsed_state, proactive_meta,
+                )
 
             if not sentence.strip():
                 continue
