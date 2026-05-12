@@ -3043,6 +3043,123 @@ Widget 模式无 TopBar / 无历史按钮 → 沿用 ``right: 8px / bottom: 8px`
 
 ---
 
+## 十五之Q、智能陪伴 judge 慢路径(chunk 8a-ext 起)
+
+### 设计目标
+
+chunk 8a 快路径(``activity_smart._classify``)只覆盖硬编码白名单:IDE /
+音乐 app / 技术文档 URL / long_focus / late_night_ide。用户看招聘页 /
+Twitter / 普通网页 / 普通 app 时 Momo 不主动说话 — 陪伴感不够。
+
+简单粗暴"任何停留就主动说话" → 会变骚扰。chunk 8a-ext 加**慢路径 LLM
+judge**:用户停同一 app/URL 5+ min → 调 qwen-turbo 判断"现在主动说话是
+开心还是烦",yes 才走 fire trigger。
+
+### 快慢路径并存
+
+| 路径 | 触发 | 决策 | 用例 |
+|------|------|------|------|
+| 快路径(chunk 8a) | ``register_change_listener`` (app/url change) | 硬编码 ``_classify`` 白名单 | 切 IDE / 音乐 app / 技术文档 URL |
+| 慢路径(chunk 8a-ext) | ``register_poll_listener`` (每 poll) | qwen-turbo LLM judge | 用户停某 page 5+ min |
+
+两路共享 ``_last_fire_per_label`` 节流 + ``_today_count`` daily_cap 计数器。
+快路径命中 → 不再 judge(快路径 fire 已用 1 个 cap,且 fire_throttle 也会
+挡同 label 30 min 内重 fire)。
+
+### 三重门防 LLM 滥用
+
+1. **min_stay_minutes**(默 5)— ``maybe_judge`` 内 ``duration < min_stay``
+   直接返 None,不调 LLM
+2. **judge throttle**(默 10 min)— 同 stay_key ``_last_judged_per_key`` dict
+   节流,10 min 内重复 stay 不重判
+3. **fire_throttle**(共享快路径 30 min)— ``activity_judge_chime_in`` label
+   30 min 内已 fire → 不调 judge LLM(即便 judge 想 yes 也 fire 不出,何必
+   白调)
+4. **daily_cap**(共享 5/天)— ``_today_count >= cap`` → 不调 judge LLM
+
+典型场景:用户在某 page 30 min,judge 实际调用次数 = max(1, 30/10) = 3 次
+LLM(每次 qwen-turbo 几百 tokens ≈ 几分钱)。
+
+### LLM 输出契约
+
+JSON object,markdown fence 容错(``\`\`\`json {...} \`\`\``):
+
+```json
+{
+  "speak": true | false,
+  "reason": "<10 字内>",
+  "topic_hint": "<10-20 字 Momo 该提话题方向,可空>"
+}
+```
+
+容错:
+* ``"speak": "true"`` 字符串 / ``"speak": 1`` 数字 → bool 转
+* reason / topic_hint 截 40 / 80 字防 LLM 乱讲被注入下游 prompt
+* parse 失败 → silent None (worker 不阻塞 watcher 主 loop)
+* LLM 异常(超时/网络) → silent None + 记账 throttle 防 retry storm
+
+### 判断准则(prompt 内)
+
+* 私密(银行/邮箱/密码管理器)→ false
+* IDE 专注 → false (快路径覆盖)
+* 娱乐/社交/视频 > 10 min → 沉浸,倾向 false
+* 找资料/学习/公开网页 → 倾向 true
+* 求职/查日程/看新闻 → 倾向 true
+* 今日 cap >= 0.8 → 严格 false
+* 距上次说话 < 5 min → false
+* 不确定 → 倾向 false(沉默 > 骚扰)
+
+### topic_hint 注入
+
+judge 返 ``topic_hint`` 后,``ActivityProactiveTrigger("activity_judge_chime_in",
+detail={..., topic_hint})`` 实例化。``triggers/activity.py:_judge_chime_in_prompt``
+把 ``topic_hint`` 作为 anchor 注入主 LLM (ChatAgent) 的 system prompt:
+
+> 判断模型建议话题方向: **{topic_hint}**(可作 anchor,不必强用)
+
+主 LLM 仍按 ``_BASE_GUIDANCE`` 40-80 字硬要求生成开场,不强制使用
+topic_hint(LLM 有自由度避免变成机械)。
+
+### State
+
+```python
+# activity_judge.py
+_last_judged_per_key: dict[str, float] = {}    # stay_key → 上次 judge 时间
+# activity_smart.py(共享)
+_last_fire_per_label: dict[str, float]         # 包括 activity_judge_chime_in
+_today_count: int                              # 共享 daily_cap counter
+```
+
+### Settings toggle
+
+``config.activity_judge.enabled: true``(默 ON)。SettingsPanel
+[活动感知] section 加二级 toggle"智能陪伴 — qwen-turbo 判断(5 分钟停留
+触发)",PATCH ``/api/activity/config`` body ``judge_enabled: bool``。
+
+关闭后 ``judge_poll_handler`` 在 ``get_judge_enabled()`` 返 False 时 silent
+return — 快路径完全不受影响。
+
+### 文件清单
+
+* ``backend/proactive/activity_judge.py``(new, 337 行)— Config / Decision
+  dataclass / Prompt / LLM call / parse / throttle / maybe_judge
+* ``backend/proactive/activity_smart.py``(+177 行)— ``judge_poll_handler``
+  + ``_minutes_since_last_user_turn`` + ``_JUDGE_LABEL`` 常量
+* ``backend/proactive/triggers/activity.py``(+30 行)— ``_judge_chime_in_prompt``
+  builder + ``_PROMPT_BUILDERS`` 加 ``activity_judge_chime_in`` label
+* ``backend/integrations/activity_watcher.py``(+71 行)— ``_PollListenerFn``
+  type + ``register_poll_listener`` / ``clear_listeners`` extend +
+  ``get_current_stay_info`` getter + run_loop poll dispatch
+* ``backend/main.py``(+5 行)— lifespan ``register_poll_listener(judge_poll_handler)``
+* ``backend/routes/activity_api.py``(+18 行)— config response/patch 加 4
+  judge 字段
+* ``frontend/src/lib/activity.ts``(+5 行)— interface 加字段
+* ``frontend/src/components/ActivityAwarenessSection.tsx``(+15 行)— 二级
+  toggle UI
+* ``config.yaml``(+17 行)— 新 ``activity_judge:`` block
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建
