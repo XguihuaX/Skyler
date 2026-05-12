@@ -2912,6 +2912,137 @@ pattern + README Known Problems #16 backlog 留 root-cause 修法。
 
 ---
 
+## 十五之P、三层 accordion + 情绪 UI 左上角(UX-003 起)
+
+### 设计目标
+
+UX-002 把 CapabilityPanel 67 capability 改成单行 accordion 后,Settings 高度
+从 N 屏缩到 ~2 屏。但 9 个 category title 仍**固定显示** + 多 provider
+category(media 23 cap / mcp_external 16 / calendar 8)展开后仍是 flat 长
+列表。UX-003 全栈 accordion:
+
+```
+默认状态(全折叠):
+▶ CALENDAR     [8 cap]                 [Google: 已授权] [测试简报]
+▶ CHARACTER    [2 cap]
+▶ CLIPBOARD    [3 cap]
+▶ FILES        [3 cap]
+▶ MCP_EXTERNAL [16 cap]
+▶ MEDIA        [23 cap]
+▶ MUSIC        [7 cap]
+▶ SCREEN       [4 cap]
+▶ SYSTEM       [1 cap]
+                                       ← Settings 整体 1 屏内可见
+```
+
+```
+点开 MEDIA(多 provider category)→ 三层:
+▼ MEDIA        [23 cap]
+   ▶ bilibili         [11 cap]
+   ▶ media_control     [5 cap]
+   ▶ netease           [6 cap]
+   ▶ xhs               [1 cap]
+                                       ← provider 子分组
+```
+
+```
+再点 ▶ netease → 看到 capability list:
+   ▼ netease           [6 cap]
+      ▶ local_play_song      播放网易云单曲
+      ▶ local_play_playlist  播放网易云歌单
+      ▶ local_pause          暂停 mpv 播放
+      ...                                ← 单行 UX-002 accordion
+```
+
+### Provider 自动分组规则
+
+```ts
+function _extractProvider(capName: string): string {
+  const parts = capName.split('.');
+  if (parts[0] === 'ext' && parts.length >= 2) {
+    return `ext.${parts[1]}`;  // ext.<server>.<tool> → ext.<server>
+  }
+  return parts[0];              // 否则取首段
+}
+```
+
+audit 实测覆盖完整 67 cap:
+* ``ext.brave-search.brave_web_search`` → ``ext.brave-search`` (``-`` 不被
+  ``.`` 误切)
+* ``apple_calendar.today_events`` → ``apple_calendar``
+* ``netease.local_play_song`` → ``netease``
+* ``xhs.parse_url`` → ``xhs`` (独占 1 cap 也渲染 provider row,规则一致性)
+
+### 多/单 provider category 分支
+
+| Category | Provider 数 | render 路径 |
+|---|---:|---|
+| calendar | 3 (apple_calendar / google_calendar / calendar 路由) | **三层** |
+| mcp_external | 2 (ext.filesystem / ext.brave-search) | **三层** |
+| media | 4 (bilibili / netease / media → media_control / xhs) | **三层** |
+| system / character / clipboard / files / music / screen | 1 | 二层(直接 flat capability list,与 UX-002 行为一致) |
+
+### Provider display 映射
+
+```ts
+const PROVIDER_DISPLAY: Record<string, string> = {
+  media: 'media_control',  // category=media 内 ``media.X`` cap 显示成 ``media_control``
+};
+```
+
+理由:capability 命名 ``media.next_track`` / ``media.play_pause`` 等,实际
+对应 ``backend/capabilities/media_control.py``(macOS NowPlaying-cli 包装)。
+UI 显示 ``media_control`` 与 backend 语义一致 + 跟 category title ``MEDIA``
+区分,避免视觉撞名。
+
+``ext.X`` provider key 显示时去掉 ``ext.`` 前缀(``ext.filesystem`` 显示
+为 ``filesystem [ext]`` + 加 ``ext`` 角标)。
+
+### State 设计
+
+```ts
+// 3 个独立 Set state,每个 layer 默认空 = 全折叠
+const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
+//                                                     ^^^ key = `${cat}::${provider}`
+//                                                     防 namespace 撞(netease 在 music + media)
+// CapabilityRow.expanded 由 CapabilityRow 内部 useState 管,defaultExpanded
+// = false(UX-002 commit 1 锁)
+```
+
+### Header 嵌套 button 避坑
+
+calendar category header 内嵌 ``[测试简报]`` + ``[Google OAuth 连接/重新授权]``
+按钮。如果整个 header 用 ``<button>`` 包,会形成 nested-button(HTML 非法
++ a11y 反模式)。改用 ``<div role="button" tabIndex={0}>`` + Enter/Space
+键盘事件 + ``aria-expanded`` / ``aria-label`` 无障碍。子按钮外面包一层
+``onClick={(e) => e.stopPropagation()}`` 阻止误翻 fold。
+
+### 情绪 UI 位置(UX-001 commit 3 → UX-003 commit 3)
+
+UX-001 commit 3 修过 ``CharacterStatePanel`` panel-mode 位置(``top: 12px →
+48px`` 避开 TopBar)。UX-003 commit 3 再改 ``right: 16px → left: 16px``——
+原因:
+
+* Panel mode CharacterView 区域右上角有 ``<button className="absolute top-4
+  right-4 z-30">[ScrollText] 历史</button>``(modes/Panel.tsx:62-73)
+* 情绪条 ``right: 16px / top: 48px`` 紧邻历史按钮下方,视觉重叠 + hover
+  互相覆盖
+* 左上角实测**完全空闲**:CharacterView 是 ``absolute inset-0 z-0`` 满铺
+  背景,无其他 positioned 元素;TopBar 在 ``relative z-50`` 占顶 0-40px,
+  情绪条 top: 48px 在它之下
+* z-index 30 维持(不需要浮到 TopBar 之上反向遮 CharacterSwitcher dropdown)
+
+Widget 模式无 TopBar / 无历史按钮 → 沿用 ``right: 8px / bottom: 8px`` 不动。
+
+### 防回归测试覆盖
+
+15 个 grep-style 断言锁定 layer 1/2/3 state 初始化 + provider extraction
+规则 + 多/单 provider 分支 + 嵌套 button 避坑 + display map + ext 角标
++ ``setExpandedCategories`` 仅在 ``toggleCategory`` 调用(防回归自动展开)。
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建

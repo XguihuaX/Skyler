@@ -2,7 +2,7 @@
 
 > Living document. 每完成一个里程碑同步更新 + commit + push。
 >
-> 当前状态(2026-05-13):v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 9 / 10 / 11 + UX-001 + hotfix-6 + UX-002 + hotfix-7 + hotfix-8 全部完成**。Memory 三层(chunk 9 遗忘曲线 + chunk 10 server-side worker + chunk 11 structured profile_data)落地；chunk 8a 简化屏幕感知上线；UX-001/UX-002 SettingsPanel accordion 全面落地;hotfix-6 chunk 8a 切 VSCode 根因修;hotfix-7 proactive state_update tag strip 漏防修 + TTS toggle undefined 真因修;**hotfix-8 config.yaml duplicate block 合并(chunk 8a docs commit 非幂等 restore 之锅) + _IDE_APPS 中文 macOS i18n 加 '终端' 等 9 个 alias + commit hotfix-5 Info.plist**。剩 chunk 8b 完整屏幕感知(截屏 + OCR + VLM)+ v5-D / T1 / T2 远期 + v6+ 多设备。
+> 当前状态(2026-05-13):v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 9 / 10 / 11 + UX-001/UX-002/UX-003 + hotfix-3/4/6/7/8 全部完成**。Memory 三层(chunk 9 / chunk 10 worker / chunk 11 profile_data)落地;chunk 8a 简化屏幕感知上线;**UX-001/UX-002/UX-003 SettingsPanel 三层 accordion 全栈完成**(category → provider → capability 三级折叠,默认全收起,Settings 1 屏内);hotfix-3..hotfix-8 共 5 个修复(state_update strip 漏防 / TTS toggle undefined / config.yaml duplicate / IDE i18n / 等)。剩 chunk 8b 完整屏幕感知(截屏 + OCR + VLM)+ v5-D / T1 / T2 远期 + v6+ 多设备。
 
 ---
 
@@ -43,6 +43,7 @@
 | **UX-002：CapabilityPanel 67 cap 全面 accordion + 删冗余 MCP banner + calendar header 归位** | ✅ 完成（4 commit，2026-05-12） | 100% |
 | **hotfix-7：proactive trigger state_update strip 漏防 + WS send 5 道兜底契约 + TTS toggle "undefined" 真因修** | ✅ 完成（5 commit，2026-05-13） | 100% |
 | **hotfix-8：config.yaml duplicate block 合并 + _IDE_APPS 中文 macOS i18n + commit Info.plist + .gitignore 备份保护** | ✅ 完成（4 commit，2026-05-13） | 100% |
+| **UX-003：CapabilityPanel 三层 accordion(category → provider → capability)+ 情绪 UI 左上角(避开历史按钮)** | ✅ 完成（5 commit，2026-05-13） | 100% |
 | **v3.5 chunk 8a：简化屏幕感知（active app + browser URL + smart trigger）** | ✅ 完成（9 commit，2026-05-12） | 100% |
 | **v3.5 chunk 8b：完整屏幕感知（截屏 + OCR + VLM 抽象 + 浏览器扩展）** | 📋 计划中 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |
