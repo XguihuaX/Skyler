@@ -300,6 +300,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.exception("[cron] intimacy_decay_daily registration failed")
 
+    # ── 6b'. v3.5 chunk 11 — structured profile daily regenerate ─────────
+    # Cron 取代 chunk 9 的"每 50 turn" in-memory 计数器（已删除）。
+    # config ``memory.profile_structured.cron`` 默认 "55 23 * * *"。
+    try:
+        from backend.services.profile_regen import (
+            get_profile_cron_expr,
+            profile_daily_regenerate,
+        )
+        _profile_cron_expr = get_profile_cron_expr()
+        cron_scheduler.schedule_cron(
+            "profile_daily_regenerate", _profile_cron_expr,
+            profile_daily_regenerate,
+        )
+        logger.info(
+            "[cron] profile_daily_regenerate registered: %s",
+            _profile_cron_expr,
+        )
+    except ValueError:
+        logger.info(
+            "[cron] profile_daily_regenerate already registered (hot-reload)"
+        )
+    except Exception:
+        logger.exception(
+            "[cron] profile_daily_regenerate registration failed"
+        )
+
     # ── 6c. v3-G chunk 3a — clipboard polling task ─────────────────────────
     try:
         from backend.integrations.clipboard import clipboard_watcher

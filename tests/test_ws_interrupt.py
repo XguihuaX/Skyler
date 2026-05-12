@@ -355,18 +355,23 @@ async def test_handle_message_safe_normal_completion():
 # ---------------------------------------------------------------------------
 
 async def test_interrupt_does_not_bump_profile_counter():
-    print("\n[_save_interrupted_turn — 不调 _bump_turn_and_maybe_regenerate]")
+    print("\n[_save_interrupted_turn — chunk 11 起 N-turn 计数器已删除]")
+    # v3.5 chunk 11：``turn_count_per_user`` / ``_bump_turn_and_maybe_regenerate``
+    # 全部移除（cron job 取代）。本测试退化为存在性反向断言 + 打断路径仍能
+    # 正常写库。
     await _wipe_chat()
-    # 直接观察 turn_count_per_user dict —— 打断不应改变它
-    _ws_module.turn_count_per_user[USER_ID] = 0
+    check("turn_count_per_user 已不在 ws 模块",
+          not hasattr(_ws_module, "turn_count_per_user"))
+    check("_bump_turn_and_maybe_regenerate 已不在 ws 模块",
+          not hasattr(_ws_module, "_bump_turn_and_maybe_regenerate"))
+
     state = _TurnState()
     state.user_text = "x"
     state.reply_parts = ["y"]
 
+    # 打断路径正常完成（不抛）
     await _save_interrupted_turn(state, USER_ID)
-
-    check("turn_count_per_user unchanged after interrupt",
-          _ws_module.turn_count_per_user.get(USER_ID, 0) == 0)
+    check("_save_interrupted_turn 正常完成", True)
 
 
 # ---------------------------------------------------------------------------

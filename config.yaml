@@ -39,6 +39,16 @@ memory:
     enabled: true
     threshold: 0.3
     age_decay_factor: 0.01
+  # v3.5 chunk 11：structured profile_data（取代 chunk 9 自然语言 profile_summary）
+  #   enabled=false       → cron 不真跑；legacy profile_summary 注入路径继续
+  #   cron                每天定时全用户重生
+  #   input_days          重生时取最近 N 天的 role='user' 消息作输入
+  #   min_user_messages   input_days 窗口内 user 行 < N → skip（数据保护）
+  profile_structured:
+    enabled: true
+    cron: "55 23 * * *"
+    input_days: 7
+    min_user_messages: 10
 search:
   enable_search: true
 cache:

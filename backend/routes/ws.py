@@ -212,23 +212,26 @@ async def _tts_audio_consumer(
             logger.warning("[TTS] audio sender failed: %s", send_exc)
 
 # ---------------------------------------------------------------------------
-# profile_summary background regeneration (V2.5-D)
+# profile_summary background regeneration
 #
-# Incremental update: each pass folds the most recent ~50 turns into the
-# previous summary instead of rewriting from scratch, so stable traits stick
-# while short-term observations refresh. Triggered both by the per-turn
-# counter and by conversation deletion (so wiping all turns clears the
-# summary too).
+# v3.5 chunk 9：input → user-only filter + _compute_profile_summary 返
+# (status, summary)。本模块 wrapper 在 background 路径（chunk 9: 每 N 轮
+# turn 计数器）+ delete_conversation 路径调用。
 #
-# IMPORTANT: PROFILE_SUMMARY_TURN_THRESHOLD is set to 5 for live testing; flip
-# back to 50 once the end-to-end run is verified.
+# v3.5 chunk 11：**删除 N-turn 计数器**（``turn_count_per_user`` /
+# ``PROFILE_SUMMARY_TURN_THRESHOLD`` / ``_bump_turn_and_maybe_regenerate``
+# 全部移除）。替代方案：cron 每天 23:55 ``profile_daily_regenerate``
+# 重生结构化 ``users.profile_data``（``backend/services/profile_regen.py``）。
+#
+# legacy ``_compute_profile_summary`` 调用链保留作 fallback：用户主动迁
+# 移期间 ``profile_data`` 为 NULL 时 ``_build_messages`` 仍读
+# ``profile_summary``。``_regenerate_profile_summary`` wrapper 现在只
+# 被 delete_conversation 路径调用（chunk 11 commit 4 把 N-turn 路径删了）。
 # ---------------------------------------------------------------------------
 
-PROFILE_SUMMARY_TURN_THRESHOLD = 5
 PROFILE_SUMMARY_HISTORY_LIMIT = 100   # pull last 100 chat_history rows = ~50 rounds
 PROFILE_SUMMARY_MIN_ROWS = 20         # below this, skip — not enough signal
 PROFILE_SUMMARY_MIN_OUTPUT_LEN = 50   # reject obviously-truncated LLM output
-turn_count_per_user: dict[str, int] = {}
 
 
 # v3-E1 step3：触摸事件占位 + 临时 system 指令
@@ -404,13 +407,15 @@ async def _compute_profile_summary(
 
 
 async def _regenerate_profile_summary(user_id: str) -> None:
-    """Background-path wrapper：每 N 轮自动触发，无返回值。
+    """Legacy wrapper — chunk 11 起仅由 delete_conversation 路径调用。
 
-    与 endpoint 路径共用 ``_compute_profile_summary`` 核心，但本 wrapper：
-      * 不向 caller 抛出（exception 全吞 log）
-      * 在 ``finally`` 重置 turn_count counter（避免瞬时错误把 user 卡在
-        阈值之上）
-      * 用 background-path 的 min_user_rows 阈值
+    chunk 9 时由 ``_bump_turn_and_maybe_regenerate`` 每 N 轮 fire；chunk
+    11 删除了 turn-count 触发，profile_summary 仅在删除 conversation 时
+    被动重生，且 ``_compute_profile_summary`` 写的是 legacy
+    ``profile_summary`` 字段。新 ``profile_data`` 字段由 cron job
+    ``profile_daily_regenerate`` 主动维护。
+
+    任何异常吞 + log，不抛。
     """
     try:
         await _compute_profile_summary(
@@ -422,21 +427,6 @@ async def _regenerate_profile_summary(user_id: str) -> None:
             "[profile_summary] unexpected error for user=%s: %s",
             user_id, exc,
         )
-    finally:
-        # Reset the counter regardless of success/failure so transient errors
-        # don't leave a user permanently stuck above threshold.
-        turn_count_per_user[user_id] = 0
-
-
-def _bump_turn_and_maybe_regenerate(user_id: str) -> None:
-    """Increment per-user turn counter; spawn background task at threshold."""
-    n = turn_count_per_user.get(user_id, 0) + 1
-    if n >= PROFILE_SUMMARY_TURN_THRESHOLD:
-        # Counter is reset inside _regenerate_profile_summary's finally block,
-        # so we don't pre-zero here — that would race with concurrent turns.
-        asyncio.create_task(_regenerate_profile_summary(user_id))
-    else:
-        turn_count_per_user[user_id] = n
 
 
 # ---------------------------------------------------------------------------
@@ -607,7 +597,9 @@ async def _update_memory(
         if conversation_id is not None:
             await _bump_conversation_updated_at(conversation_id)
 
-        _bump_turn_and_maybe_regenerate(user_id)
+        # v3.5 chunk 11：删除 N-turn 计数器触发（``_bump_turn_and_maybe_regenerate``
+        # 整体移除）。结构化 ``profile_data`` 由 cron job
+        # ``profile_daily_regenerate`` 每天 23:55 主动重生，节奏更稳。
     except Exception:
         logger.exception("_update_memory failed for user %s", user_id)
 
@@ -660,7 +652,8 @@ async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
 
     与 ``_update_memory`` 区别：
       * assistant 行带 ``interrupted_at = utcnow()``
-      * 不调 ``_bump_turn_and_maybe_regenerate``（被打断的轮不代表用户画像）
+      * （chunk 11 起 ``_update_memory`` 也不再 bump turn count，但被打断
+        的轮逻辑上仍不应触发 profile 重生 —— 此 invariant 现在由 cron 替代）
       * reply 为空 → 只保留 user 行（如未写过），不写空 assistant 行
     """
     if not state.user_text:

@@ -326,6 +326,50 @@ async def _regenerate_profile_data(
     return ("regenerated", new_profile)
 
 
+# ---------------------------------------------------------------------------
+# Cron entry: profile_daily_regenerate
+# ---------------------------------------------------------------------------
+
+
+async def profile_daily_regenerate() -> None:
+    """Cron job entry: 全 user 走 ``_regenerate_profile_data(mode='cron')``。
+
+    每用户独立 try/except —— 任一失败不阻塞其他用户。``enabled=false``
+    时 ``_regenerate_profile_data`` 自己 short-circuit 返 skip_disabled，
+    本函数不再前置 gate（让 enabled=false 也能拿到逐 user log，便于
+    audit）。
+    """
+    async with AsyncSessionLocal() as session:
+        rows = (await session.execute(
+            select(User.user_id)
+        )).all()
+    user_ids = [r[0] for r in rows if r[0]]
+    logger.info(
+        "[cron] profile_daily_regenerate firing for %d user(s)",
+        len(user_ids),
+    )
+    succeeded = 0
+    skipped = 0
+    failed = 0
+    for uid in user_ids:
+        try:
+            status, _ = await _regenerate_profile_data(uid, mode="cron")
+            if status == "regenerated":
+                succeeded += 1
+            else:
+                skipped += 1
+        except Exception:
+            failed += 1
+            logger.exception(
+                "[cron] profile_daily_regenerate failed for user=%s", uid,
+            )
+    logger.info(
+        "[cron] profile_daily_regenerate done: %d regenerated / %d skipped / "
+        "%d failed",
+        succeeded, skipped, failed,
+    )
+
+
 __all__ = [
     "build_profile_extraction_prompt",
     "count_user_messages_within_days",
@@ -336,6 +380,7 @@ __all__ = [
     "get_profile_input_days",
     "get_profile_min_user_messages",
     "get_profile_structured_enabled",
+    "profile_daily_regenerate",
     "save_profile_data",
     "_regenerate_profile_data",
     "VALID_MODES",
