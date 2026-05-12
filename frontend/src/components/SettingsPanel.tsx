@@ -11,6 +11,7 @@ import {
 } from '../lib/integrations';
 import CapabilityPanel from './CapabilityPanel';
 import ExtensionsSection from './ExtensionsSection';
+import ActivityAwarenessSection from './ActivityAwarenessSection';
 import MemoryManagerDrawer from './MemoryManagerDrawer';
 import UserProfileSection from './UserProfileSection';
 
@@ -1478,6 +1479,10 @@ export default function SettingsPanel() {
           内置 capability，不需要 UI（看 CapabilityPanel）；姿态 B 外部 MCP
           server 列在这里供 toggle + 配凭证。 */}
       <ExtensionsSection showToast={showToast} />
+
+      {/* v3.5 chunk 8a —— 活动感知（active app / browser URL / 节流 + cap）。
+          后端 ActivityWatcher 默认 enabled，前端可在此 toggle 关 + 增删黑名单。 */}
+      <ActivityAwarenessSection showToast={showToast} />
 
       <CharacterStateSection showToast={showToast} />
 
