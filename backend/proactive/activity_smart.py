@@ -75,24 +75,51 @@ def get_default_user_id() -> str:
 # ---------------------------------------------------------------------------
 
 
-# 已知 IDE / 代码编辑器名（macOS app 名 lower 比较）
+# 已知 IDE / 代码编辑器名（macOS NSWorkspace ``frontmostApplication.localizedName``
+# 返值的 lower 形式匹配）。
+#
+# **hotfix-6 关键 fix**：macOS 上 VSCode 的 CFBundleName 是 ``"Code"``，NSWorkspace
+# 返 ``"Code"`` 而**不是** ``"Visual Studio Code"``——这是 chunk 8a 默认列表的
+# 漏网。用户切 VSCode 看不到 trigger 的根因就是这条。同步补全其他 IDE 的
+# 实际 macOS localizedName（与品牌名经常不同）。
 _IDE_APPS = {
-    "visual studio code",
+    # VS Code 系列
+    "code",                  # ⭐ macOS NSWorkspace 返这个（CFBundleName）
+    "visual studio code",    # 极少数 build / 兼容
     "vscode",
+    "code - insiders",       # VSCode Insiders
     "cursor",
+    "windsurf",              # Codeium 编辑器
+    "zed",
+    # JetBrains 家族（macOS NSWorkspace 返带空格的 localizedName）
     "pycharm",
+    "pycharm ce",
+    "pycharm professional",
     "intellij idea",
-    "xcode",
-    "sublime text",
-    "atom",
-    "neovim",
-    "vim",
-    "emacs",
+    "intellij idea ce",
+    "intellij idea ultimate",
+    "phpstorm",
+    "webstorm",
     "rubymine",
     "goland",
     "rider",
-    "webstorm",
+    "clion",
+    "datagrip",
+    "appcode",
+    "fleet",
     "android studio",
+    # Apple / 老牌编辑器
+    "xcode",
+    "sublime text",
+    "atom",
+    "nova",                  # Panic Nova
+    "bbedit",
+    "textmate",
+    # 命令行 / 终端类（用户在终端里用 vim/emacs 也算）
+    "neovim",
+    "vim",
+    "emacs",
+    "macvim",
 }
 
 # 已知音乐 / 媒体 app
