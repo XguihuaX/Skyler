@@ -121,6 +121,8 @@ class ActivityChange:
 
 
 _ListenerFn = Callable[[ActivityChange], Awaitable[None]]
+# chunk 8a-ext: poll listener — 每 poll 触发,接 ActivityState(可读 stay 时长)
+_PollListenerFn = Callable[["ActivityState"], Awaitable[None]]
 
 
 class ActivityWatcher:
@@ -134,6 +136,9 @@ class ActivityWatcher:
         self._app_focus_start: float = 0.0   # 当前 active_app 开始时间
         self._url_dwell_start: float = 0.0   # 当前 URL 开始时间
         self._listeners: List[_ListenerFn] = []
+        # chunk 8a-ext: poll listeners 每 poll 触发(不依赖 change),让
+        # ActivityJudge 慢路径每 tick 检查 stay duration + maybe judge。
+        self._poll_listeners: List["_PollListenerFn"] = []
 
     # -- listeners -----------------------------------------------------------
 
@@ -146,8 +151,19 @@ class ActivityWatcher:
         if fn not in self._listeners:
             self._listeners.append(fn)
 
+    def register_poll_listener(self, fn: "_PollListenerFn") -> None:
+        """chunk 8a-ext: 挂一个 async ``fn(ActivityState) -> None`` poll 回调。
+
+        与 ``register_change_listener`` 区别: poll listener 每 poll 都触发
+        (无论是否有 change),让 ActivityJudge 慢路径能定期检查 stay duration
+        + maybe judge。单 callback 异常吞 + log 不影响 watcher 主 loop。
+        """
+        if fn not in self._poll_listeners:
+            self._poll_listeners.append(fn)
+
     def clear_listeners(self) -> None:
         self._listeners.clear()
+        self._poll_listeners.clear()
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -408,6 +424,17 @@ class ActivityWatcher:
                                 "[activity] listener %s failed on %s: %s",
                                 getattr(fn, "__name__", "<anon>"), change.kind, exc,
                             )
+                # chunk 8a-ext: poll listeners 每 poll 触发(无论是否 change),
+                # 让 ActivityJudge 慢路径检查 stay duration + maybe judge。
+                # 同样串行 + 异常吞 + 不阻塞下一拍。
+                for fn in list(self._poll_listeners):
+                    try:
+                        await fn(state)
+                    except Exception as exc:
+                        logger.warning(
+                            "[activity] poll_listener %s failed: %s",
+                            getattr(fn, "__name__", "<anon>"), exc,
+                        )
                 self._last_state = state
             except Exception as exc:
                 logger.warning("[activity] watch tick failed: %s", exc)
@@ -421,6 +448,50 @@ class ActivityWatcher:
 
     def get_last_state(self) -> Optional[ActivityState]:
         return self._last_state
+
+    def get_current_stay_info(self) -> Optional[dict]:
+        """chunk 8a-ext: 当前 stay 摘要,给 ActivityJudge 慢路径用。
+
+        返 ``{"key": "url:<X>"|"app:<X>"|"none", "start_ts": float,
+        "duration_seconds": float, "app": str|None, "url": str|None,
+        "title": str}`` 或 None(无 last_state)。
+
+        stay_key 优先 URL,无 URL 时 fall back app。两个时间游标
+        ``_app_focus_start`` / ``_url_dwell_start`` 已由 _detect_changes 维护:
+        - app 没变 → _app_focus_start 保留之前值
+        - app 变了 → _app_focus_start = now (新 stay 开始)
+        - URL 类似
+        - latching off(``-1.0``)后视为 stay 仍在,start = max(focus_start, dwell_start)
+          的兜底
+        """
+        state = self._last_state
+        if state is None:
+            return None
+        import time as _time
+        now = _time.time()
+        url = (state.browser or {}).get("url") if state.browser else None
+        title = (state.browser or {}).get("title", "") if state.browser else ""
+        app = state.active_app
+        # 优先 URL stay,URL 是更细粒度的"用户在做什么"信号
+        if url and self._url_dwell_start > 0:
+            return {
+                "key": f"url:{url}",
+                "start_ts": self._url_dwell_start,
+                "duration_seconds": max(0.0, now - self._url_dwell_start),
+                "app": app,
+                "url": url,
+                "title": title,
+            }
+        if app and self._app_focus_start > 0:
+            return {
+                "key": f"app:{app}",
+                "start_ts": self._app_focus_start,
+                "duration_seconds": max(0.0, now - self._app_focus_start),
+                "app": app,
+                "url": url,
+                "title": title,
+            }
+        return None
 
 
 _LONG_FOCUS_SECONDS = 90 * 60     # 90 分钟同 app
