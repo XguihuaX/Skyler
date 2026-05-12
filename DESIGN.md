@@ -328,74 +328,241 @@ GET /api/health 响应：
 
 ---
 
-## 五、记忆系统设计（v2.7 双层模型）
+## 五、记忆系统设计（v3.5 chunk 9 + 10 + 11 完成后的三层模型）
 
-### 5.1 两层结构
+> **演进史**：v2.7 双层（memory + profile_summary 自由段）→ chunk 9 加遗忘曲线 +
+> 跨角色共享 → chunk 11 用结构化 ``profile_data`` 治本"用户画像污染"，把
+> ``profile_summary`` 降级为 fallback → chunk 10 把 memory 写入从 LLM tool 主路径
+> 改成 server-side worker 主路径 + 显式入口降级 + 6 列结构化字段。三层合并定型如下。
+
+### 5.1 三层结构
 
 ```
-memory 表（事实记忆）
-  - LLM 在对话中通过 4 个 tool 自主管理：
-    · save_memory(content, type)       — 用户透露值得记的事
-    · delete_memory(memory_id)         — 用户要求忘掉
-    · list_memories()                  — 列出当前所有
-    · compress_memories()              — 去重/合并/精简
-  - 用户 不手动添加（按用户偏好），可在 SettingsPanel 看到 + 单条删 + 全部清空
-  - 按 character_id 隔离（每个角色独立"她记得的事"）
-  - 写入时同步生成 embedding (paraphrase-multilingual-MiniLM-L12-v2)
-  - 检索：当前输入做 query，cosine top-5 注入 ChatAgent prompt（按 character_id 过滤）
+─── Layer 1：短期记忆 ──────────────────────────────────────────────────
+chat_history 表
+  - 按 conversation_id 组织；永久保留，仅 DELETE /api/conversations/{id}
+    级联删除该对话的行
+  - ChatAgent 每次取该 conversation 最近 N 轮注入 prompt
+  - ChatHistoryDrawer 分页拉取（limit=50, before_id 滚动）
+  - 是 Layer 2 worker 的**唯一输入源**（kind='normal' + role='user' 子集）
 
-profile_summary（整体印象）— users 字段
-  - 一段 300-500 字的描述性段落，例：
-    "Skyler 是个对设计有强烈直觉的程序员，对话直接、爱用反问。最近常聊
-     Skyler 项目，会主动指出过度工程。心情起伏不大，深夜更活跃。"
-  - 增量式重写（不是从零生成）：
-    prompt 里同时塞「旧印象 + 最近 50 round chat_history」→ LLM 输出新印象覆盖
-    保留旧的稳定特征，调整最近的短期观察
-  - 触发条件：
-    a. 每 50 轮 assistant 回复（in-memory turn_count_per_user 计数器）
-    b. DELETE /api/conversations/{id}（基于剩余 chat_history 重算）
-  - 数据保护：
-    · chat_history 行数 < 20（< 10 round）→ 跳过更新
-    · chat_history 行数 = 0（删光所有对话）→ profile_summary 设 NULL
-  - user 级（不按 character 隔离，跨角色共享对你的整体感觉）
-  - 不在 UI 显示（按用户偏好），用户可在对话里问 Momo 由其自然回答
-  - 实现：backend/routes/ws.py _regenerate_profile_summary，asyncio.create_task 后台跑
-  - 调用模型用 get_planner_model()（qwen-turbo）控成本
+─── Layer 2：长期事实记忆（memory 表）─────────────────────────────────
+入库路径有三条：
+  · server-side MemoryExtractor worker（chunk 10 主路径，下详）
+  · save_memory tool（chunk 10 commit 5 起降级为显式入口，"请记住 X" 才触发）
+  · 用户在 MemoryManagerDrawer 手动添加（extraction_source='manual'）
 
-短期记忆
-  - chat_history 表，按 conversation_id 组织
-  - 永久保留，仅在 DELETE /api/conversations/{id} 时级联删除该对话的行
-  - ChatHistoryDrawer 分页拉取（limit=50, before_id 滚动加载）
-  - ChatAgent 每次组装 context 时取该 conversation 最近 N 行
+字段结构（chunk 10 commit 1 加列）：
+  content / type / character_id / created_at        老字段（chunk 2 + 9）
+  access_count / last_accessed_at                   chunk 9 遗忘曲线
+  extracted_at / source_turn_id / confidence /
+  entry_type / quality_score / extraction_source    chunk 10 结构化
+
+跨角色策略（chunk 9 commit 4 改）：
+  - 检索**不按 character_id 隔离**——所有角色共享用户长期事实
+  - UI 角标显示"由 X 记"区分原始来源
+  - 仍保留 character_id 字段不删（向后兼容 + 未来 per-character override）
+
+入库时同步生成 embedding (paraphrase-multilingual-MiniLM-L12-v2)，best-effort。
+
+──── 检索（search_relevant_memories）───────────────────────────────────
+  1. 短输入门：len(query.strip()) < 10 → 直接返 [] (chunk 9 perf)
+  2. encode query（LRU + TTL cache, chunk 9 perf）
+  3. SQL 取该 user 全部 memory 行
+  4. 每条算 score（chunk 9 遗忘曲线）：
+
+       score = relevance * (1 + log(1 + access_count))
+                         / (1 + age_days * decay)
+
+       relevance    cosine 相似度
+       access_count 累计被 top-k 召回次数（log 渐进防爆款霸榜）
+       age_days     now - (last_accessed_at OR created_at).days
+       decay        config.memory.forgetting_curve.age_decay_factor（默认 0.01）
+
+     forgetting_curve.enabled=false → 退回纯 relevance
+  5. score < threshold（默认 0.3）的行不进 top-k（仍在 DB，UI 可见）
+  6. top-5 返回；同时异步 bump access_count + last_accessed_at（best-effort）
+
+──── MemoryExtractor worker（chunk 10 主路径）─────────────────────────
+backend/memory/extractor.py，单例 asyncio task，lifespan 拉起 / 关停
+（backend/main.py 6b''；config.memory.extractor.enabled=false 整段静默跳过）
+
+每 interval_seconds（默认 300s）跑一轮 _extract_batch：
+  for user_id in active users:
+    1. read last_processed_turn_id from memory_extractor_state(user_id)
+    2. fetch chat_history where role='user' kind='normal'
+                         and id > last_processed_turn_id
+                         limit batch_size (默认 50)
+    3. build_extraction_prompt(turns)   → JSON list 契约
+                                          type ∈ {fact,preference,event,commitment}
+                                          content 5-200 字符 第三人称
+                                          confidence 0-1
+                                          14 反推词清单 prompt 主动避开
+    4. call_extraction_llm(prompt)      → planner_model (qwen-turbo)
+                                          LLMError / Exception → None 静默
+    5. validate_and_filter_entries() —— 10 道闸：
+       hard reject  ─ JSON parse 失败
+                    ─ type 不在四分类
+                    ─ content 长度 < 5 或 > 200
+                    ─ SUSPICIOUS_TAG_RE 命中（chunk 6b hotfix-3 复用）
+                    ─ confidence < min_confidence (默认 0.5)
+                    ─ 与现有 memory 向量 sim > dup_threshold (默认 0.9)
+                    ─ intra-batch dedup（本批已 accept 的也比对）
+                    ─ (可选) llm_judge YES/NO，默认关
+       soft warn   ─ 反推词命中（log 警告但 accept，让 UI 编辑）
+    6. _save_worker_entries() —— INSERT memory 行：
+       extraction_source='worker', confidence, source_turn_id, extracted_at,
+       entry_type（chunk 10 四分类），同时填 legacy type（_TYPE_LEGACY_MAP）：
+         fact       → fact
+         preference → instruction
+         event      → activity
+         commitment → activity
+       embedding best-effort，失败入库 NULL
+    7. update_last_processed_turn_id(user_id, max_turn_id)
+       任一子步骤异常都吞 + log，state pointer 仍推进（避免 stuck loop）
+
+──── save_memory tool（chunk 10 commit 5 起降级）────────────────────────
+description 收紧到 4 个明确触发信号（"请记住 / 以后 / 别忘了 / 你要记住"），
+明文禁令"日常对话事实由 chunk 10 server-side worker 每 5 分钟自动提取，不要
+主动调"。_TOOL_PROMPT_ADDENDUM 记忆类段同步。
+
+内部 _tool_save_memory 复用 worker 同 quality filter：
+  · 长度 5-200
+  · SUSPICIOUS_TAG_RE 不命中
+  · cosine 重复检测（命中返 status='duplicate' + existing_memory_id，不抛错）
+  · raw SQL INSERT extraction_source='llm_save_memory' + extracted_at + embedding
+
+──── extraction_source 四态 + UI 角标 ──────────────────────────────────
+  worker            server-side 自动提取 → "自动提取"
+  llm_save_memory   LLM 显式调 save_memory → "你说要记"
+  manual            用户在 drawer 手动添加 → "手动"
+  legacy            chunk 10 之前入库 → "旧"
+MemoryManagerDrawer tab 切换从老 type（chunk 2 五分类）改成 entry_type
+（chunk 10 四分类：全部 / 事实 / 偏好 / 事件 / 承诺）；legacy entries
+（entry_type=NULL）仅在"全部" tab 显示。
+
+─── Layer 3：用户画像（profile_data + profile_summary fallback）─────────
+users.profile_data —— JSON 字段（chunk 11 主路径）
+  ```json
+  {
+    "profession": null | "string",
+    "current_projects": [ "string", ... ],
+    "communication_style": null | "string",
+    "interests": [ "string", ... ],
+    "language_preferences": null | "string",
+    "active_hours": null | "string",
+    "recurring_topics": [ "string", ... ]
+  }
+  ```
+  - schema 严格（backend/utils/profile_validator.py）：JSON parse + 类型校验 +
+    SUSPICIOUS_TAG + 14 反推词清单（"温柔/陪伴/亲密/敏感"等）→ hard reject
+    违规输出，注入用机械模板而非裸 LLM 文本
+  - 重生逻辑（_regenerate_profile_data，4 模式）：
+      manual_reset      用户在 UI 点"重新生成"
+      conversation_del  DELETE /api/conversations/{id}
+      cron_daily        每日 cron（取代 v2.7 50-turn 计数器，chunk 11 commit 5）
+      first_seed        历史空时初次播种
+  - 调用模型 get_planner_model()（qwen-turbo），prompt 严格 JSON output 契约
+  - 数据保护：chat_history < 10 round 跳；删光所有对话 → profile_data 设 {}
+
+users.profile_summary —— 自然语言段（v2.7 引入，chunk 11 后降级）
+  - 现行注入优先级：profile_data 非空 → 模板化注入；NULL → fallback 到
+    profile_summary 自由段
+  - N 个版本后真删（README Known Problems #11，migration DROP COLUMN +
+    chunk 9 /profile_summary/* endpoints 删除）
+
+跨角色：user 级共享（不按 character_id 隔离）
+不在主 UI 显示，但 SettingsPanel 有"用户档案" section（chunk 11 commit 7，
+字段级编辑 + 双按钮 [重新生成] / [清空]）
 ```
 
-### 5.2 Context 组装顺序（ChatAgent _build_messages）
+### 5.2 Context 组装顺序（ChatAgent _build_messages，chunk 11 起）
 
 ```
 1. character.persona（system prompt，按 currentCharacterId 取）
-2. users.profile_summary（永远注入，如有）
-3. memory 向量检索 Top-5（按 user_id + character_id 过滤）
-4. 工具调用结果（如 ChatAgent 同一轮内调过 tool）
+2. users.profile_data 模板化（chunk 11 format_profile_for_prompt），如有；
+   profile_data NULL 或 {} → fallback users.profile_summary 自由段
+3. memory 向量检索 Top-5（user_id 共享，遗忘曲线 score 阈值过滤）
+4. 工具调用结果（如同一轮内调过 tool）
 5. [v4] 最近一次屏幕分析摘要（如有）
 6. 当前 conversation 最近 N 轮 chat_history（按 conversation_id）
 7. 用户当前输入
 ```
 
-### 5.3 save_memory tool description（收紧版，避免乱存）
+短输入（< 10 字）跳过 step 3 memory 检索（chunk 9 perf optimization）。
+
+### 5.3 save_memory tool description（chunk 10 降级后）
 
 ```
-当用户透露值得长期记住的事时调用。判断标准：这条事实在未来 1 周以上的对话中是否仍有用？
+仅当用户明确说"请记住 X"/"以后 X"/"别忘了 Y"/"你要记住 Z" 时调用。
 
-应保存：
-- 稳定事实（住址、职业、家人、宠物名字）
-- 长期偏好（喜欢/讨厌某物，每日习惯）
-- 承诺/计划（deadline、约会、未来安排）
-- 反复出现的模式（用户多次提及才显著的特征）
+日常对话事实的提取走 backend/memory/extractor.py 的 server-side worker，
+每 5 分钟批量提取，不需要本 tool。
 
-不保存：
-- 日常打招呼、单次提问
-- 当下情绪、天气、时间感叹（"今天好累"除非反复出现）
-- chitchat 本身
+本 tool 也复用 worker 同 quality filter（content 5-200 字符 + SUSPICIOUS_TAG
++ cosine 重复检测），写入时打 extraction_source='llm_save_memory' 标签让
+UI 角标区分入口来源。
+```
+
+### 5.4 Config 速查（chunk 9 + 10 + 11 后）
+
+```yaml
+memory:
+  long_term_enabled: true
+  profile_enabled: true
+  embedding:                              # chunk 9 perf
+    device: auto                          # auto / cpu / mps
+    short_input_threshold: 10
+    cache_size: 100
+    cache_ttl_seconds: 300
+  forgetting_curve:                       # chunk 9
+    enabled: true
+    threshold: 0.3
+    age_decay_factor: 0.01                # 100 天约半权
+  extractor:                              # chunk 10
+    enabled: true
+    interval_seconds: 300                 # 5 分钟一批
+    batch_size: 50
+    min_confidence: 0.5
+    dup_threshold: 0.9
+    llm_judge_enabled: false              # 第 5 道 filter 默认关，开启可再降召回率
+```
+
+### 5.5 Schema 速查（chunk 9 + 10 + 11 后）
+
+```sql
+-- memory 表（chunk 10 commit 1 加 6 列；chunk 9 commit 7 加 2 列）
+CREATE TABLE memory (
+  id INTEGER PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  character_id INTEGER,                   -- 检索不再按此隔离（chunk 9）
+  type TEXT,                              -- 五分类 fact/instruction/emotion/activity/daily
+  content TEXT NOT NULL,
+  embedding BLOB,
+  created_at TIMESTAMP,
+  -- chunk 9
+  access_count INTEGER DEFAULT 0,
+  last_accessed_at TIMESTAMP,
+  -- chunk 10
+  extracted_at TIMESTAMP,
+  source_turn_id INTEGER,                 -- 触发提取的 chat_history.id
+  confidence REAL,                        -- LLM 自评 0-1
+  quality_score REAL,                     -- 预留，未来引入
+  entry_type TEXT,                        -- 四分类 fact/preference/event/commitment
+  extraction_source TEXT NOT NULL DEFAULT 'legacy'
+);
+
+-- chunk 10 commit 1
+CREATE TABLE memory_extractor_state (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL UNIQUE,
+  last_processed_turn_id INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- users.profile_data（chunk 11 commit 1）
+ALTER TABLE users ADD COLUMN profile_data TEXT;  -- JSON
+-- profile_summary 列保留作 fallback（README Known Problems #11）
 ```
 
 ---

@@ -1091,6 +1091,194 @@ capability_registry 18/18 / chunk 5 系列）。
 
 ---
 
+### chunk 9 — 记忆 perf + 遗忘曲线 + 跨角色共享 ✅ 完成 2026-05-12
+
+**主题**：把 v2.7 memory 系统从"角色隔离 + 永久保留 + per-turn 退化"
+推到"用户级共享 + 遗忘曲线让位 + 短输入门 + cache"。
+
+#### Part 0 ``_build_messages`` 性能优化（perf 三项零风险） ✅
+
+* 短输入门：``len(query.strip()) < short_input_threshold`` 直接返 ``[]``
+  （默认 10 chars）—— 短问候 / 单字命令 跳过 memory 检索
+* embedding LRU + TTL 缓存（size 100 / TTL 300s）—— cache hit 0.01ms
+* ``device: auto`` → cpu（mps median 与 cpu 一致但 cpu 更稳，不与 Whisper
+  抢 GPU；显式 ``device: mps`` 才走 GPU）
+* 4487ms 退化 audit 后定位真根因是**模型未 preload 完时首条消息触发
+  lazy load**（不是 per-turn）—— 本 chunk 不修，留 backlog "preload-gate"
+
+#### Part 1 跨角色共享 + UI 来源角标 ✅
+
+* 检索去 ``character_id`` 隔离——所有角色共享用户长期事实
+* memory 行保留 ``character_id`` 字段不删（向后兼容）
+* MemoryManagerDrawer 加"由 X 记"角标显示原始记忆角色
+
+#### Part 2 profile_summary 自循环切断 + UI 编辑 ✅
+
+* prompt 输入改为"只读 user 消息"（不再混入 assistant 自己的话，断 LLM
+  自循环放大反推词的根因）
+* SettingsPanel 加用户画像 section：编辑 / 清空 / 重生 modal
+* API endpoints PATCH/DELETE/regenerate /profile_summary
+
+#### Part 3 遗忘曲线 ✅
+
+* memory 加 ``access_count`` + ``last_accessed_at`` 两列（幂等 migration）
+* score 公式：``relevance * (1 + log(1 + access_count)) / (1 + age_days * decay)``
+* 阈值 gate：score < ``threshold`` (默认 0.3) 不进 top-k，仍在 DB
+* config ``memory.forgetting_curve.{enabled, threshold, age_decay_factor}``
+  全 hot-readable
+* 召回成功 entries 异步 bump ``access_count + 1`` + ``last_accessed_at=now``
+  （best-effort）
+
+#### 交付清单
+
+* `efb22a0` perf(chunk9): _build_messages audit + 短输入 + cache + device
+* `5d54818` feat(chunk9): motion strip helper + ws.py 入库链补完
+* `1b0cea3` feat(chunk9): profile_summary prompt 输入改只读 user
+* `705d7e6` feat(chunk9): profile_summary API endpoints
+* `8a71fc7` feat(chunk9-frontend): SettingsPanel 用户画像 section
+* `6e8dee5` feat(chunk9): memory 检索去 character_id 隔离 + UI 角标
+* `ba0399e` feat(chunk9): memory forgetting curve schema + score 公式 + config
+
+工程量：1 个 session / 7 commits / 18 new test cases (forgetting_curve)
++ 22 (build_messages_perf)
+
+---
+
+### chunk 10 — server-side memory worker（治本 LLM hallucinate save_memory） ✅ 完成 2026-05-12
+
+**主题**：把 memory entry 入库从 LLM tool **主路径**改成 server-side worker
+**主路径**。LLM 不再为每条 chitchat 拍脑袋决定要不要 save，而是 background
+worker 按批 + 严格 filter 提取。tool 不删但降级为"用户明确说要记"的显式入口。
+
+#### Why（root cause）
+
+chunk 9 把 ``character_id`` 隔离去掉后，所有角色共享的 memory 表里**反推词
+污染 + 重复 + 无意义条目**问题被放大。根因是 ``save_memory`` tool 在主
+对话路径里挂着，LLM 自己拍脑袋判断"这个值不值得记"——既费 token，又
+经常 hallucinate（记下情绪 / 反推词 / 单次提问）。chunk 11 治了 profile
+层的反推词污染，本 chunk 治 memory 层的。
+
+#### Pipeline（8 commit 全图）
+
+```
+chat_history (kind='normal', role='user')
+   │  last_processed_turn_id 之后
+   ▼
+MemoryExtractor worker（asyncio task，每 300s 一批）
+   │
+   ▼ build_extraction_prompt(turns) ─→ qwen-turbo
+   │
+   ▼ JSON list 输出（type/content/confidence，14 反推词 prompt 主动避开）
+   │
+   ▼ validate_and_filter_entries (10 道闸):
+   │    hard reject  — JSON parse / type 不在四分类 / 长度 5-200 / SUSPICIOUS
+   │                 / confidence < min_confidence / cosine dup > threshold
+   │                 / intra-batch dedup / (opt) llm_judge
+   │    soft warn   — 反推词命中 accept + log
+   │
+   ▼ _save_worker_entries
+   │    INSERT memory: extraction_source='worker' / confidence /
+   │                   source_turn_id / extracted_at / entry_type / type
+   │    embedding best-effort
+   │
+   ▼ update_last_processed_turn_id (state pointer 推进)
+   │
+   ▼ search_relevant_memories（用户下次提问）
+        遗忘曲线 score（chunk 9）+ top-5 → ChatAgent prompt
+```
+
+#### entry_type 双维度 + extraction_source 四态
+
+* ``type`` (chunk 2 五分类 CHECK 锁死) + ``entry_type`` (chunk 10 四分类)
+  并存。worker 写入时 _TYPE_LEGACY_MAP 把 entry_type 映射到 legacy type：
+  fact→fact / preference→instruction / event,commitment→activity
+* extraction_source：worker / llm_save_memory / manual / legacy
+  → MemoryManagerDrawer 角标显示来源（"自动提取" / "你说要记" / "手动" / "旧"）
+
+#### save_memory tool 降级
+
+* description 收紧到 4 个明确触发信号（"请记住/以后/别忘了/你要记住"）
+* 明文禁令"日常事实由 server-side worker 提取，不要主动调"
+* _TOOL_PROMPT_ADDENDUM 同步
+* 内部 _tool_save_memory 复用 worker 同 quality filter（长度 / SUSPICIOUS /
+  cosine dup → status='duplicate' 不抛错）
+* 写入打 extraction_source='llm_save_memory' 标签
+
+#### 交付清单
+
+* `a692ac9` feat(chunk10): memory schema 扩展（6 列）+ extractor_state 表 + migration
+* `f250072` feat(chunk10): MemoryExtractor worker 骨架 + last_processed_turn_id
+* `a57fa59` feat(chunk10): extraction prompt + qwen-turbo + JSON list 契约
+* `750d16f` feat(chunk10): quality filter pipeline + extractor end-to-end 接通
+* `86ba1f1` feat(chunk10): save_memory tool 降级 + extraction_source 标记
+* `3dc2349` feat(chunk10-frontend): MemoryManagerDrawer 升级（entry_type tab + 角标 + confidence）
+* `c4834cc` feat(chunk10): worker startup/shutdown lifecycle + config.yaml extractor 段
+* `<docs>`  docs(chunk10): DESIGN §五 三层版 + ROADMAP + README Known Problems
+
+#### 验收硬指标对照
+
+| # | 指标 | 状态 |
+|---|------|------|
+| 1 | 后端启动 log ``[extractor] started interval=300s`` | ✅ commit 7 |
+| 2 | ``config.yaml memory.extractor.enabled=false`` worker 不启动 | ✅ commit 7 |
+| 3 | 用户说"请记住 X" → save_memory tool 入库 ``extraction_source='llm_save_memory'`` | ✅ commit 5 |
+| 4 | 日常 chitchat 入库走 worker ``extraction_source='worker'`` | ✅ commit 4 |
+| 5 | worker 写入填齐 confidence / source_turn_id / extracted_at / entry_type | ✅ commit 4 |
+| 6 | LLM 输出反推词 prompt 主动避开 + validator soft warn | ✅ commit 3 + 4 |
+| 7 | MemoryManagerDrawer 显示 entry_type tab + extraction_source 角标 | ✅ commit 6 |
+| 8 | 切 entry_type tab 列表正确过滤（legacy 仅在"全部"显示） | ✅ commit 6 |
+| 9 | worker 任一步异常 state pointer 仍推进（不 stuck loop） | ✅ commit 4 |
+| 10 | dup_threshold 同 batch 内 intra-batch dedup | ✅ commit 4 |
+| 11 | 老 entry 自动 ``extraction_source='legacy'`` 不重处理 | ✅ commit 1 |
+| 12 | shutdown 时 worker stop() 优雅退（5s timeout cancel 兜底） | ✅ commit 7 |
+
+#### 0 regression（chunk 9 + 11 + hotfix-3/4）
+
+chunk 9 + 11 测试套件（forgetting_curve / build_messages_perf /
+profile_* 系列）**100 cases all PASS**，chunk 10 新增 59 cases all PASS。
+全套残留 failure 全部是 README Known Problems #1 列出的 pre-existing
+test debt 范围（test_chat_agent / test_database / test_integration /
+test_llm_client / test_memory_agent / test_ws_helpers / test_ws_interrupt
+家族），与 chunk 10 改动**无因果关系**。
+
+#### 手动实测样本（worker 真 LLM 真 DB 跑一次）
+
+default 用户，把 ``memory_extractor_state.last_processed_turn_id`` 倒回
+320，让 worker 重扫最近 15 条 user normal turn（涉及"播放网易云日推 +
+mpv"主题）。一次 ``_extract_batch()`` 后 worker 入库 3 条：
+
+```
+entry_type=preference src=worker conf=0.9 source_turn=405
+  用户喜欢播放网易云音乐的日推歌曲
+entry_type=preference src=worker conf=0.8 source_turn=405
+  用户喜欢使用mpv播放音乐
+entry_type=event src=worker conf=0.9 source_turn=405
+  用户多次要求播放日推歌曲
+```
+
+* 全部第三人称客观陈述 ✅
+* 零反推词（无温柔/陪伴/亲密等） ✅
+* confidence 全 > min_confidence 阈值 ✅
+* source_turn_id 正确指向最后一条 user turn ✅
+* state pointer 推进到 405 ✅
+
+#### 工程量
+
+1 个 session / 8 commits（7 feat + 1 docs）/ 59 new test cases:
+
+| File | Tests |
+|---|---|
+| test_memory_schema_chunk10.py | 1 (containing 10 sub-asserts) |
+| test_memory_extractor_skel.py | 9 |
+| test_memory_extraction_prompt.py | 9 |
+| test_memory_entry_validator.py | 21 |
+| test_memory_extractor_e2e.py | 5 |
+| test_save_memory_chunk10.py | 8 |
+| test_memory_api_chunk10_fields.py | 2 |
+| test_extractor_lifecycle.py | 4 |
+
+---
+
 ### chunk 8 — v4 屏幕感知 📋
 
 DESIGN §13 已有完整设计。要点：
