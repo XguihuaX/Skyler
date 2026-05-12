@@ -327,6 +327,64 @@ async def _regenerate_profile_data(
 
 
 # ---------------------------------------------------------------------------
+# Prompt formatter (structured profile → natural language for system prompt)
+# ---------------------------------------------------------------------------
+
+
+def format_profile_for_prompt(profile_data: Optional[dict]) -> str:
+    """机械模板化：``profile_data`` dict → 自然语言段。**不调 LLM**。
+
+    输出形如：
+
+        已知用户：
+        - 职业：程序员
+        - 当前项目：Skyler v3.5
+        - 沟通风格：直接、紧凑
+        - 长期兴趣：LLM 工程, 音乐
+        - 语言偏好：中文
+        - 活跃时段：深夜
+        - 反复出现的话题：调 bug, Live2D
+
+    空字段（``None`` / ``[]``）自动跳过 —— 不打印 ``- 职业：`` 行。
+
+    传入 ``None`` 或全空 dict → 返回空字符串（caller 决定是否注入 system
+    prompt）。
+    """
+    if not profile_data or not isinstance(profile_data, dict):
+        return ""
+
+    lines: list[str] = []
+    label_map = [
+        ("profession",           "职业"),
+        ("current_projects",     "当前项目"),
+        ("communication_style",  "沟通风格"),
+        ("interests",            "长期兴趣"),
+        ("language_preferences", "语言偏好"),
+        ("active_hours",         "活跃时段"),
+        ("recurring_topics",     "反复出现的话题"),
+    ]
+    for key, label in label_map:
+        value = profile_data.get(key)
+        if value is None:
+            continue
+        if isinstance(value, list):
+            cleaned = [v for v in value if isinstance(v, str) and v.strip()]
+            if not cleaned:
+                continue
+            lines.append(f"- {label}：{', '.join(cleaned)}")
+        elif isinstance(value, str):
+            v = value.strip()
+            if not v:
+                continue
+            lines.append(f"- {label}：{v}")
+        # 其他类型跳过（validator 应已 reject，但 defensive）
+
+    if not lines:
+        return ""
+    return "已知用户：\n" + "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Cron entry: profile_daily_regenerate
 # ---------------------------------------------------------------------------
 
@@ -375,6 +433,7 @@ __all__ = [
     "count_user_messages_within_days",
     "empty_profile",
     "fetch_recent_user_messages",
+    "format_profile_for_prompt",
     "get_profile_cron_expr",
     "get_profile_data",
     "get_profile_input_days",

@@ -1031,12 +1031,26 @@ async def _build_messages(
     _profile_enabled   = get_profile_enabled()
     _long_term_enabled = get_long_term_enabled()
 
-    # ---- 2. User profile summary (config-gated) ----
+    # ---- 2. User profile (config-gated) ----
+    # v3.5 chunk 11：结构化 ``users.profile_data``（JSON）取代 chunk 9 自然
+    # 语言 ``profile_summary``。优先级：
+    #   - ``profile_data`` 有内容 → ``format_profile_for_prompt`` 模板化注入
+    #   - ``profile_data`` NULL / 空 → fallback 到 legacy ``profile_summary``
+    # 完整迁移后（README Known Problems 标 backlog）才真删 legacy 字段。
     if _profile_enabled:
-        async with AsyncSessionLocal() as session:
-            summary = await get_profile_summary(session, user_id)
-        if summary:
-            system_parts.append("【用户画像】\n" + summary)
+        from backend.services.profile_regen import (
+            format_profile_for_prompt,
+            get_profile_data,
+        )
+        profile_data = await get_profile_data(user_id)
+        formatted = format_profile_for_prompt(profile_data)
+        if formatted:
+            system_parts.append(formatted)
+        else:
+            async with AsyncSessionLocal() as session:
+                summary = await get_profile_summary(session, user_id)
+            if summary:
+                system_parts.append("【用户画像】\n" + summary)
 
     # ---- 3. Long-term memory Top-5 (config-gated) ----
     # v3.5 chunk 9 Part 3：去 character_id 隔离 —— memory 改为 user 级共享，
