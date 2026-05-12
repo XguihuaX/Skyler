@@ -25,6 +25,23 @@ const LS_MUTE_SPEAKING    = 'momoos.muteWhileSpeaking';
 // mount 时立即 onFinished()，主视图无感。
 const LS_SPLASH_ENABLED   = 'momoos.splashEnabled';
 
+/**
+ * hotfix-7: 把任何 reject 类型(Error / string / unknown)归一成可读 msg,
+ * 不让 toast 显示 "undefined"。setConfigField 本身已 normalize 一次,本函数
+ * 是双保险给 catch 路径用。
+ */
+function extractErrorMessage(e: unknown): string {
+  if (typeof e === 'string') return e || '未知错误';
+  if (e instanceof Error) return e.message || '未知错误';
+  if (e && typeof e === 'object') {
+    try {
+      const j = JSON.stringify(e);
+      return j === '{}' ? '未知错误' : j;
+    } catch { /* ignore */ }
+  }
+  return String(e ?? '未知错误');
+}
+
 interface ToggleProps {
   label: string;
   value: boolean;
@@ -279,10 +296,12 @@ function ProactiveSection({ showToast }: ProactiveSectionProps) {
 
   const writeField = useCallback(
     (keyPath: string, value: unknown, label: string, rollback: () => void) => {
-      setConfigField(keyPath, value).catch((e) => {
+      setConfigField(keyPath, value).catch((e: unknown) => {
         console.error(`[Proactive] ${keyPath} sync failed:`, e);
         rollback();
-        showToast(`${label} 写入失败：${(e as Error).message}`);
+        // hotfix-7: extractErrorMessage 兜底,不让 Tauri Rust Err(string)
+        // shape 让 toast 显示 "undefined"
+        showToast(`${label} 写入失败：${extractErrorMessage(e)}`);
       });
     },
     [showToast],
@@ -1404,10 +1423,13 @@ export default function SettingsPanel() {
     };
     const setter = setterMap[field];
     setter(next);
-    setConfigField(keyPath, next).catch((e) => {
+    setConfigField(keyPath, next).catch((e: unknown) => {
       console.error(`[SettingsPanel] ${keyPath} sync failed:`, e);
       setter(!next);
-      showToast(`${label} 写入失败：${(e as Error).message}`);
+      // hotfix-7：``setConfigField`` 已统一抛 Error,本地再加一道 normalize
+      // 兜底,确保任何 reject shape 都不让 toast 显示 "undefined"。
+      const msg = extractErrorMessage(e);
+      showToast(`${label} 写入失败：${msg}`);
     });
   };
 
