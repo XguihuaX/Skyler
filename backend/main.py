@@ -83,6 +83,7 @@ from backend.database.migrations.v3_5_chunk10_memory_structured import (
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
+from backend.routes.activity_api import router as activity_router
 from backend.routes.backgrounds_api import router as backgrounds_router
 from backend.routes.briefing_api import router as briefing_router
 from backend.routes.character_state_api import router as character_state_router
@@ -374,6 +375,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.exception("[clipboard] polling task spawn failed")
 
+    # ── 6c'. v3.5 chunk 8a — ActivityWatcher + smart trigger ────────────────
+    # activity_watcher.enabled=false → 完全不启动（log 静默）。enabled=true →
+    # 把 smart_handler 注册成 listener + start polling。listener / run_loop
+    # 内部异常都吞 + log 不阻塞主对话。
+    try:
+        from backend.integrations.activity_watcher import activity_watcher
+        from backend.proactive.activity_smart import activity_smart_handler
+        activity_watcher.register_change_listener(activity_smart_handler)
+        activity_watcher.start_polling()
+    except Exception:
+        logger.exception("[activity] watcher startup failed")
+
     # ── 6d. v3-G chunk 4 Part C — v3-F' trigger pack registration ──────────
     # 4 个新 trigger 各自按 config.proactive.triggers.{name}.enabled 决定。
     # default 全 False（除 lunch_call / dinner_call 默认 True，餐点最低敏感）；
@@ -580,6 +593,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.warning("[extractor] stop failed: %s", exc)
 
+    # v3.5 chunk 8a：优雅停 ActivityWatcher（如启动过）
+    try:
+        from backend.integrations.activity_watcher import activity_watcher
+        await activity_watcher.stop_polling()
+    except Exception as exc:
+        logger.warning("[activity] stop_polling failed: %s", exc)
+
     await cron_scheduler.shutdown()
     await scheduler.stop()
 
@@ -617,6 +637,7 @@ app.include_router(integrations_router,  prefix="/api", tags=["integrations"])
 app.include_router(webhooks_router,      prefix="/api", tags=["webhooks"])
 app.include_router(briefing_router,      prefix="/api", tags=["briefing"])
 app.include_router(character_state_router, prefix="/api", tags=["character_state"])
+app.include_router(activity_router,      prefix="/api", tags=["activity"])
 app.include_router(mcp_router,           prefix="/api", tags=["mcp"])
 app.include_router(ws_router,                            tags=["websocket"])
 
