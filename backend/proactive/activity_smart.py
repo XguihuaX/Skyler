@@ -120,6 +120,22 @@ _IDE_APPS = {
     "vim",
     "emacs",
     "macvim",
+    # hotfix-8: macOS 自家 Terminal.app + 第三方终端
+    # **中文 macOS i18n**: Apple 原生 app(Terminal.app)的 bundle 含 zh-Hans
+    # lproj + localized CFBundleDisplayName='终端',NSWorkspace.frontmost
+    # Application.localizedName 在中文 macOS 上返 ``"终端"`` 而非 ``"Terminal"``。
+    # audit 真机验证: ``am.get_active_app()`` 返 ``'终端'``。
+    # 第三方终端(iTerm2 / Alacritty / WezTerm / Warp / Kitty / Hyper)bundle
+    # 无 zh lproj,在中文 macOS 仍返英文名。
+    "terminal",
+    "终端",          # ⭐ 中文 macOS Apple Terminal.app localizedName
+    "iterm",
+    "iterm2",
+    "alacritty",
+    "wezterm",
+    "warp",
+    "kitty",
+    "hyper",
 }
 
 # 已知音乐 / 媒体 app
