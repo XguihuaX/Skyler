@@ -120,6 +120,12 @@ async def list_memories(
             "content": m.content,
             "expires_at": _fmt_dt(m.expires_at),
             "created_at": _fmt_dt(m.created_at),
+            # v3.5 chunk 10：新字段（commit 1 加列）
+            "entry_type": m.entry_type,
+            "extraction_source": m.extraction_source or "legacy",
+            "confidence": m.confidence,
+            "extracted_at": _fmt_dt(m.extracted_at),
+            "source_turn_id": m.source_turn_id,
         }
         for m in rows
     ]

@@ -4,17 +4,30 @@ import { fetchCharacters, type CharacterRow } from '../lib/config';
 
 const BACKEND_BASE = 'http://127.0.0.1:8000';
 
-type MemoryType = 'fact' | 'instruction' | 'emotion' | 'activity' | 'daily';
-type FilterValue = 'all' | MemoryType;
+// v3.5 chunk 10：UI tab 切到 entry_type 4 分类（chunk 10 schema）。
+// 老 type 列（fact/instruction/emotion/activity/daily）数据保留但不再做
+// tab 主切换 —— legacy entries 在 chunk 10 schema 下 entry_type 为 NULL，
+// UI 仍显示在 '全部' tab。
+type EntryType = 'fact' | 'preference' | 'event' | 'commitment';
+type FilterValue = 'all' | EntryType;
 
 const TYPE_OPTIONS: { value: FilterValue; label: string }[] = [
-  { value: 'all',         label: '全部' },
-  { value: 'fact',        label: '事实 (fact)' },
-  { value: 'instruction', label: '偏好 (instruction)' },
-  { value: 'emotion',     label: '情绪 (emotion)' },
-  { value: 'activity',    label: '活动 (activity)' },
-  { value: 'daily',       label: '日常 (daily)' },
+  { value: 'all',        label: '全部' },
+  { value: 'fact',       label: '事实' },
+  { value: 'preference', label: '偏好' },
+  { value: 'event',      label: '事件' },
+  { value: 'commitment', label: '承诺' },
 ];
+
+// chunk 10 extraction_source → 标签文案
+type ExtractionSource = 'worker' | 'llm_save_memory' | 'manual' | 'legacy';
+
+const SOURCE_LABEL: Record<ExtractionSource, string> = {
+  worker:          '自动提取',
+  llm_save_memory: '你说要记',
+  manual:          '手动',
+  legacy:          '旧',
+};
 
 interface MemoryRow {
   id: number;
@@ -23,6 +36,12 @@ interface MemoryRow {
   created_at: string | null;
   // v3.5 chunk 9 Part 3：来源 character_id（drawer 用角标显示）。
   character_id: number | null;
+  // v3.5 chunk 10：新字段
+  entry_type: EntryType | null;
+  extraction_source: string;  // 'worker' | 'llm_save_memory' | 'manual' | 'legacy'
+  confidence: number | null;
+  extracted_at: string | null;
+  source_turn_id: number | null;
 }
 
 interface ConfirmModalProps {
@@ -178,7 +197,10 @@ export default function MemoryManagerDrawer({
   const filtered = useMemo(() => {
     if (!memories) return [];
     if (filter === 'all') return memories;
-    return memories.filter((m) => m.type === filter);
+    // v3.5 chunk 10：按 entry_type 过滤（chunk 10 worker / save_memory 写入
+    // 的 entry 才有 entry_type；legacy entries 该字段 NULL，仅在 '全部'
+    // tab 显示）。
+    return memories.filter((m) => m.entry_type === filter);
   }, [memories, filter]);
 
   const deleteOne = async (id: number) => {
@@ -330,19 +352,18 @@ export default function MemoryManagerDrawer({
                     >
                       {m.content}
                     </p>
-                    <div className="flex items-center gap-2 mt-1.5">
+                    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                      {/* entry_type 标签优先；legacy entries 显示老 type */}
                       <span
-                        className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded"
+                        className="text-[10px] tracking-wide px-1.5 py-0.5 rounded"
                         style={{
                           background: 'var(--color-bg-elevated)',
                           color: 'var(--color-text-secondary)',
                         }}
                       >
-                        {m.type}
+                        {m.entry_type ?? m.type}
                       </span>
-                      {/* v3.5 chunk 9 Part 3：来源 character 角标。character_id
-                          NULL（legacy 行 / 系统记的）显示 "—"；查得到 name 显
-                          示 "由 <name> 记"；查不到 ID 显示 "由 #<id> 记"。 */}
+                      {/* v3.5 chunk 9 Part 3：来源 character 角标 */}
                       <span
                         className="text-[10px] px-1.5 py-0.5 rounded"
                         style={{
@@ -360,6 +381,35 @@ export default function MemoryManagerDrawer({
                           ? '系统'
                           : `由 ${charMap[m.character_id] ?? `#${m.character_id}`} 记`}
                       </span>
+                      {/* v3.5 chunk 10：extraction_source 角标。worker /
+                          llm_save_memory / manual / legacy 四档 */}
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded"
+                        style={{
+                          background: 'var(--color-bg-elevated)',
+                          color: 'var(--color-text-secondary)',
+                          border: '1px solid var(--color-border-subtle)',
+                        }}
+                        title={`extraction_source=${m.extraction_source}`}
+                      >
+                        {SOURCE_LABEL[
+                          (m.extraction_source as ExtractionSource)
+                        ] ?? m.extraction_source}
+                      </span>
+                      {/* v3.5 chunk 10：confidence 显示（NULL 不显示） */}
+                      {m.confidence != null && (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded"
+                          style={{
+                            background: 'var(--color-bg-elevated)',
+                            color: 'var(--color-text-secondary)',
+                            border: '1px solid var(--color-border-subtle)',
+                          }}
+                          title={`confidence=${m.confidence.toFixed(2)}`}
+                        >
+                          {`confidence:${m.confidence.toFixed(2)}`}
+                        </span>
+                      )}
                       <span
                         className="text-xs"
                         style={{ color: 'var(--color-text-secondary)' }}
