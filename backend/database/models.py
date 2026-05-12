@@ -19,7 +19,11 @@ class User(Base):
 
     user_id = Column(String, primary_key=True)
     user_name = Column(String, nullable=False)
-    profile_summary = Column(Text, nullable=True)   # free-text profile, merged by LLM
+    profile_summary = Column(Text, nullable=True)   # legacy chunk 9 free-text profile; retained for fallback
+    # v3.5 chunk 11：结构化 profile（JSON 字符串），schema 见
+    # backend/utils/profile_schema.py PROFILE_SCHEMA_V1。``profile_data``
+    # 优先于 ``profile_summary`` 注入 system prompt；NULL 时 fallback。
+    profile_data = Column(Text, nullable=True)
     nickname = Column(Text, nullable=True)
     language = Column(Text, nullable=True, default="zh-CN")
     created_at = Column(DateTime, server_default=func.now())
