@@ -1,45 +1,57 @@
 /**
- * v3.5 chunk 9 Part 2 — SettingsPanel [用户画像] section。
+ * v3.5 chunk 11 — SettingsPanel [用户档案] section（取代 chunk 9 [用户画像]）。
  *
- * 显示 ``users.profile_summary``，提供：
- *  - 只读卡片 + 字数（实际/可建议 500 字）
- *  - [手动编辑] modal：textarea 可编辑，保存调 PATCH
- *  - [清空] 二次确认 → DELETE
- *  - [立刻重新生成] loading → 同步 POST /regenerate 返回新内容
+ * 结构化 ``users.profile_data`` JSON 字段级展示 + inline edit + 增删 list 项。
+ * 后端 endpoints 见 ``backend/routes/users_api.py`` chunk 11 段。
  *
- * 后端 endpoints 见 backend/routes/users_api.py。
- * profile_summary 为 NULL 时显示"尚未生成画像（对话满 50 轮后自动生成）"，
- * [立刻重新生成] 仍可点（min_user_rows=1 在 endpoint 路径，少量对话也能预览）。
+ * UI 风格对齐 chunk 5 ExtensionsSection / chunk 7 sections（顶部 Section
+ * 标题 + rounded panel）。
+ *
+ * profile_data 为 NULL 时显示"尚未生成档案" + [立刻生成] 按钮（mode=
+ * incremental，少量对话也能预览）。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { RefreshCw, Edit3, Trash2 } from 'lucide-react';
+import { RefreshCw, Trash2, Plus, Pencil, Check, X } from 'lucide-react';
 import {
-  fetchUserProfile,
-  patchProfileSummary,
-  deleteProfileSummary,
-  regenerateProfileSummary,
-  type UserProfile,
-} from '../lib/profile';
+  fetchProfileData,
+  patchProfileData,
+  deleteProfileData,
+  regenerateProfileData,
+  type ProfileData,
+  type ProfileDataRegenerateMode,
+} from '../lib/profileData';
 
 interface Props {
   userId: string;
   showToast: (text: string) => void;
 }
 
+const STRING_FIELDS: { key: keyof ProfileData; label: string }[] = [
+  { key: 'profession',           label: '职业' },
+  { key: 'communication_style',  label: '沟通风格' },
+  { key: 'language_preferences', label: '语言偏好' },
+  { key: 'active_hours',         label: '活跃时段' },
+];
+const LIST_FIELDS: { key: keyof ProfileData; label: string }[] = [
+  { key: 'current_projects',  label: '当前项目' },
+  { key: 'interests',         label: '长期兴趣' },
+  { key: 'recurring_topics',  label: '反复出现的话题' },
+];
+
+
 export default function UserProfileSection({ userId, showToast }: Props) {
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profile, setProfile] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
-  const [regenerating, setRegenerating] = useState(false);
+  const [regenMode, setRegenMode] = useState<ProfileDataRegenerateMode | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const p = await fetchUserProfile(userId);
-      setProfile(p);
+      const r = await fetchProfileData(userId);
+      setProfile(r.profile_data);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -47,38 +59,40 @@ export default function UserProfileSection({ userId, showToast }: Props) {
     }
   }, [userId]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  useEffect(() => { void refresh(); }, [refresh]);
 
-  const summary = profile?.profile_summary ?? null;
-  const charCount = summary?.length ?? 0;
-
-  const onRegenerate = async () => {
-    setRegenerating(true);
+  const onPatchString = async (key: keyof ProfileData, value: string | null) => {
     try {
-      const r = await regenerateProfileSummary(userId);
+      const r = await patchProfileData(userId, { [key]: value } as Partial<ProfileData>);
+      setProfile(r.profile_data);
+    } catch (e) {
+      showToast(`保存失败：${(e as Error).message}`);
+    }
+  };
+
+  const onPatchList = async (key: keyof ProfileData, value: string[]) => {
+    try {
+      const r = await patchProfileData(userId, { [key]: value } as Partial<ProfileData>);
+      setProfile(r.profile_data);
+    } catch (e) {
+      showToast(`保存失败：${(e as Error).message}`);
+    }
+  };
+
+  const onRegen = async (mode: ProfileDataRegenerateMode) => {
+    setRegenMode(mode);
+    try {
+      const r = await regenerateProfileData(userId, mode);
       if (r.status === 'regenerated') {
-        showToast(`画像已重新生成（${(r.profile_summary || '').length} 字）`);
+        showToast(mode === 'reset' ? '档案已完全重置' : '档案已增量更新');
       } else {
         showToast(r.detail || `跳过：${r.status}`);
       }
       await refresh();
     } catch (e) {
-      showToast(`重新生成失败：${(e as Error).message}`);
+      showToast(`重生失败：${(e as Error).message}`);
     } finally {
-      setRegenerating(false);
-    }
-  };
-
-  const onConfirmClear = async () => {
-    setConfirmClear(false);
-    try {
-      await deleteProfileSummary(userId);
-      showToast('画像已清空');
-      await refresh();
-    } catch (e) {
-      showToast(`清空失败：${(e as Error).message}`);
+      setRegenMode(null);
     }
   };
 
@@ -89,20 +103,20 @@ export default function UserProfileSection({ userId, showToast }: Props) {
           className="text-sm font-semibold mb-2"
           style={{ color: 'var(--color-text-primary)' }}
         >
-          用户画像
+          用户档案
         </h3>
         <div
-          className="rounded-md px-3 py-2"
+          className="rounded-md px-3 py-2 space-y-2"
           style={{
             background: 'var(--color-bg-surface)',
             border: '1px solid var(--color-border)',
           }}
         >
           <p
-            className="text-[11px] mb-2"
+            className="text-[11px]"
             style={{ color: 'var(--color-text-secondary)' }}
           >
-            Momo 对你的整体感觉（每 50 轮对话自动更新；用户消息为输入源）
+            Momo 根据你过去 7 天说过的话整理（每天 23:55 自动更新；只填客观事实）
           </p>
 
           {loading && !profile && (
@@ -110,118 +124,111 @@ export default function UserProfileSection({ userId, showToast }: Props) {
               加载中…
             </div>
           )}
-          {error && (
-            <div className="text-xs py-2 text-rose-300">
-              加载失败：{error}
-            </div>
-          )}
+          {error && <div className="text-xs py-2 text-rose-300">加载失败：{error}</div>}
 
-          {!loading && !error && (
+          {profile === null && !loading && !error && (
             <div
-              className="text-xs rounded p-2 max-h-40 overflow-y-auto whitespace-pre-wrap"
+              className="text-xs rounded p-2"
               style={{
                 background: 'var(--color-bg-elevated)',
-                color: summary
-                  ? 'var(--color-text-primary)'
-                  : 'var(--color-text-secondary)',
+                color: 'var(--color-text-secondary)',
                 border: '1px solid var(--color-border-subtle)',
               }}
             >
-              {summary || '尚未生成画像（对话满 50 轮后自动生成；可点[立刻重新生成]立即预览）'}
+              尚未生成档案（cron 每天 23:55 自动跑；可点[立刻生成]立即预览）
+            </div>
+          )}
+
+          {profile && (
+            <div className="space-y-1.5">
+              {STRING_FIELDS.map(({ key, label }) => (
+                <StringField
+                  key={key}
+                  label={label}
+                  value={(profile[key] as string | null) ?? null}
+                  onSave={(v) => void onPatchString(key, v)}
+                />
+              ))}
+              {LIST_FIELDS.map(({ key, label }) => (
+                <ListField
+                  key={key}
+                  label={label}
+                  values={(profile[key] as string[]) ?? []}
+                  onSave={(v) => void onPatchList(key, v)}
+                />
+              ))}
             </div>
           )}
 
           <div
-            className="text-[10px] mt-1 flex justify-between"
+            className="text-[10px] flex justify-end"
             style={{ color: 'var(--color-text-secondary)' }}
           >
-            <span>字数：{charCount} / 500</span>
             <button
               type="button"
               onClick={() => void refresh()}
               disabled={loading}
-              className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
               style={{ color: 'var(--color-text-secondary)' }}
-              title="重新拉取当前 profile"
+              title="重新拉取当前档案"
             >
               <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
               刷新
             </button>
           </div>
 
-          <div className="flex gap-2 mt-2">
+          <div className="flex gap-2 pt-1">
             <button
               type="button"
-              onClick={() => setEditing(true)}
-              disabled={loading}
+              onClick={() => void onRegen('incremental')}
+              disabled={loading || regenMode !== null}
               className="text-[11px] inline-flex items-center gap-1 px-2 py-1 rounded hover:opacity-80 disabled:opacity-50"
               style={{
                 background: 'var(--color-bg-elevated)',
                 color: 'var(--color-text-primary)',
                 border: '1px solid var(--color-border)',
               }}
-            >
-              <Edit3 size={11} />
-              手动编辑
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirmClear(true)}
-              disabled={loading || !summary}
-              className="text-[11px] inline-flex items-center gap-1 px-2 py-1 rounded hover:opacity-80 disabled:opacity-50"
-              style={{
-                background: 'var(--color-bg-elevated)',
-                color: 'var(--color-text-primary)',
-                border: '1px solid var(--color-border)',
-              }}
-            >
-              <Trash2 size={11} />
-              清空
-            </button>
-            <button
-              type="button"
-              onClick={() => void onRegenerate()}
-              disabled={loading || regenerating}
-              className="text-[11px] inline-flex items-center gap-1 px-2 py-1 rounded hover:opacity-80 disabled:opacity-50"
-              style={{
-                background: 'var(--color-bg-elevated)',
-                color: 'var(--color-text-primary)',
-                border: '1px solid var(--color-border)',
-              }}
-              title="同步触发 LLM 基于最新对话重算"
+              title="保留旧字段 + 合并近期数据"
             >
               <RefreshCw
                 size={11}
-                className={regenerating ? 'animate-spin' : ''}
+                className={regenMode === 'incremental' ? 'animate-spin' : ''}
               />
-              {regenerating ? '生成中…' : '立刻重新生成'}
+              {regenMode === 'incremental'
+                ? '生成中…'
+                : profile === null
+                  ? '立刻生成'
+                  : '增量更新'}
             </button>
+            {profile !== null && (
+              <button
+                type="button"
+                onClick={() => setConfirmReset(true)}
+                disabled={loading || regenMode !== null}
+                className="text-[11px] inline-flex items-center gap-1 px-2 py-1 rounded hover:opacity-80 disabled:opacity-50"
+                style={{
+                  background: 'var(--color-bg-elevated)',
+                  color: 'var(--color-text-primary)',
+                  border: '1px solid var(--color-border)',
+                }}
+                title="丢弃旧档案，从最近 7 天 user 消息完全重写"
+              >
+                <Trash2 size={11} />
+                {regenMode === 'reset' ? '生成中…' : '完全重置'}
+              </button>
+            )}
           </div>
         </div>
       </section>
 
-      {editing && (
-        <EditModal
-          initial={summary || ''}
-          onClose={() => setEditing(false)}
-          onSave={async (text) => {
-            try {
-              await patchProfileSummary(userId, text);
-              showToast('画像已保存');
-              setEditing(false);
-              await refresh();
-            } catch (e) {
-              showToast(`保存失败：${(e as Error).message}`);
-            }
-          }}
-        />
-      )}
-
-      {confirmClear && (
+      {confirmReset && (
         <ConfirmModal
-          text={'确认清空当前画像？\n下次自动重写时会基于最新对话从零生成。'}
-          onCancel={() => setConfirmClear(false)}
-          onConfirm={() => void onConfirmClear()}
+          text={'完全重置当前档案？\n\n旧档案将丢弃，从过去 7 天用户消息重新生成。'}
+          onCancel={() => setConfirmReset(false)}
+          onConfirm={() => {
+            setConfirmReset(false);
+            void onRegen('reset');
+          }}
         />
       )}
     </>
@@ -230,93 +237,208 @@ export default function UserProfileSection({ userId, showToast }: Props) {
 
 
 // ---------------------------------------------------------------------------
-// Edit modal
+// String field (inline edit)
 // ---------------------------------------------------------------------------
 
 
-function EditModal({
-  initial,
-  onClose,
+function StringField({
+  label,
+  value,
   onSave,
 }: {
-  initial: string;
-  onClose: () => void;
-  onSave: (text: string) => Promise<void>;
+  label: string;
+  value: string | null;
+  onSave: (v: string | null) => void;
 }) {
-  const [text, setText] = useState(initial);
-  const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? '');
+
+  useEffect(() => {
+    if (!editing) setDraft(value ?? '');
+  }, [value, editing]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: 'color-mix(in srgb, var(--color-bg-base) 60%, transparent)' }}
-      onClick={onClose}
-    >
-      <div
-        className="rounded-lg p-5 w-[480px] shadow-2xl"
-        style={{
-          background: 'var(--color-bg-surface)',
-          border: '1px solid var(--color-border)',
-        }}
-        onClick={(e) => e.stopPropagation()}
+    <div className="flex items-center gap-2 text-xs">
+      <span
+        className="shrink-0 w-20 text-right"
+        style={{ color: 'var(--color-text-secondary)' }}
       >
-        <h4
-          className="text-sm font-semibold mb-3"
-          style={{ color: 'var(--color-text-primary)' }}
-        >
-          手动编辑用户画像
-        </h4>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={10}
-          className="w-full text-xs rounded p-2 resize-none"
-          style={{
-            background: 'var(--color-bg-elevated)',
-            color: 'var(--color-text-primary)',
-            border: '1px solid var(--color-border)',
-            outline: 'none',
-          }}
-          placeholder="输入对该用户的描述..."
-        />
-        <div
-          className="text-[10px] mt-1"
-          style={{ color: 'var(--color-text-secondary)' }}
-        >
-          字数：{text.length} / 500
-        </div>
-        <div className="flex justify-end gap-2 mt-3">
+        {label}
+      </span>
+      {editing ? (
+        <>
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            className="flex-1 rounded px-1.5 py-0.5 text-xs"
+            style={{
+              background: 'var(--color-bg-input)',
+              color: 'var(--color-text-primary)',
+              border: '1px solid var(--color-border)',
+            }}
+            autoFocus
+          />
           <button
             type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 text-xs rounded-md"
+            onClick={() => {
+              onSave(draft.trim() || null);
+              setEditing(false);
+            }}
+            className="text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded hover:opacity-80"
+            style={{ color: 'var(--color-text-secondary)' }}
+            title="保存"
+          >
+            <Check size={11} />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(value ?? '');
+              setEditing(false);
+            }}
+            className="text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded hover:opacity-80"
+            style={{ color: 'var(--color-text-secondary)' }}
+            title="取消"
+          >
+            <X size={11} />
+          </button>
+        </>
+      ) : (
+        <>
+          <span
+            className="flex-1 truncate"
+            style={{
+              color: value
+                ? 'var(--color-text-primary)'
+                : 'var(--color-text-secondary)',
+            }}
+            title={value ?? ''}
+          >
+            {value ?? '（未填）'}
+          </span>
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded hover:opacity-80"
+            style={{ color: 'var(--color-text-secondary)' }}
+            title="编辑"
+          >
+            <Pencil size={11} />
+            编辑
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// List field (item-level add/remove)
+// ---------------------------------------------------------------------------
+
+
+function ListField({
+  label,
+  values,
+  onSave,
+}: {
+  label: string;
+  values: string[];
+  onSave: (v: string[]) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [newItem, setNewItem] = useState('');
+
+  const removeAt = (idx: number) => {
+    onSave(values.filter((_, i) => i !== idx));
+  };
+
+  const addItem = () => {
+    const t = newItem.trim();
+    if (!t) {
+      setAdding(false);
+      return;
+    }
+    onSave([...values, t]);
+    setNewItem('');
+    setAdding(false);
+  };
+
+  return (
+    <div className="flex items-start gap-2 text-xs">
+      <span
+        className="shrink-0 w-20 text-right pt-0.5"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        {label}
+      </span>
+      <div className="flex-1 flex flex-wrap gap-1 items-center">
+        {values.length === 0 && !adding && (
+          <span style={{ color: 'var(--color-text-secondary)' }}>（空）</span>
+        )}
+        {values.map((v, idx) => (
+          <span
+            key={`${v}-${idx}`}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px]"
             style={{
               background: 'var(--color-bg-elevated)',
               color: 'var(--color-text-primary)',
+              border: '1px solid var(--color-border-subtle)',
             }}
           >
-            取消
-          </button>
+            {v}
+            <button
+              type="button"
+              onClick={() => removeAt(idx)}
+              className="opacity-60 hover:opacity-100"
+              title="删除"
+            >
+              <X size={10} />
+            </button>
+          </span>
+        ))}
+        {adding ? (
+          <span className="inline-flex items-center gap-1">
+            <input
+              value={newItem}
+              onChange={(e) => setNewItem(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') addItem();
+                if (e.key === 'Escape') {
+                  setAdding(false);
+                  setNewItem('');
+                }
+              }}
+              className="rounded px-1.5 py-0.5 text-xs w-32"
+              style={{
+                background: 'var(--color-bg-input)',
+                color: 'var(--color-text-primary)',
+                border: '1px solid var(--color-border)',
+              }}
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={addItem}
+              className="text-[10px] px-1 py-0.5 rounded hover:opacity-80"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
+              <Check size={11} />
+            </button>
+          </span>
+        ) : (
           <button
             type="button"
-            disabled={saving}
-            onClick={async () => {
-              setSaving(true);
-              try {
-                await onSave(text);
-              } finally {
-                setSaving(false);
-              }
-            }}
-            className="px-3 py-1.5 text-xs rounded-md disabled:opacity-50"
-            style={{
-              background: 'var(--color-accent)',
-              color: 'var(--color-bg-base)',
-            }}
+            onClick={() => setAdding(true)}
+            className="text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded hover:opacity-80"
+            style={{ color: 'var(--color-text-secondary)' }}
+            title="添加"
           >
-            {saving ? '保存中…' : '保存'}
+            <Plus size={11} />
+            添加
           </button>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -324,7 +446,7 @@ function EditModal({
 
 
 // ---------------------------------------------------------------------------
-// Confirm modal (与 MemoryManagerDrawer 同 spirit，但用 rose-600 危险色)
+// ConfirmModal (chunk 9 commit 5 pattern reuse)
 // ---------------------------------------------------------------------------
 
 
@@ -381,3 +503,8 @@ function ConfirmModal({
     </div>
   );
 }
+
+// chunk 9 deleteProfileSummary 调用点已移到 ``UserProfileLegacySection`` (未来
+// 删除时使用)。chunk 11 UI 不再暴露 [清空]——靠 [完全重置] 走 LLM 重写来达
+// 到"清空"语义，简化用户路径。
+void deleteProfileData;  // keep import for future use; silence lint
