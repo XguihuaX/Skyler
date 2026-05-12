@@ -31,6 +31,11 @@ export interface ActivityConfigResponse {
   blocked_url_patterns: string[];
   trigger_throttle_minutes: number;
   max_daily_triggers: number;
+  // chunk 8a-ext: 慢路径 judge 配置
+  judge_enabled: boolean;
+  judge_model: string;
+  judge_min_stay_minutes: number;
+  judge_throttle_minutes: number;
 }
 
 export interface ActivityConfigPatch {
@@ -38,6 +43,7 @@ export interface ActivityConfigPatch {
   blocked_apps?: string[];
   blocked_url_patterns?: string[];
   fetch_url_content?: boolean;
+  judge_enabled?: boolean;     // chunk 8a-ext 智能陪伴 toggle
 }
 
 export async function fetchActivityStatus(): Promise<ActivityStatusResponse> {

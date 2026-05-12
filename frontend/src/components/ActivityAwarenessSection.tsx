@@ -136,6 +136,21 @@ export default function ActivityAwarenessSection({
             />
           </Row>
 
+          {/* chunk 8a-ext: 智能陪伴 judge 二级 toggle */}
+          <Row
+            label={`智能陪伴 — qwen-turbo 判断(${cfg.judge_min_stay_minutes} 分钟停留触发)`}
+            hint={
+              cfg.judge_enabled
+                ? `每 app/URL 停 ${cfg.judge_min_stay_minutes} 分钟自动判断要不要 chime in，受 daily_cap (${cfg.max_daily_triggers}/天) 共享限制`
+                : '已关闭：只走 IDE/音乐/技术文档等硬编码 trigger'
+            }
+          >
+            <Toggle
+              value={cfg.judge_enabled}
+              onChange={(v) => onPatch({ judge_enabled: v })}
+            />
+          </Row>
+
           {/* fetch_url_content */}
           <Row
             label="后台抓取公开页面正文"

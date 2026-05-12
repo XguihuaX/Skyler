@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.integrations import activity_watcher as aw
+from backend.proactive import activity_judge as judge
 from backend.proactive import activity_smart as smart
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,11 @@ class ActivityConfigResponse(BaseModel):
     blocked_url_patterns: list[str]
     trigger_throttle_minutes: int
     max_daily_triggers: int
+    # chunk 8a-ext 慢路径 judge 字段
+    judge_enabled: bool
+    judge_model: str
+    judge_min_stay_minutes: int
+    judge_throttle_minutes: int
 
 
 @router.get("/activity/config", response_model=ActivityConfigResponse)
@@ -84,6 +90,10 @@ async def activity_config() -> ActivityConfigResponse:
         blocked_url_patterns=aw.get_blocked_url_patterns(),
         trigger_throttle_minutes=smart.get_throttle_minutes(),
         max_daily_triggers=smart.get_max_daily_triggers(),
+        judge_enabled=judge.get_judge_enabled(),
+        judge_model=judge.get_judge_model(),
+        judge_min_stay_minutes=judge.get_min_stay_minutes(),
+        judge_throttle_minutes=judge.get_judge_throttle_minutes(),
     )
 
 
@@ -97,6 +107,8 @@ class ActivityConfigPatch(BaseModel):
     blocked_apps: Optional[list[str]] = None
     blocked_url_patterns: Optional[list[str]] = None
     fetch_url_content: Optional[bool] = None
+    # chunk 8a-ext: 智能陪伴 judge 总开关(默认 ON,关掉后慢路径完全静默)
+    judge_enabled: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -144,5 +156,11 @@ async def patch_activity_config(body: ActivityConfigPatch) -> ActivityConfigResp
 
     if body.fetch_url_content is not None:
         cfg["fetch_url_content"] = bool(body.fetch_url_content)
+
+    if body.judge_enabled is not None:
+        # chunk 8a-ext: 慢路径 judge 总开关。配置走独立 ``activity_judge`` 块,
+        # 不在 ``activity_watcher`` block 内,与 ActivityJudge config 读取一致。
+        from backend.config import config_yaml as _cfg
+        _cfg.setdefault("activity_judge", {})["enabled"] = bool(body.judge_enabled)
 
     return await activity_config()

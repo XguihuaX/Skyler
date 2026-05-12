@@ -230,3 +230,20 @@ activity_watcher:
   trigger_throttle_minutes: 30   # 同类型 activity trigger 间隔
   max_daily_triggers: 5          # 一天最多触发 activity trigger 数（0 = 无上限）
 
+
+# v3.5 chunk 8a-ext — 智能陪伴 judge 慢路径
+# 在快路径(IDE/音乐/技术文档等硬编码 trigger)没命中时,用 qwen-turbo
+# 判断"用户在当前 app/URL 停 5+ min 时是否值得主动说话"。yes → fire 走
+# 现有 proactive engine + ChatAgent 主对话。共享 activity_watcher 的
+# daily_cap (max_daily_triggers)。
+#
+# 三重门防滥用:
+#   * min_stay_minutes  停留 < N 分钟 → 不 judge(默 5)
+#   * throttle_minutes  同 stay_key 节流(默 10)
+#   * fire_throttle     同 label 30 min(由 activity_watcher.trigger_throttle_minutes 共享)
+activity_judge:
+  enabled: true          # 默认 ON。用户明确要陪伴感,SettingsPanel 二级 toggle 可关
+  model: qwen-turbo      # 便宜模型,与 chunk 10/11 同源
+  min_stay_minutes: 5
+  throttle_minutes: 10
+  prompt_max_chars: 2000 # 喂 judge 的 URL 正文摘要上限
