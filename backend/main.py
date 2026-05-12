@@ -334,6 +334,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "[cron] profile_daily_regenerate registration failed"
         )
 
+    # ── 6b''. v3.5 chunk 10 — MemoryExtractor worker ─────────────────────
+    # 每 N 分钟扫 chat_history 提取 memory entries。worker 用
+    # asyncio.create_task fire-and-forget；shutdown 阶段 stop()。
+    # config.memory.extractor.enabled=false 时不启动（log 静默）。
+    try:
+        from backend.memory.extractor import (
+            get_extractor,
+            get_extractor_enabled,
+            get_extractor_interval_seconds,
+        )
+        if get_extractor_enabled():
+            ex = get_extractor()
+            ex._task = asyncio.create_task(ex.run_loop())
+            app_state["extractor_worker"] = ex
+            logger.info(
+                "[extractor] started interval=%ds",
+                get_extractor_interval_seconds(),
+            )
+        else:
+            logger.info("[extractor] disabled by config (memory.extractor.enabled=false)")
+    except Exception:
+        logger.exception("[extractor] worker startup failed")
+
     # ── 6c. v3-G chunk 3a — clipboard polling task ─────────────────────────
     try:
         from backend.integrations.clipboard import clipboard_watcher
@@ -537,6 +560,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await shutdown_player()
     except Exception as exc:
         logger.warning("[mpv] shutdown_player failed: %s", exc)
+
+    # v3.5 chunk 10：优雅停 MemoryExtractor worker（如启动过）
+    try:
+        ex = app_state.get("extractor_worker")
+        if ex is not None:
+            await ex.stop()
+            logger.info("[extractor] worker stopped")
+    except Exception as exc:
+        logger.warning("[extractor] stop failed: %s", exc)
 
     await cron_scheduler.shutdown()
     await scheduler.stop()

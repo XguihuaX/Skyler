@@ -49,6 +49,20 @@ memory:
     cron: "55 23 * * *"
     input_days: 7
     min_user_messages: 10
+  # v3.5 chunk 10：server-side memory extractor worker
+  #   enabled=false       → worker 不启动；save_memory tool 显式入口仍可用
+  #   interval_seconds    两次 batch 间隔；默认 300（5 分钟）
+  #   batch_size          单批次最多扫多少条新 turn；默认 50
+  #   min_confidence      LLM 自评 < N → reject；默认 0.5
+  #   dup_threshold       cosine 相似度 > N → 视同重复 reject；默认 0.9
+  #   llm_judge_enabled   第 5 道 filter "对未来对话有用吗"；默认 false
+  extractor:
+    enabled: true
+    interval_seconds: 300
+    batch_size: 50
+    min_confidence: 0.5
+    dup_threshold: 0.9
+    llm_judge_enabled: false
 search:
   enable_search: true
 cache:
