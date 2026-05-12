@@ -35,7 +35,8 @@
 | **v3.5 chunk 6b：网易云 mpv 自解码（6 个 local_* capability）** | ✅ 完成（5 commit，2026-05-11） | 100% |
 | **v3.5 chunk 6c：小红书 URL 被动解析（红线锁死）** | ✅ 完成（5 commit，2026-05-11） | 100% |
 | **v3.5 chunk 7：Skill 集成 demo（docx capability + Notion MCP）** | ✅ 完成（5 commit，2026-05-11） | 100% |
-| **v3.5 chunk 8：v4 屏幕感知（VLM 抽象 + Tauri 截图 + 像素差 + 黑名单）** | 📋 计划中 | 0% |
+| **v3.5 chunk 8a：简化屏幕感知（active app + browser URL + smart trigger）** | ✅ 完成（9 commit，2026-05-12） | 100% |
+| **v3.5 chunk 8b：完整屏幕感知（截屏 + OCR + VLM 抽象 + 浏览器扩展）** | 📋 计划中 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |
 
 ---
@@ -1279,16 +1280,105 @@ entry_type=event src=worker conf=0.9 source_turn=405
 
 ---
 
-### chunk 8 — v4 屏幕感知 📋
+### chunk 8a — 简化屏幕感知（active app + browser URL + smart trigger）✅ 完成 2026-05-12
 
-DESIGN §13 已有完整设计。要点：
+**主题**：v4 屏幕感知 "M-version" —— **不**截屏 / **不** OCR / **不**装浏览器
+扩展，只靠 NSWorkspace + AppleScript 拿 active app / 浏览器 tab URL / 文档
+路径，加 url_fetcher 抓公开页面正文，让 Momo 按"你在用什么"主动开口。
+
+#### 9 commit 全图
+
+| # | hash | subject |
+|---|------|---------|
+| 1 | `7af03f1` | feat(chunk8a): activity_monitor 系统状态查询 + 跨平台 graceful |
+| 2 | `2fe1f99` | feat(chunk8a): screen capabilities (active_app / browser_url / browser_content / active_document) |
+| 3 | `c25263e` | feat(chunk8a): url_fetcher 公开页面内容 + readability-lxml + 黑名单 |
+| 4 | `db5761f` | feat(chunk8a): ActivityWatcher 后台 polling + change detection + lifecycle |
+| 5 | `da3ac58` | feat(chunk8a): smart activity-based proactive trigger + 节流 + 黑名单 skip |
+| 6 | `b5fca86` | feat(chunk8a-frontend): SettingsPanel 活动感知 section + 状态显示 + 黑名单管理 |
+| 7 | `3fe2183` | feat(chunk8a): macOS 权限处理 + Tauri Info.plist + 前端权限弹窗 |
+| 8 | `edb5142` | feat(chunk8a): API endpoints (/api/activity/status, /api/activity/config) + lifespan register |
+| 9 | `<this>` | docs(chunk8a): DESIGN §十五-L + ROADMAP + Known Problems + config.yaml + run-all tests |
+
+#### Pipeline
+
+```
+ActivityWatcher (asyncio task, 30s tick)
+   ↓ NSWorkspace.frontmostApplication / osascript (Chrome|Safari|Word|Pages)
+   ↓ 黑名单 app/URL 字段置 None
+   ↓ _detect_changes → 5 类 ActivityChange
+   ↓ (url_changed → url_fetcher: 5s GET + readability)
+   ↓ listeners 串行
+       activity_smart_handler:
+         1. _classify(change) → label or None
+         2. 最近 5min 有 user turn → skip
+         3. 同 label throttle (默 30 min) → skip
+         4. daily cap (默 5/day) → skip
+         5. ActivityProactiveTrigger(label, detail) → run_trigger
+   ↓ 40-80 字短句 → ChatAgent → WS push (kind='proactive', proactive_trigger='activity_*')
+```
+
+#### v1 规则集
+
+| change | label | 触发条件 |
+|---|---|---|
+| app_changed → IDE | activity_ide_open | new_app ∈ _IDE_APPS（VSCode / Cursor / JetBrains / Xcode / Sublime / vim 等 15 个） |
+| app_changed → IDE @ 0-5am | activity_late_night_ide | 同上 + 凌晨时段 |
+| app_changed → 音乐 | activity_music | new_app ∈ _MUSIC_APPS（Spotify / 网易云 / Apple Music / QQ 音乐 / YouTube Music） |
+| url_changed → 技术文档 | activity_url_tech_doc | URL 含 docs.python.org / MDN / dev.to / realpython / `/tutorial` / `/learn` 等 18 个 pattern |
+| app_focus_long | activity_long_focus | 同 app 持续 > 90 分钟跨阈值首拍 + latching off |
+
+#### 验收硬指标对照（12 条）
+
+| # | 指标 | 状态 |
+|---|------|------|
+| 1 | 后端启动 log `[activity] watcher started interval=30s` | ✅ commit 8 lifespan 6c' |
+| 2 | 切 active app → 30s 内 backend log app change detection | ✅ commit 4 _detect_changes |
+| 3 | Chrome 切新 tab → URL 被识别 + 标题提取 | ✅ commit 1 osascript Chrome 路径 |
+| 4 | 公开技术文档 URL → 后台 fetch + 正文 | ✅ commits 3 + 4 _maybe_fetch_url_content |
+| 5 | 黑名单 URL (mail.google.com) → skip fetch + log 'blocked' | ✅ commit 3 默认 patterns |
+| 6 | `screen.get_active_app` capability 可调 + 返当前 app | ✅ commit 2 + ToolRegistry runtime smoke |
+| 7 | 切到 VSCode → 1-2 min 内触发 activity proactive trigger | ✅ commit 5 _classify + run_trigger（要 GUI session 实测，CLI 限制下走 unit test 路径覆盖） |
+| 8 | 同类型 trigger 节流（30 min 内不重发） | ✅ commit 5 throttle dict + test |
+| 9 | 用户活跃对话 5 min 内 → activity trigger skip | ✅ commit 5 _active_conversation_recent + test |
+| 10 | SettingsPanel 黑名单增删工作 | ✅ commit 6 PATCH /api/activity/config |
+| 11 | macOS 权限未授予 → 前端友好弹窗 + 跳转设置 | ✅ commit 7 ActivityPermissionModal + x-apple.systempreferences URI |
+| 12 | 0 regression on chunk 9/10/11/UX-001 (隔离运行) | ✅ commit 9 文末测试汇总 |
+
+#### 测试
+
+chunk 8a 新增 8 文件、~95 tests / 全 PASS（隔离运行，已知 chunk 0-4 pre-
+existing test debt 仍在 README #1）：
+
+| 文件 | tests |
+|------|------:|
+| test_activity_monitor.py | 21 |
+| test_screen_capabilities.py | 18 |
+| test_url_fetcher.py | 13 |
+| test_activity_watcher.py | 16 |
+| test_activity_smart_trigger.py | 15 |
+| test_chunk8a_settings_section.py | 9 |
+| test_chunk8a_permissions.py | 10 |
+| test_activity_api.py | 7 |
+
+#### 工程量
+
+1 个 session / 9 commits / ~95 new test cases / 0 regression on chunk 7
+MCP + chunk 9 forgetting curve + chunk 10 extractor + chunk 11 profile_data
++ UX-001 (隔离运行)。
+
+---
+
+### chunk 8b — 完整屏幕感知（截屏 + OCR + 浏览器扩展） 📋 backlog
+
+DESIGN §13 已有完整设计；本 chunk 是 chunk 8a 之后的 v4 完整版：
 
 * VLM provider 抽象（**Qwen3.5-Plus 主选**——多模态降价后 ¥0.8/M tokens 输入，被动监听 ~¥9/月；Claude Vision / GPT-4o 备选）
 * Tauri Rust 端 `CGDisplayCreateImage` + 全局热键
 * 像素差 64x64 预过滤
-* 隐私黑名单（app name / window title）
+* 隐私黑名单（app name / window title）—— **复用 chunk 8a 的 `activity_watcher.blocked_*`**
 * WS 协议加 `screen` 上行 + `screen_comment` 下行
-* proactive engine 复用：屏幕事件作为新 trigger（"IDE 卡同一行 5 分钟" / "切应用频率异常"）
+* proactive engine 复用：屏幕事件作为新 trigger（"IDE 卡同一行 5 分钟" / "切应用频率异常"）—— 复用 chunk 8a 的 ActivityWatcher + smart_trigger 节流框架
 
 工程量：2-3 天 / 8-10 commits / **单独 session 大 chunk**，不合并。
 

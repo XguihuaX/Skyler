@@ -2593,6 +2593,114 @@ description 双重红线明文）。
 
 ---
 
+## 十五之L、Activity-based Proactive Trigger（v3.5 chunk 8a 起）
+
+### 设计目标
+
+cron trigger（chunk 2 / 2.6 / 4 Part C）按"时间"主动开口（早安 / 饭点 /
+睡前）。chunk 8a 引入按"活动"主动开口：
+
+* 切到 IDE → "在做什么项目"
+* 切到音乐 app → "听啥呢"
+* 打开技术文档 URL → "在查什么"
+* 90 分钟同 app 不切 → 温柔提醒喝水
+* 凌晨 IDE active → 一句"又熬夜了"轻关心
+
+与 cron trigger 并存——本系列**不替代**早安 / 饭点的时间触发，而是**补
+充**一类按上下文判定的轻量主动开口。
+
+### 与 cron trigger 的区别
+
+| 维度 | cron trigger | activity trigger |
+|------|-------------|-----------------|
+| 调度 | APScheduler crontab | event-driven listener |
+| 字数 | 200-300 字简报 / 8-15 字 wake call | 40-80 字短句 |
+| 触发数据源 | 时间 / weather / calendar | active app / URL / 文档 / 时长 |
+| 节流 | cron 表达式本身 | 同 label N min + 一天 cap |
+| 黑名单 | 无 | apps + URL pattern 列表 |
+| trigger label | morning_briefing / wake_call / lunch_call / ... | activity_ide_open / activity_music / activity_url_tech_doc / activity_long_focus / activity_late_night_ide |
+
+### ActivityWatcher 工作流
+
+```
+config.activity_watcher.enabled=true
+    ↓ lifespan 6c'
+activity_watcher.start_polling()
+    ↓ asyncio.create_task(run_loop)
+run_loop（每 poll_interval_seconds，默认 30s）:
+    ↓ snapshot()                ← NSWorkspace + osascript（Chrome / Safari / Word / Pages）
+    ↓ 黑名单 app/URL 字段置 None
+    ↓ _detect_changes(last_state, new_state)   ← 5 类 change（app/url/doc/focus_long/dwell_long）
+    ↓ 若 url_changed → _maybe_fetch_url_content   ← url_fetcher + readability
+    ↓ listeners 串行 dispatch（异常吞 + 不阻塞下个 listener）
+    ↓ last_state = new_state
+    ↓ await stop_event.wait(timeout=interval)   ← 可被 stop_polling 立即唤醒
+```
+
+### 4 道闸节流（``backend/proactive/activity_smart.py``）
+
+ActivityWatcher 的 listener fn ``activity_smart_handler``：
+
+1. **_classify(change)**   规则表 → trigger label 或 None（None 不触发）
+2. **active-conversation guard**   最近 5 min 有 ``role='user' kind='normal'``
+   的 chat_history → skip（用户正在跟 Momo 聊，别打断）
+3. **throttle**   同 label 距上次 < ``trigger_throttle_minutes`` (默 30) → skip
+4. **daily cap**   当天 activity trigger 次数 >= ``max_daily_triggers`` (默 5)
+   → skip。跨午夜自动 reset
+
+四道全过 → ``ActivityProactiveTrigger(label, detail)`` + 调
+``proactive.engine.run_trigger`` 复用 ChatAgent / WS 推送 / TTS 流水线。
+
+### 规则集（v1 范围）
+
+| change.kind | 条件 | label |
+|------------|------|-------|
+| app_changed | new_app ∈ _IDE_APPS 且本地 0-5 点 | activity_late_night_ide |
+| app_changed | new_app ∈ _IDE_APPS | activity_ide_open |
+| app_changed | new_app ∈ _MUSIC_APPS | activity_music |
+| url_changed | new_url 命中 _TECH_DOC_URL_PATTERNS | activity_url_tech_doc |
+| app_focus_long | （同 app 持续 > 90 min 跨阈值首拍） | activity_long_focus |
+
+``url_dwell_long`` / ``doc_changed`` 暂不出 trigger（v1 保守）。
+
+### 隐私边界
+
+* **黑名单一票**：blocked_apps / blocked_url_patterns 命中 → snapshot 直接
+  把字段置 None。listener 完全看不到敏感场景（与 chunk 6c xiaohongshu 红线
+  "主动方法不存在" 同思路：把保护推到数据源头）
+* **URL 内容抓取可独立关**：``fetch_url_content=false`` → Momo 知道你在哪个
+  URL 但不抓正文（"看不到内容"的诚实状态）
+* **不爬站点**：url_fetcher 单次 GET + 5s timeout + 1MB body cap + 3 redirects，
+  等同浏览器手动开一次的网络足迹
+* **不持久化 activity state**：``activity_watcher`` in-memory 跟踪 last_state；
+  重启清空。``activity_watcher_state`` 跨重启持久化先 backlog
+* **本地处理**：NSWorkspace / AppleScript 全本地；url_fetcher 走 httpx 直连
+  公开 URL（与 chunk 6b 网易云 / chunk 6c 小红书同等"用户浏览器能看到 = Skyler
+  能看到"）
+
+### 真接通点
+
+* config: ``activity_watcher`` 全段（commit 9）
+* code: ``backend.integrations.activity_monitor`` / ``url_fetcher`` /
+  ``activity_watcher``（commits 1 / 3 / 4）
+* capabilities: ``backend.capabilities.screen`` 4 cap（commit 2）
+* listener: ``backend.proactive.activity_smart.activity_smart_handler``（commit 5）
+* trigger class: ``backend.proactive.triggers.activity.ActivityProactiveTrigger``
+* API: ``GET/PATCH /api/activity/{status,config,permissions}``（commits 7-8）
+* frontend: ``ActivityAwarenessSection`` + ``ActivityPermissionModal``（commits 6-7）
+* Info.plist: ``NSAppleEventsUsageDescription``（commit 7）
+
+### 已知 V1 限制
+
+* 浏览器只覆盖原生 Chrome + Safari，**不**覆盖 Brave / Arc / Chromium fork
+  / Firefox（不同 AppleScript dict）—— backlog
+* 截屏 + OCR 留 chunk 8b（"完整屏幕感知"），本 chunk 只做 URL / app metadata
+* Windows / Linux 平台 activity_monitor 全函数返 None（参 README Known Problems）
+* per-tool toggle 不细到"对某类 activity 仅在 weekday 触发"等高级节流；只
+  按 label 节流 + daily cap
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建

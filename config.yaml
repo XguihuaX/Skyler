@@ -200,3 +200,42 @@ mcp_clients:
     - NOTION_API_KEY
     enabled: false
     expose_via_skyler_server: false
+
+# v3.5 chunk 8a — 活动感知 (active app / browser URL / 公开页面正文 / 主动 trigger)
+# 默认 enabled: true，但 macOS AppleScript 权限要用户首次启动手动授权（NSAppleEvents
+# UsageDescription 弹窗）。前端 ActivityPermissionModal 会在自检失败时引导用户去
+# 系统设置 → 隐私与安全性 → 自动化 给权限。
+activity_watcher:
+  enabled: true
+  poll_interval_seconds: 30
+  fetch_url_content: true        # 切到非黑名单 URL 时后台抓正文给 Momo 看
+  blocked_apps:
+    - 1Password
+    - Bitwarden
+    - Keychain Access
+  blocked_url_patterns:
+    # 银行 / 金融
+    - '*chase.com*'
+    - '*bankofamerica.com*'
+    - '*wellsfargo.com*'
+    - '*paypal.com*'
+    # 邮箱
+    - '*mail.google.com*'
+    - '*outlook.live.com*'
+    - '*outlook.office.com*'
+    - '*mail.yahoo.com*'
+    - '*mail.qq.com*'
+    - '*mail.163.com*'
+    # 社交（登录后内容隐私敏感）
+    - '*facebook.com/*'
+    - '*instagram.com/*'
+    - '*twitter.com/*'
+    - '*x.com/*'
+    - '*linkedin.com/feed*'
+    # 本地 dev / 局域网
+    - '*localhost*'
+    - '127.0.0.1*'
+    - '192.168.*'
+    - '10.0.*'
+  trigger_throttle_minutes: 30   # 同类型 activity trigger 间隔
+  max_daily_triggers: 5          # 一天最多触发 activity trigger 数（0 = 无上限）
