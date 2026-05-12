@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Skyler 需要读取当前活跃的应用和浏览器标签页,以便陪伴并主动找你说话。所有内容仅本地处理,不上传任何服务器。</string>
+</dict>
+</plist>
