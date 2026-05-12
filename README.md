@@ -463,6 +463,10 @@ See [**ROADMAP.md**](ROADMAP.md) for the full prioritized roadmap.
 > ~~**MCP Settings 一条 capability 一行 → 列表过长**~~ ✅ UX-001 治本（2026-05-12）—— ``ExtensionsSection`` 改 accordion，每 server 默认折叠成单行（含 ``X/Y cap`` 角标）；展开后看 capability 列表 + 单 cap toggle。新增 ``mcp_tool_state`` 表 + ``PUT /api/mcp/clients/{name}/tools/{tool}/enabled`` 路由持久化 per-tool override；server 关时所有 tool toggle 自动 disable 不需要清表（``_connect_one`` 时根据 override skip register 即可）。
 >
 > ~~**情绪 UI 被 TopBar 挡**~~ ✅ UX-001 治本（2026-05-12）—— Panel 模式 ``CharacterStatePanel`` ``top: 12px`` 落在 TopBar (h-10 / z-50) 的 0-40px 范围内被压住。改 ``top: 48px`` 让状态条整体放到 TopBar 下方右侧，z-index 维持 30（不需要浮到 TopBar 之上盖 CharacterSwitcher dropdown）。
+>
+> ~~**chunk 8a 切 VSCode 等 IDE 无主动消息**~~ ✅ hotfix-6 治本（2026-05-12）—— 根因是 ``_IDE_APPS`` 集合用 ``app.lower()`` 精确匹配，但 macOS NSWorkspace 返 ``"Code"``（CFBundleName），chunk 8a 默认列表只有 ``"visual studio code"`` 和 ``"vscode"`` 漏掉了实际名字。补全 IDE 集合（``code`` / ``code - insiders`` / ``cursor`` / ``windsurf`` / ``zed`` / JetBrains 整族 / Apple 编辑器 / 命令行家族）+ 触发链 6+ 条 INFO 级 log（``app detected`` / ``app changed`` / ``classify`` / ``throttled`` / ``skipped`` / ``proactive trigger fired`` / ``proactive trigger sent``），用户可在 backend.log 自我诊断为什么 trigger 没出。
+>
+> ~~**MCP Settings 重新出现"全展开 + 平铺一长串"假象**~~ ✅ hotfix-6 防回归（2026-05-12）—— 用户切回 Skyler 后短暂看到旧形态（dev bundle hot-reload 缓存问题，代码本身 UX-001 已正确 gate）。把 ToolList 抽成独立 sub-component + 加 5 条结构断言锁死 ``useState<Set<string>>(new Set())`` / ``client.tools.map`` 出现次数 ≤ 1 / ``isExpanded`` gate 存在 / ``setExpanded`` 调用次数 == 2，未来 refactor 时硬性拦截"默认展开"回退。
 
 ---
 
