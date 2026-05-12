@@ -425,6 +425,14 @@ See [**ROADMAP.md**](ROADMAP.md) for the full prioritized roadmap.
     - 现状：clipboard watcher 调试日志会带 content preview；生产环境若 log 级别开 INFO 可能记录剪贴板敏感内容（密码 / token 等）
     - 修法：watcher / capabilities 内部 log 改成 hash / length / type，content 仅 DEBUG 级（默认 WARNING+ 不记）
 
+11. **`users.profile_summary` legacy 字段未来清理**（v3.5 chunk 11 衍生 backlog）
+    - 现状：chunk 11 引入结构化 `profile_data` JSON 字段，但 `profile_summary`（chunk 9 自然语言段）**保留作 fallback**（向后兼容 + 用户主动迁移期）
+    - 现行注入优先级：`profile_data` 非空 → 模板化注入；NULL → fallback 到 `profile_summary`
+    - 修法：N 个版本后（用户 profile_data 全部填充）→ 删 column / 删 legacy 写库路径 / 删 chunk 9 `/profile_summary/*` endpoints（已加 deprecation log）
+    - 工程量：1 个 migration（DROP COLUMN）+ 3 个 endpoint 删除 + chunk 9 路径清理；< 1 小时
+
+> ~~**用户画像污染**~~（"温柔陪伴 / 亲密关系 / 细腻敏感" 等反推词写入 profile_summary）✅ chunk 11 治本（2026-05-12）—— LLM 输出严格按 JSON schema，validator hard-reject 违规输出，注入用机械模板而非 LLM。
+
 ---
 
 ## Inspirations
