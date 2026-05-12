@@ -162,11 +162,10 @@ function Badge({ children }: { children: React.ReactNode }) {
 interface CardProps {
   cap: CapabilityDTO;
   onRefresh: (name: string) => Promise<void>;
-  // v3-G chunk 1：Google 集成状态 + 操作回调。仅 calendar.* capability 用。
-  googleStatus?: GoogleStatusResponse | null;
-  onGoogleAuth?: () => Promise<void>;
-  onGoogleRevoke?: () => Promise<void>;
-  googleBusy?: boolean;
+  // UX-002 commit 3：Google OAuth footer + 测试简报按钮已从 CapabilityDetail 抽
+  // 走到 category header level（calendar category 整体共享 Google OAuth，不属
+  // 于单 capability）。原 googleStatus / onGoogleAuth / onGoogleRevoke /
+  // googleBusy props 全删。
 }
 
 // UX-002: 改 CapabilityCard → CapabilityDetail —— 渲染**展开后**的 body
@@ -177,10 +176,6 @@ interface CardProps {
 function CapabilityDetail({
   cap,
   onRefresh,
-  googleStatus,
-  onGoogleAuth,
-  onGoogleRevoke,
-  googleBusy,
 }: CardProps) {
   const [refreshing, setRefreshing] = useState(false);
 
@@ -192,10 +187,6 @@ function CapabilityDetail({
       setRefreshing(false);
     }
   };
-
-  // calendar 类 capability 才挂 Google 授权 UI。判别用 category，避免依赖
-  // capability name 字符串前缀。
-  const isCalendar = cap.category === 'calendar' && !!googleStatus;
 
   return (
     <div className="py-1">
@@ -258,56 +249,6 @@ function CapabilityDetail({
             </p>
           )}
 
-          {/* v3-G chunk 1：calendar 卡 Google 授权 footer */}
-          {isCalendar && googleStatus && (
-            <div
-              className="mt-3 pt-2 flex items-center justify-between gap-2"
-              style={{ borderTop: '1px solid var(--color-border-subtle)' }}
-            >
-              <span
-                className="text-[10px]"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                {!googleStatus.credentials_present
-                  ? 'credentials.json 未放置 — 见 docs/google-calendar-setup.md'
-                  : googleStatus.authorized
-                    ? `已授权${googleStatus.account_hint ? ' · ' + googleStatus.account_hint.slice(0, 24) : ''}`
-                    : '未授权 Google 账号'}
-              </span>
-              {googleStatus.credentials_present && (
-                googleStatus.authorized ? (
-                  <button
-                    type="button"
-                    onClick={() => onGoogleRevoke && void onGoogleRevoke()}
-                    disabled={googleBusy}
-                    className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
-                    style={{
-                      background: 'var(--color-bg-elevated)',
-                      color: 'var(--color-text-primary)',
-                      border: '1px solid var(--color-border-subtle)',
-                    }}
-                  >
-                    重新授权
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => onGoogleAuth && void onGoogleAuth()}
-                    disabled={googleBusy}
-                    className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
-                    style={{
-                      background: 'var(--color-accent)',
-                      color: 'var(--color-bubble-user-text)',
-                    }}
-                    title="弹出浏览器完成 Google OAuth"
-                  >
-                    {googleBusy ? '授权中…' : '连接 Google'}
-                  </button>
-                )
-              )}
-            </div>
-          )}
-
       {cap.has_health_check && (
         <div className="flex justify-end mt-2">
           <button
@@ -329,6 +270,80 @@ function CapabilityDetail({
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// UX-002 commit 3 — calendar category 整体的 Google OAuth status badge
+//
+// 从 ``CapabilityDetail`` 内的 footer 抽出来，挂在 calendar category header
+// 右侧（紧邻 [测试简报] 按钮）。`apple_calendar.*` / `google_calendar.*` /
+// `calendar.*` 三族 capability 共享同一个 Google OAuth 状态，挂在单 capability
+// 上会让每张卡重复显示同样授权状态。
+// ---------------------------------------------------------------------------
+
+function CalendarGoogleAuthBadge({
+  status,
+  busy,
+  onAuth,
+  onRevoke,
+}: {
+  status: GoogleStatusResponse;
+  busy: boolean;
+  onAuth: () => Promise<void>;
+  onRevoke: () => Promise<void>;
+}) {
+  const label = !status.credentials_present
+    ? 'credentials.json 未放置'
+    : status.authorized
+      ? `Google: 已授权${status.account_hint ? ' · ' + status.account_hint.slice(0, 24) : ''}`
+      : 'Google: 未授权';
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        className="text-[10px] normal-case"
+        style={{ color: 'var(--color-text-secondary)' }}
+        title={
+          status.credentials_present
+            ? undefined
+            : '前往 docs/google-calendar-setup.md 放置 OAuth credentials.json'
+        }
+      >
+        {label}
+      </span>
+      {status.credentials_present && (
+        status.authorized ? (
+          <button
+            type="button"
+            onClick={() => void onRevoke()}
+            disabled={busy}
+            className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              color: 'var(--color-text-primary)',
+              border: '1px solid var(--color-border-subtle)',
+            }}
+          >
+            重新授权
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void onAuth()}
+            disabled={busy}
+            className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+            style={{
+              background: 'var(--color-accent)',
+              color: 'var(--color-bubble-user-text)',
+            }}
+            title="弹出浏览器完成 Google OAuth"
+          >
+            {busy ? '授权中…' : '连接 Google'}
+          </button>
+        )
+      )}
+    </span>
+  );
+}
+
 
 // ---------------------------------------------------------------------------
 // Panel 主体
@@ -549,23 +564,36 @@ export default function CapabilityPanel() {
                     {grouped[cat].length} cap
                   </span>
                 </h4>
-                {/* v3-G chunk 1：calendar 类目右侧加测试简报按钮（commit 3
-                    会把 Google OAuth 也一并搬到 category header 这一行） */}
+                {/* UX-002 commit 3：calendar 类目专属 UI 全部归位到 category
+                    header 右侧（Google OAuth status + 授权按钮 + 测试简报按钮）。
+                    原本在每张 calendar capability card 内的 Google OAuth footer
+                    属于"category 整体共享"语义，挂在单 capability 上会让每张卡
+                    重复显示同样的授权状态。 */}
                 {cat === 'calendar' && (
-                  <button
-                    type="button"
-                    onClick={() => void onTestBriefing()}
-                    disabled={briefingBusy}
-                    className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
-                    style={{
-                      background: 'var(--color-bg-elevated)',
-                      color: 'var(--color-text-primary)',
-                      border: '1px solid var(--color-border-subtle)',
-                    }}
-                    title="立刻触发一次起床简报（v0.1 模板版）"
-                  >
-                    🧪 {briefingBusy ? '生成中…' : '测试今日简报'}
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    {googleStatus && (
+                      <CalendarGoogleAuthBadge
+                        status={googleStatus}
+                        busy={googleBusy}
+                        onAuth={onGoogleAuth}
+                        onRevoke={onGoogleRevoke}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void onTestBriefing()}
+                      disabled={briefingBusy}
+                      className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+                      style={{
+                        background: 'var(--color-bg-elevated)',
+                        color: 'var(--color-text-primary)',
+                        border: '1px solid var(--color-border-subtle)',
+                      }}
+                      title="立刻触发一次起床简报（v0.1 模板版）"
+                    >
+                      🧪 {briefingBusy ? '生成中…' : '测试今日简报'}
+                    </button>
+                  </div>
                 )}
               </div>
               {/* 简报触发后，把生成的文本预览出来 */}
@@ -623,10 +651,6 @@ export default function CapabilityPanel() {
                       <CapabilityDetail
                         cap={cap}
                         onRefresh={onCardRefresh}
-                        googleStatus={googleStatus}
-                        onGoogleAuth={onGoogleAuth}
-                        onGoogleRevoke={onGoogleRevoke}
-                        googleBusy={googleBusy}
                       />
                     }
                   />
