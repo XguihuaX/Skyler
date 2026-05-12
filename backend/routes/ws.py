@@ -72,6 +72,7 @@ from backend.utils.text_filters import (
     SUSPICIOUS_TAG_RE,
     count_suspicious_tags,
     sanitize_suspicious_tags,
+    strip_all_for_tts,
     strip_emotion,
     strip_motion,
     strip_state_update,
@@ -997,7 +998,15 @@ async def _handle_message(
                     sentence_idx += 1
 
                     # 立即推送 text_chunk —— 不等 audio
-                    payload = {"type": "text_chunk", "content": sentence}
+                    # hotfix-7 commit 2：最后一道 ``strip_all_for_tts`` 兜底,
+                    # 防回归 + 给未来新 LLM 标签格式留缓冲。正常路径 sentence
+                    # 已被 _parse_emotion / _parse_state_update / _parse_thinking
+                    # / _parse_motion / _parse_tool_call_fallback 5 道剥过,本
+                    # 行通常 no-op;但任一 parser 漏点 / LLM 新格式时这里兜底。
+                    final_chunk = strip_all_for_tts(sentence)
+                    if not final_chunk.strip():
+                        continue  # 全是 meta tag → 不 push
+                    payload = {"type": "text_chunk", "content": final_chunk}
                     payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                     ws_send_count += 1
                     with timed(f"WS send chunk #{sentence_idx} bytes={payload_bytes}"):

@@ -430,9 +430,14 @@ async def run_trigger(
             reply_parts.append(sentence)
 
             # text_chunk 立即推
+            # hotfix-7 commit 2：最后一道 strip_all_for_tts 兜底,与 ws.py
+            # 主路径同语义。防回归 + 给未来新 LLM 标签留缓冲。
+            final_chunk = strip_all_for_tts(sentence)
+            if not final_chunk.strip():
+                continue
             await _push({
                 "type": "text_chunk",
-                "content": sentence,
+                "content": final_chunk,
                 **proactive_meta,
             })
 
@@ -746,7 +751,11 @@ async def run_wake_call_trigger(
             if not sentence.strip():
                 continue
             reply_parts.append(sentence)
-            await _push({"type": "text_chunk", "content": sentence, **proactive_meta})
+            # hotfix-7 commit 2：text_chunk 最后一道 strip 兜底（同 run_trigger）。
+            final_chunk = strip_all_for_tts(sentence)
+            if not final_chunk.strip():
+                continue
+            await _push({"type": "text_chunk", "content": final_chunk, **proactive_meta})
 
             if tts_enabled and consumer is not None:
                 task = asyncio.create_task(
