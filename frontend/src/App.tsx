@@ -196,8 +196,15 @@ function App() {
         {mode === 'widget' && <Widget />}
         {mode === 'panel' && <Panel />}
         {/* v3-G chunk 3b: 角色状态浮动小条；位置随 mode 切换。控制开关
-            在 SettingsPanel [角色] section（store.showCharacterStatePanel）。 */}
-        <CharacterStatePanel position={mode === 'widget' ? 'widget' : 'panel'} />
+            在 SettingsPanel [角色] section（store.showCharacterStatePanel）。
+
+            UX-003 hotfix: 仅 widget 模式在这里渲染 —— widget 整个视口 ≈
+            CharacterView，``right: 8px / bottom: 8px`` 锚到 App 外层 ``relative``
+            container 的视口角 → 视觉上就在 CharacterView 角。
+            Panel 模式由 ``Panel.tsx`` 内部 chat-view container 渲染,锚到
+            CharacterView 实际容器边界(避免 App 外层 relative 让 ``left: 16px``
+            落在 Sidebar 区域而非 CharacterView 区域)。 */}
+        {mode === 'widget' && <CharacterStatePanel position="widget" />}
         <ActivityPermissionModal />
         <NotificationToast />
         {warming && (

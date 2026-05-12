@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, ScrollText } from 'lucide-react';
 import { useAppStore } from '../store';
 import CharacterDialogueBubble from '../components/CharacterDialogueBubble';
 import CharacterPanel from '../components/CharacterPanel';
+import CharacterStatePanel from '../components/CharacterStatePanel';
 import CharacterView from '../components/CharacterView';
 import ChatHistoryDrawer from '../components/ChatHistoryDrawer';
 import ChatInput from '../components/ChatInput';
@@ -54,6 +55,13 @@ export default function Panel() {
             {/* Chat main area — galgame-style: full-bleed character + floating overlays */}
             <div className="relative flex-1 h-full overflow-hidden">
               <CharacterView className="absolute inset-0 w-full h-full z-0" />
+
+              {/* UX-003 hotfix: 情绪状态条挂在 chat-view ``relative`` 容器内
+                  (不是 App 外层 relative),让 ``left: 16px / top: 48px`` 锚到
+                  CharacterView 实际占据的子区域,不会落在 Sidebar /
+                  ConversationList 列内。z-30 仍低于 TopBar (z-50) / 历史按钮
+                  (z-30) — 历史按钮在右上角 ``right-4 top-4`` 不冲突。 */}
+              <CharacterStatePanel position="panel" />
 
               <CharacterDialogueBubble />
 
