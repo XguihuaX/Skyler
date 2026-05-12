@@ -332,12 +332,58 @@ class ActivityWatcher:
     async def run_loop(self) -> None:
         """主 loop。每 ``poll_interval_seconds`` sniff + 判 change + dispatch
         listeners。任一 step 异常吞 + 下一拍正常继续。
+
+        hotfix-6 INFO log 三档：
+          * ``app detected``    每拍都 log 一次（让用户能在 backend.log 看到
+                                "watcher 真的在 tick + sniff 到了 X"）
+          * ``app changed``     检测到变化时 log（让用户能从 log 看到 chunk 8a
+                                确实识别到了 app/url 切换）
+          * listener 错误 / tick 异常 / url fetch 失败 各有 warning
         """
+        tick_count = 0
         while not self._stop_event.is_set():
             try:
                 state = await self.snapshot()
+                tick_count += 1
                 now = state.timestamp
+                # hotfix-6 INFO #1: 每拍 sniff 结果
+                browser_url = (state.browser or {}).get("url") if state.browser else None
+                logger.info(
+                    "[activity] app detected: tick=%d app=%r url=%s",
+                    tick_count, state.active_app, browser_url or "—",
+                )
                 changes = self._detect_changes(self._last_state, state, now=now)
+                # hotfix-6 INFO #2: 检测到的 change 列表（包括 kind + 关键 detail）
+                if changes:
+                    for c in changes:
+                        if c.kind == "app_changed":
+                            logger.info(
+                                "[activity] app changed: from=%r to=%r",
+                                c.detail.get("old_app"), c.detail.get("new_app"),
+                            )
+                        elif c.kind == "url_changed":
+                            logger.info(
+                                "[activity] url changed: to=%s title=%r",
+                                c.detail.get("new_url"),
+                                c.detail.get("title", "")[:60],
+                            )
+                        elif c.kind == "doc_changed":
+                            logger.info(
+                                "[activity] doc changed: to=%s",
+                                c.detail.get("new_path"),
+                            )
+                        elif c.kind == "app_focus_long":
+                            logger.info(
+                                "[activity] app focus long: app=%r %ds",
+                                c.detail.get("app"),
+                                c.detail.get("focus_seconds", 0),
+                            )
+                        elif c.kind == "url_dwell_long":
+                            logger.info(
+                                "[activity] url dwell long: url=%s %ds",
+                                c.detail.get("url"),
+                                c.detail.get("dwell_seconds", 0),
+                            )
                 # URL 变了 + 配置允许抓 → best-effort 异步抓正文，结果直接挂在
                 # state.url_content 上让下次 snapshot 看见（仅 attach 在本拍）
                 for c in changes:
@@ -347,7 +393,7 @@ class ActivityWatcher:
                             try:
                                 state.url_content = await self._maybe_fetch_url_content(new_url)
                             except Exception as exc:
-                                logger.debug(
+                                logger.warning(
                                     "[activity] url fetch failed: %s", exc,
                                 )
                 # dispatch listeners 串行
@@ -356,9 +402,11 @@ class ActivityWatcher:
                         try:
                             await fn(change)
                         except Exception as exc:
+                            # hotfix-6: warning 而非 debug —— listener 静默失败
+                            # 是 chunk 8a "app 切了但 Momo 没消息" 类 bug 主因
                             logger.warning(
-                                "[activity] listener %s failed: %s",
-                                getattr(fn, "__name__", "<anon>"), exc,
+                                "[activity] listener %s failed on %s: %s",
+                                getattr(fn, "__name__", "<anon>"), change.kind, exc,
                             )
                 self._last_state = state
             except Exception as exc:

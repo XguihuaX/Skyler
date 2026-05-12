@@ -77,14 +77,38 @@ def test_permissions_endpoint_shape() -> None:
 
 
 def test_tauri_conf_has_apple_events_usage_description() -> None:
+    """两种合法形态都接受：
+
+    1. ``infoPlist`` 是 dict（chunk 8a commit 7 原始形态）—— 字段在 dict 里
+    2. ``infoPlist`` 是 string 路径（hotfix-6 之后用户提取到外部 Info.plist）
+       —— 读外部 plist 文件验证字段
+    """
     path = os.path.join(ROOT, "frontend/src-tauri/tauri.conf.json")
     with open(path, encoding="utf-8") as f:
         conf = json.load(f)
-    info = conf.get("bundle", {}).get("macOS", {}).get("infoPlist", {})
-    assert "NSAppleEventsUsageDescription" in info
-    desc = info["NSAppleEventsUsageDescription"]
-    assert isinstance(desc, str) and len(desc) > 0
-    # 必须含"陪伴"/"主动"/"Skyler"等关键词，对用户友好
+    info = conf.get("bundle", {}).get("macOS", {}).get("infoPlist")
+    desc: str | None = None
+    if isinstance(info, dict):
+        desc = info.get("NSAppleEventsUsageDescription")
+    elif isinstance(info, str):
+        # 路径相对 src-tauri/ 解析
+        plist_path = os.path.join(ROOT, "frontend/src-tauri", info)
+        assert os.path.exists(plist_path), f"infoPlist path {info} 不存在"
+        with open(plist_path, encoding="utf-8") as f:
+            plist_src = f.read()
+        # 简单 XML 文本扫描足够（不引 plistlib，避免 Python 版本差异）
+        assert "<key>NSAppleEventsUsageDescription</key>" in plist_src, \
+            f"{info} 缺 NSAppleEventsUsageDescription 字段"
+        # 抓 string 内容
+        import re
+        m = re.search(
+            r"<key>NSAppleEventsUsageDescription</key>\s*<string>(.*?)</string>",
+            plist_src, flags=re.DOTALL,
+        )
+        if m:
+            desc = m.group(1)
+    assert desc is not None and len(desc) > 0, "NSAppleEventsUsageDescription 字段为空"
+    # 必须含"Skyler"等关键词，对用户友好
     assert "Skyler" in desc
 
 

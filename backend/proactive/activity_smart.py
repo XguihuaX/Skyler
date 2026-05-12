@@ -259,10 +259,38 @@ async def activity_smart_handler(change: ActivityChange) -> None:
       3. throttle（同 label N 分钟内不重发）
       4. daily cap（一天最多 N 次 activity trigger）
     全过则实例化 ActivityProactiveTrigger + ``run_trigger(trigger, user_id)``。
+
+    hotfix-6 INFO log 6 道：每道闸命中都 log 原因，让用户能从 backend.log
+    自我诊断"为什么 app 切了 Momo 没说话"。
     """
     label = _classify(change)
     if label is None:
+        # hotfix-6: 不命中规则的 change（如切到 Finder）也 INFO log 一次
+        # 让用户知道 "watcher 跑了 + 看到了 change，只是没匹配任何 IDE/音乐/
+        # 技术文档 规则"
+        kind = change.kind
+        if kind == "app_changed":
+            logger.info(
+                "[activity_smart] classify: matched=False kind=app_changed "
+                "new_app=%r (not in IDE/music)",
+                (change.detail or {}).get("new_app"),
+            )
+        elif kind == "url_changed":
+            logger.info(
+                "[activity_smart] classify: matched=False kind=url_changed "
+                "new_url=%s (not a known tech-doc pattern)",
+                (change.detail or {}).get("new_url"),
+            )
+        else:
+            logger.info(
+                "[activity_smart] classify: matched=False kind=%s", kind,
+            )
         return
+
+    logger.info(
+        "[activity_smart] classify: matched=True kind=%s label=%s",
+        change.kind, label,
+    )
 
     user_id = get_default_user_id()
 
@@ -274,7 +302,12 @@ async def activity_smart_handler(change: ActivityChange) -> None:
         logger.warning("[activity_smart] active-conversation check failed: %s; skip", exc)
         return
     if active:
-        logger.info("[activity_smart] skip %s — user active in last 5 min", label)
+        # hotfix-6: 明确 reason 让用户知道 5 min 内有 user turn
+        logger.info(
+            "[activity_smart] skipped: reason=active_conversation label=%s "
+            "(用户最近 5 分钟内有 user 发言，主动 trigger 让位)",
+            label,
+        )
         return
 
     async with _state_lock:
@@ -284,9 +317,12 @@ async def activity_smart_handler(change: ActivityChange) -> None:
         throttle_sec = get_throttle_minutes() * 60
         if now - last < throttle_sec:
             remaining = int((throttle_sec - (now - last)) / 60)
+            # hotfix-6: 加 last_fired ISO 时间戳让用户看到具体在 throttle 啥
+            last_iso = datetime.fromtimestamp(last).strftime("%H:%M:%S") if last else "—"
             logger.info(
-                "[activity_smart] skip %s — throttled (%d min remaining)",
-                label, remaining,
+                "[activity_smart] throttled: label=%s last_fired=%s "
+                "remaining=%d min (config trigger_throttle_minutes=%d)",
+                label, last_iso, remaining, get_throttle_minutes(),
             )
             return
 
@@ -295,16 +331,20 @@ async def activity_smart_handler(change: ActivityChange) -> None:
         cap = get_max_daily_triggers()
         if cap > 0 and _today_count >= cap:
             logger.info(
-                "[activity_smart] skip %s — daily cap %d reached", label, cap,
+                "[activity_smart] skipped: reason=daily_cap label=%s "
+                "today=%d/%d (config max_daily_triggers=%d)",
+                label, _today_count, cap, cap,
             )
             return
 
         # 通过四道闸，记账
         _last_fire_per_label[label] = now
         globals()["_today_count"] = _today_count + 1
+        # hotfix-6: 与"skipped"系列同步 reason= 风格，统一 grep 路径
         logger.info(
-            "[activity_smart] firing %s (count_today=%d/%d)",
-            label, _today_count + 1, cap if cap > 0 else 999,
+            "[activity_smart] proactive trigger fired: label=%s "
+            "count_today=%d/%d user_id=%s",
+            label, _today_count + 1, cap if cap > 0 else 999, user_id,
         )
 
     # 出锁后异步触发，run_trigger 自己会 spawn / push WS
@@ -313,6 +353,12 @@ async def activity_smart_handler(change: ActivityChange) -> None:
         from backend.proactive.triggers.activity import ActivityProactiveTrigger
         trigger = ActivityProactiveTrigger(label=label, detail=change.detail)
         await run_trigger(trigger, user_id=user_id)
+        # hotfix-6: run_trigger 内部走完 ChatAgent + WS push + 入库链；INFO 一条
+        # "send-complete" 让用户能区分"trigger 决策"与"实际 ChatAgent 走完"
+        logger.info(
+            "[activity_smart] proactive trigger sent: label=%s (ChatAgent 已走完，WS 已 push)",
+            label,
+        )
     except Exception as exc:
         logger.warning(
             "[activity_smart] run_trigger failed for %s: %s", label, exc,
