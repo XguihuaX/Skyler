@@ -403,19 +403,24 @@ MEMORY_TOOLS: List[dict] = [
         "function": {
             "name": "save_memory",
             "description": (
-                "保存关于用户的长期事实到记忆库。仅在以下情况调用：\n"
-                "- 稳定事实：住址、职业、家人、宠物名字\n"
-                "- 长期偏好：喜欢/讨厌某物、习惯（每天 7 点起床）\n"
-                "- 承诺/计划：deadline、约会、未来安排\n"
-                "- 反复出现的模式：用户多次提及才显著的特征\n"
+                "**仅在用户明确要求记住时**调用本工具。用户的明确信号：\n"
+                "- '请记住 X'\n"
+                "- '以后 X 都...'\n"
+                "- '别忘了 X'\n"
+                "- '你要记住 X'\n"
                 "\n"
-                "不要保存：\n"
-                "- 日常打招呼、单次提问\n"
-                "- 当下情绪、天气、时间感叹（'今天好累'除非反复出现）\n"
-                "- chitchat 本身（'今天去哪儿吃饭'除非用户明确说要记）\n"
+                "**日常对话事实的提取走 background worker（chunk 10），"
+                "不需要本 tool**。不要主动推断'用户应该记住的事'调本 tool。\n"
                 "\n"
-                "判断标准：这条事实在未来 1 周以上的对话中是否仍有用？"
-                "是 → 保存；否 → 不保存。"
+                "（v3.5 chunk 10 起，server-side MemoryExtractor 每 5 分钟"
+                "扫 role='user' 消息批量提取，本 tool 只负责显式入口。\n"
+                "  对话主路径调本 tool 会触发同样的 SUSPICIOUS / 长度 / "
+                "重复 quality filter；通过 filter 才入库，标 "
+                "extraction_source='llm_save_memory'。）\n"
+                "\n"
+                "参数：\n"
+                "- content: 用户明确说要记的内容\n"
+                "- type: fact / instruction / activity / daily（默认 fact）"
             ),
             "parameters": {
                 "type": "object",
@@ -495,7 +500,8 @@ _TOOL_PROMPT_ADDENDUM = (
     "  - 用户问\"现在几点\"/\"今天星期几\"/\"今天X月X日吗\" → 调 time.now；\n"
     "  - 任何涉及相对时间（明天 / 后天 / 下周 / N 小时后）的请求，先 time.now 拿基准再继续。\n\n"
     "【记忆类】save_memory / delete_memory / list_memories / compress_memories：\n"
-    "  - 当用户透露值得记住的事（事实、偏好、承诺、计划），主动调 save_memory；\n"
+    "  - **save_memory 仅在用户明确说要记时调**（'请记住 X' / '别忘了 Y'）；"
+    "日常对话事实由 chunk 10 server-side worker 每 5 分钟自动提取，**不要主动**调；\n"
     "  - 当用户要求忘掉某事，先 list_memories 找匹配再 delete_memory；\n"
     "  - 当用户要求整理记忆，调 compress_memories。\n\n"
     "【系统类】switch_character / clear_short_term：\n"
@@ -613,28 +619,108 @@ def _get_all_tools() -> List[dict]:
 async def _tool_save_memory(
     user_id: str, args: dict, character_id: Optional[int] = None,
 ) -> dict:
+    """v3.5 chunk 10：``save_memory`` 仍是 LLM 显式入口（用户明确要求时调），
+    但**写入前过 quality filter**（与 worker 路径同 SUSPICIOUS / 长度 /
+    重复 / 反推词检查），通过 filter 才入库。所有 entry 标
+    ``extraction_source='llm_save_memory'``。
+    """
     content = (args.get("content") or "").strip()
     if not content:
         return {"status": "error", "error": "content is required"}
     mem_type = args.get("type") or "fact"
     if mem_type not in _VALID_MEMORY_TYPES:
         mem_type = "fact"
+
+    # v3.5 chunk 10：quality filter（防 LLM 把奇怪东西塞进来）
+    # 1. 长度
+    from backend.utils.memory_entry_validator import (
+        MAX_CONTENT_LEN, MIN_CONTENT_LEN,
+    )
+    from backend.utils.text_filters import SUSPICIOUS_TAG_RE
+    if not (MIN_CONTENT_LEN <= len(content) <= MAX_CONTENT_LEN):
+        logger.warning(
+            "[save_memory] length reject user=%s len=%d (need %d..%d)",
+            user_id, len(content), MIN_CONTENT_LEN, MAX_CONTENT_LEN,
+        )
+        return {"status": "error", "error": "content_length_out_of_range"}
+    # 2. SUSPICIOUS tag
+    if SUSPICIOUS_TAG_RE.search(content):
+        logger.warning(
+            "[save_memory] SUSPICIOUS_TAG reject user=%s preview=%r",
+            user_id, content[:120],
+        )
+        return {"status": "error", "error": "suspicious_tag_detected"}
+
     embedding_blob: Optional[bytes] = None
     try:
         embedding_blob = await generate_embedding(content)
     except Exception as exc:
         logger.error("save_memory: embedding generation failed: %s", exc)
+
+    # 3. 重复检测（用 cosine 与现有 memory 比较）
+    from backend.memory.extractor import get_extractor_dup_threshold
+    dup_th = get_extractor_dup_threshold()
     async with AsyncSessionLocal() as session:
-        m = await db_add_memory(
-            session,
-            user_id=user_id,
-            role="user",
-            type=mem_type,
-            content=content,
-            embedding=embedding_blob,
-            character_id=character_id,
-        )
-    return {"status": "ok", "memory_id": m.id, "content": content, "type": mem_type}
+        existing = await get_all_memories(session, user_id, active_only=True)
+    if embedding_blob is not None and existing:
+        import numpy as np
+        from backend.memory.long_term import _cosine
+        new_vec = np.frombuffer(embedding_blob, dtype=np.float32)
+        for ex_m in existing:
+            if not ex_m.embedding:
+                continue
+            ex_vec = np.frombuffer(ex_m.embedding, dtype=np.float32)
+            if _cosine(new_vec, ex_vec) > dup_th:
+                logger.info(
+                    "[save_memory] duplicate reject user=%s preview=%r "
+                    "(existing id=%d)",
+                    user_id, content[:80], ex_m.id,
+                )
+                return {
+                    "status": "duplicate",
+                    "existing_memory_id": ex_m.id,
+                    "content": content,
+                }
+
+    # 4. 入库 —— 用 raw SQL 写齐 chunk 10 新列（extraction_source / extracted_at）
+    from datetime import datetime as _dt
+    from sqlalchemy import text as _sql_text
+    from backend.database import engine as _engine
+    now = _dt.utcnow()
+    async with _engine.begin() as conn:
+        result = await conn.execute(_sql_text(
+            "INSERT INTO memory "
+            "(user_id, role, type, content, embedding, character_id, "
+            " created_at, access_count, last_accessed_at, "
+            " extracted_at, extraction_source) "
+            "VALUES "
+            "(:user_id, :role, :type, :content, :embedding, :character_id, "
+            " :created_at, 0, :created_at, "
+            " :extracted_at, :extraction_source)"
+        ), {
+            "user_id": user_id,
+            "role": "user",
+            "type": mem_type,
+            "content": content,
+            "embedding": embedding_blob,
+            "character_id": character_id,
+            "created_at": now,
+            "extracted_at": now,
+            "extraction_source": "llm_save_memory",
+        })
+        new_id = int(result.lastrowid) if result.lastrowid else None
+    logger.info(
+        "[save_memory] user=%s saved id=%s type=%s preview=%r "
+        "extraction_source=llm_save_memory",
+        user_id, new_id, mem_type, content[:80],
+    )
+    return {
+        "status": "ok",
+        "memory_id": new_id,
+        "content": content,
+        "type": mem_type,
+        "extraction_source": "llm_save_memory",
+    }
 
 
 async def _tool_delete_memory(
