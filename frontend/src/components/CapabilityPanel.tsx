@@ -73,6 +73,46 @@ function CapabilityIcon({ name }: { name: string }) {
 }
 
 
+// UX-003 commit 2: provider 自动分组规则。
+//
+// 按 capability ``name`` 的 ``.`` 前缀切。``ext.<server>.<tool>`` 是 3 段名,
+// provider key 拼回 ``ext.<server>``(brave-search 含 ``-`` 不会被 ``.`` 切
+// 错)。其他单段或两段名取首段。
+//
+// audit 实测 67 cap 覆盖完整:
+//   * 多 provider category(3 个): calendar(apple_calendar/google_calendar/calendar)
+//                                  / mcp_external(ext.filesystem/ext.brave-search)
+//                                  / media(bilibili/netease/media/xhs)
+//   * 单 provider category(6 个): system/character/clipboard/files/music/screen
+// 单 provider 时跳过二层(直接 category → capability,与 UX-002 行为一致)
+export function _extractProvider(capName: string): string {
+  if (!capName) return '';
+  const parts = capName.split('.');
+  if (parts[0] === 'ext' && parts.length >= 2) {
+    return `ext.${parts[1]}`;
+  }
+  return parts[0];
+}
+
+// UX-003: provider display name 映射。
+//   * ``media`` provider 实际是 media_control(bundle 内 capability 命名用
+//     ``media.next_track`` 等),UI 显示成 ``media_control`` 跟 category title
+//     ``MEDIA`` 区分,与 backend ``backend/capabilities/media_control.py`` 文件
+//     名语义一致
+//   * ``ext.X`` provider key UI 显示去掉 ``ext.`` 前缀 + 加 ``[ext]`` 角标
+//     在 ProviderRow 里独立处理(本 map 只管纯 rename)
+const PROVIDER_DISPLAY: Record<string, string> = {
+  media: 'media_control',
+};
+
+
+function _providerDisplay(provider: string): string {
+  // ext.X → 去 ext. 前缀(UI 加 [ext] 角标在 ProviderRow 里另处理)
+  if (provider.startsWith('ext.')) return provider.slice(4);
+  return PROVIDER_DISPLAY[provider] ?? provider;
+}
+
+
 // UX-002：把 cap.description 截到 ~50 字符做 ``briefDescription``（折叠态
 // 单行显示）。优先在标点边界截断让短摘要更自然。
 function _briefDesc(full: string): string {
@@ -495,6 +535,38 @@ export default function CapabilityPanel() {
     });
   }, []);
 
+  // UX-003 commit 2: provider 二层 accordion state。
+  // key = ``${category}::${provider}`` 防 namespace 撞(``netease`` 同时存在
+  // 于 ``music`` 和 ``media`` category)。new Set() 初始 → 多 provider 内全
+  // 折叠启动。
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
+
+  const toggleProvider = useCallback((cat: string, provider: string) => {
+    const key = `${cat}::${provider}`;
+    setExpandedProviders((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  // UX-003: 每 category 内按 provider 分组(memo 避免 re-compute)。
+  // 单 provider 时 size==1 → render 时跳过二层直接 capability list。
+  const groupedByProvider = useMemo(() => {
+    const out: Record<string, Map<string, CapabilityDTO[]>> = {};
+    for (const cat of Object.keys(grouped)) {
+      const provs = new Map<string, CapabilityDTO[]>();
+      for (const cap of grouped[cat]) {
+        const prov = _extractProvider(cap.name);
+        if (!provs.has(prov)) provs.set(prov, []);
+        provs.get(prov)!.push(cap);
+      }
+      out[cat] = provs;
+    }
+    return out;
+  }, [grouped]);
+
   return (
     <section
       className="rounded-lg p-4"
@@ -654,8 +726,12 @@ export default function CapabilityPanel() {
                   {briefingPreview}
                 </p>
               )}
-              {/* UX-003 commit 1: category body 只在 catExpanded=true 时渲染。
-                  默认全 category 折叠成 single-line header。 */}
+              {/* UX-003 commit 1+2: category body 只在 catExpanded 时渲染。
+                  默认全 category 折叠成 single-line header。展开后:
+                  - 多 provider category(calendar / mcp_external / media)→ 三层
+                    accordion(provider row 默认再折叠 → 点开看 capability)
+                  - 单 provider category(其他 6 个)→ 直接 capability list
+                    (跳过二层中间,与 UX-002 行为一致) */}
               {catExpanded && (
                 <div
                   className="rounded-md px-3"
@@ -664,45 +740,164 @@ export default function CapabilityPanel() {
                     border: '1px solid var(--color-border)',
                   }}
                 >
-                  {grouped[cat].map((cap) => (
-                    <CapabilityRow
-                      key={cap.name}
-                      name={cap.name}
-                      displayName={cap.display_name}
-                      briefDescription={_briefDesc(cap.description)}
-                      leftIcon={<CapabilityIcon name={cap.icon} />}
-                      statusBadge={
-                        <>
-                          <HealthDot status={cap.health.status} />
-                          <span
-                            className="text-[10px]"
-                            style={{ color: 'var(--color-text-secondary)' }}
+                  {groupedByProvider[cat] && groupedByProvider[cat].size > 1 ? (
+                    // 多 provider: 渲染 provider rows
+                    Array.from(groupedByProvider[cat].keys())
+                      .sort()
+                      .map((provider) => {
+                        const provKey = `${cat}::${provider}`;
+                        const provExpanded = expandedProviders.has(provKey);
+                        const provCaps = groupedByProvider[cat].get(provider)!;
+                        const isExt = provider.startsWith('ext.');
+                        return (
+                          <div
+                            key={provKey}
+                            data-provider={provider}
+                            className="py-1"
+                            style={{ borderTop: '1px solid var(--color-border)' }}
                           >
-                            {HEALTH_LABEL[cap.health.status]}
-                          </span>
-                          {cap.source_server && (
-                            <span
-                              className="ml-1 inline-flex items-center px-1 rounded text-[9px]"
-                              style={{
-                                background: 'var(--color-bg-elevated)',
-                                border: '1px solid var(--color-border-subtle)',
-                                color: 'var(--color-text-secondary)',
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => toggleProvider(cat, provider)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  toggleProvider(cat, provider);
+                                }
                               }}
-                              title={`来自外部 MCP server: ${cap.source_server}`}
+                              aria-expanded={provExpanded}
+                              aria-label={provExpanded
+                                ? `折叠 ${provider}` : `展开 ${provider}`}
+                              className="w-full flex items-center gap-1.5 hover:opacity-80 cursor-pointer py-0.5"
                             >
-                              [ext · {cap.source_server}]
+                              {provExpanded
+                                ? <ChevronDown size={12} />
+                                : <ChevronRight size={12} />}
+                              <span
+                                className="text-xs font-mono"
+                                style={{ color: 'var(--color-text-primary)' }}
+                              >
+                                {_providerDisplay(provider)}
+                              </span>
+                              {isExt && (
+                                <span
+                                  className="text-[9px] px-1 rounded"
+                                  style={{
+                                    background: 'var(--color-bg-elevated)',
+                                    border: '1px solid var(--color-border-subtle)',
+                                    color: 'var(--color-text-secondary)',
+                                  }}
+                                  title="来自外部 MCP server"
+                                >
+                                  ext
+                                </span>
+                              )}
+                              <span
+                                className="text-[10px] px-1.5 py-0.5 rounded"
+                                style={{
+                                  background: 'var(--color-bg-elevated)',
+                                  color: 'var(--color-text-secondary)',
+                                }}
+                              >
+                                {provCaps.length} cap
+                              </span>
+                            </div>
+                            {provExpanded && (
+                              <div
+                                className="mt-1"
+                                style={{
+                                  marginLeft: 16,
+                                  paddingLeft: 8,
+                                  borderLeft: '1px dashed var(--color-border)',
+                                }}
+                              >
+                                {provCaps.map((cap) => (
+                                  <CapabilityRow
+                                    key={cap.name}
+                                    name={cap.name}
+                                    displayName={cap.display_name}
+                                    briefDescription={_briefDesc(cap.description)}
+                                    leftIcon={<CapabilityIcon name={cap.icon} />}
+                                    statusBadge={
+                                      <>
+                                        <HealthDot status={cap.health.status} />
+                                        <span
+                                          className="text-[10px]"
+                                          style={{ color: 'var(--color-text-secondary)' }}
+                                        >
+                                          {HEALTH_LABEL[cap.health.status]}
+                                        </span>
+                                        {cap.source_server && (
+                                          <span
+                                            className="ml-1 inline-flex items-center px-1 rounded text-[9px]"
+                                            style={{
+                                              background: 'var(--color-bg-elevated)',
+                                              border: '1px solid var(--color-border-subtle)',
+                                              color: 'var(--color-text-secondary)',
+                                            }}
+                                            title={`来自外部 MCP server: ${cap.source_server}`}
+                                          >
+                                            [ext · {cap.source_server}]
+                                          </span>
+                                        )}
+                                      </>
+                                    }
+                                    expandedContent={
+                                      <CapabilityDetail
+                                        cap={cap}
+                                        onRefresh={onCardRefresh}
+                                      />
+                                    }
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                  ) : (
+                    // 单 provider category 直接 flat capability list (UX-002 行为)
+                    grouped[cat].map((cap) => (
+                      <CapabilityRow
+                        key={cap.name}
+                        name={cap.name}
+                        displayName={cap.display_name}
+                        briefDescription={_briefDesc(cap.description)}
+                        leftIcon={<CapabilityIcon name={cap.icon} />}
+                        statusBadge={
+                          <>
+                            <HealthDot status={cap.health.status} />
+                            <span
+                              className="text-[10px]"
+                              style={{ color: 'var(--color-text-secondary)' }}
+                            >
+                              {HEALTH_LABEL[cap.health.status]}
                             </span>
-                          )}
-                        </>
-                      }
-                      expandedContent={
-                        <CapabilityDetail
-                          cap={cap}
-                          onRefresh={onCardRefresh}
-                        />
-                      }
-                    />
-                  ))}
+                            {cap.source_server && (
+                              <span
+                                className="ml-1 inline-flex items-center px-1 rounded text-[9px]"
+                                style={{
+                                  background: 'var(--color-bg-elevated)',
+                                  border: '1px solid var(--color-border-subtle)',
+                                  color: 'var(--color-text-secondary)',
+                                }}
+                                title={`来自外部 MCP server: ${cap.source_server}`}
+                              >
+                                [ext · {cap.source_server}]
+                              </span>
+                            )}
+                          </>
+                        }
+                        expandedContent={
+                          <CapabilityDetail
+                            cap={cap}
+                            onRefresh={onCardRefresh}
+                          />
+                        }
+                      />
+                    ))
+                  )}
                 </div>
               )}
             </div>

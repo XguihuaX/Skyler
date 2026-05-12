@@ -99,14 +99,20 @@ def test_capability_row_used_in_map(panel: str) -> None:
 
 
 def test_capability_card_renamed_to_detail(panel: str) -> None:
-    """``CapabilityCard`` 被 rename 成 ``CapabilityDetail``（body-only，不再 render header）。"""
+    """``CapabilityCard`` 被 rename 成 ``CapabilityDetail``（body-only，不再 render header）。
+
+    UX-002 invariant: CapabilityIcon 只在 CapabilityRow ``leftIcon`` slot 出现,
+    **不**在 CapabilityDetail body 内重复。
+    UX-003 起 CapabilityPanel 有两条 render path(多 provider 分组分支 + 单
+    provider 直 flat 分支),两条 path 都用 ``<CapabilityIcon>`` 作 leftIcon。
+    因此 ≤ 2 处合理;> 2 可能意味 CapabilityDetail 又内联了 icon。
+    """
     assert "function CapabilityCard" not in panel
     assert "function CapabilityDetail" in panel
-    # CapabilityDetail 不再有 ``<CapabilityIcon`` 内联（icon 由 CapabilityRow.leftIcon 渲染）
-    # 检查 CapabilityIcon 在 panel 内只用一处（CapabilityRow leftIcon slot 里）
     matches = re.findall(r"<CapabilityIcon\s", panel)
-    assert len(matches) == 1, (
-        f"<CapabilityIcon 出现 {len(matches)} 次（应该 == 1：仅 leftIcon slot）"
+    assert 1 <= len(matches) <= 2, (
+        f"<CapabilityIcon 出现 {len(matches)} 次（应在 [1,2] 区间：UX-002 仅 "
+        f"leftIcon slot, UX-003 后多 provider + 单 provider 两条 render path 各一）"
     )
 
 
