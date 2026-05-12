@@ -173,6 +173,112 @@ async def fetch_user_turns_after(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Entry save + optional LLM judge
+# ---------------------------------------------------------------------------
+
+
+# entry_type → ``Memory.type`` 五分类约束的映射（chunk 2 ORM CheckConstraint
+# 锁死 type ∈ {fact / instruction / emotion / activity / daily}）。worker
+# 写入时同时填两列：``type`` 兼容旧 UI 过滤；``entry_type`` 给 chunk 10
+# 新 UI 用。
+_TYPE_LEGACY_MAP = {
+    "fact":       "fact",
+    "preference": "instruction",  # 偏好 → 旧 'instruction'（与 chunk 2 习惯一致）
+    "event":      "activity",     # 事件 → 旧 'activity'
+    "commitment": "activity",     # 承诺 → 旧 'activity'（最贴近"未来安排"）
+}
+
+
+async def _save_worker_entries(
+    user_id: str,
+    entries: list[dict],
+    *,
+    source_turn_id: Optional[int],
+) -> None:
+    """把 worker 通过 filter 的 entries 写入 ``memory`` 表。
+
+    每条 entry 标 ``extraction_source='worker'``。同时填新 5 列
+    （chunk 10 schema）+ 老 ``type`` 列（兼容旧过滤 UI）。
+    """
+    from sqlalchemy import text as sql_text
+    from backend.memory.long_term import generate_embedding
+
+    now = datetime.utcnow()
+    for entry in entries:
+        content = entry["content"]
+        entry_type = entry["type"]
+        confidence = entry["confidence"]
+        legacy_type = _TYPE_LEGACY_MAP.get(entry_type, "fact")
+
+        # embedding（best-effort；失败 → 入库 NULL，后续检索就跳过）
+        embedding_blob: Optional[bytes] = None
+        try:
+            embedding_blob = await generate_embedding(content)
+        except Exception:
+            logger.warning(
+                "[extractor] embedding gen failed; saving with NULL "
+                "embedding user=%s content=%r",
+                user_id, content[:80],
+            )
+
+        async with engine.begin() as conn:
+            await conn.execute(sql_text(
+                "INSERT INTO memory "
+                "(user_id, role, type, content, embedding, "
+                " created_at, access_count, last_accessed_at, "
+                " extracted_at, source_turn_id, confidence, entry_type, "
+                " extraction_source) "
+                "VALUES "
+                "(:user_id, :role, :type, :content, :embedding, "
+                " :created_at, 0, :created_at, "
+                " :extracted_at, :source_turn_id, :confidence, :entry_type, "
+                " :extraction_source)"
+            ), {
+                "user_id": user_id,
+                "role": "user",  # chunk 2 CHECK 约束 ∈ {user, system}
+                "type": legacy_type,
+                "content": content,
+                "embedding": embedding_blob,
+                "created_at": now,
+                "extracted_at": now,
+                "source_turn_id": source_turn_id,
+                "confidence": confidence,
+                "entry_type": entry_type,
+                "extraction_source": "worker",
+            })
+
+
+def _make_llm_judge():
+    """构造第 5 道 filter（可选）：LLM judge "本条 entry 对未来对话有用吗"。
+
+    ``config.memory.extractor.llm_judge_enabled=True`` 才接入。当前实现是
+    简单二分判断，未来可加 nuance。
+    """
+    async def judge(content: str) -> bool:
+        from backend.config import get_planner_model
+        from backend.llm.client import LLMError, call_llm
+        prompt = (
+            "判断以下记忆条目**对未来对话**是否有长期价值。\n\n"
+            f"条目：{content}\n\n"
+            "**只回答** YES 或 NO，不要解释、不要标点。"
+        )
+        try:
+            response = await call_llm(
+                messages=[{"role": "user", "content": prompt}],
+                model=get_planner_model(),
+                stream=False,
+            )
+            raw = (response.choices[0].message.content or "").strip().upper()
+            return raw.startswith("Y")
+        except LLMError:
+            return True  # fail-open
+        except Exception:
+            logger.exception("[extractor.llm_judge] unexpected error")
+            return True
+    return judge
+
+
 class MemoryExtractor:
     """单实例 worker，每 ``interval`` 秒跑一次 ``_extract_batch``。
 
@@ -227,8 +333,65 @@ class MemoryExtractor:
     async def _process_user_turns(
         self, user_id: str, turns: list[ChatTurn],
     ) -> None:
-        """commit 2 占位：do nothing；commit 4 真接 prompt + LLM + filter + save。"""
-        return None
+        """commit 4 实现：prompt → LLM → validator → save。
+
+        任一子步骤异常都吞 + log，不阻塞 worker loop。
+        """
+        from backend.prompts.memory_extraction import (
+            build_extraction_prompt,
+            call_extraction_llm,
+        )
+        from backend.utils.memory_entry_validator import (
+            validate_and_filter_entries,
+        )
+
+        # 1. build prompt
+        prompt = build_extraction_prompt(turns)
+
+        # 2. LLM call (errors → None；validator 会 reject)
+        raw = await call_extraction_llm(prompt)
+        if raw is None:
+            return
+
+        # 3. 拉现有 memory contents 做 duplicate 比对
+        from backend.database.services import get_all_memories
+        async with AsyncSessionLocal() as session:
+            existing = await get_all_memories(
+                session, user_id, active_only=True,
+            )
+        existing_contents = [m.content for m in existing if m.content]
+
+        # 4. validator + filter
+        min_conf = get_extractor_min_confidence()
+        dup_th = get_extractor_dup_threshold()
+        judge_on = get_extractor_llm_judge_enabled()
+        llm_judge_fn = _make_llm_judge() if judge_on else None
+
+        entries = await validate_and_filter_entries(
+            raw,
+            user_id=user_id,
+            min_confidence=min_conf,
+            dup_threshold=dup_th,
+            existing_contents=existing_contents,
+            llm_judge=llm_judge_fn,
+        )
+        if not entries:
+            logger.info(
+                "[extractor] user=%s turns=%d → 0 entries accepted",
+                user_id, len(turns),
+            )
+            return
+
+        # 5. save
+        last_turn_id = turns[-1].id if turns else None
+        await _save_worker_entries(
+            user_id, entries, source_turn_id=last_turn_id,
+        )
+        logger.info(
+            "[extractor] user=%s turns=%d → %d entries saved "
+            "(source=worker, source_turn_id=%s)",
+            user_id, len(turns), len(entries), last_turn_id,
+        )
 
     async def run_loop(self) -> None:
         """主循环。任何 batch 异常吞 + log，sleep 后继续。"""
