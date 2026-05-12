@@ -339,34 +339,68 @@ function ClientRow({
           )}
         </div>
       </div>
-      {isExpanded && (
+      {/*
+        hotfix-6 Part 1: 这是 ClientRow 内**唯一**渲染 tool 列表的位置。
+        以前 audit 怀疑还有别的路径 — 排查结论是无（line 263 是 caret icon、
+        line 284-294 是 "X/Y cap" 文本 badge，不是 tool 列表）。本块整体只
+        在 isExpanded=true 时渲染；isExpanded 来自 useState<Set<string>>(new Set())
+        初始化的 expanded Set，因此首次渲染恒为 false（折叠）。**不要**把这
+        段从 isExpanded gate 里挪出去 —— 否则会回归到"server 默认全展开 +
+        所有 capability 平铺一长串"的 UX-001 之前形态。
+      */}
+      {isExpanded ? (
+        <ToolList
+          client={client}
+          toolToggling={toolToggling}
+          onToolToggle={onToolToggle}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// ToolList — accordion 展开后的 capability 列表块。
+//   抽出 sub-component 让"渲染 tool 列表"这个 side effect 集中在一个组件里，
+//   防止未来 refactor 时不小心把 map 路径泄露到 isExpanded gate 外。
+// ---------------------------------------------------------------------------
+
+function ToolList({
+  client,
+  toolToggling,
+  onToolToggle,
+}: {
+  client: MCPClientStatus;
+  toolToggling: string | null;
+  onToolToggle: (server: MCPClientStatus, tool: MCPToolStatus, next: boolean) => void;
+}) {
+  return (
+    <div
+      className="mt-2"
+      style={{
+        marginLeft: 16,
+        paddingLeft: 8,
+        borderLeft: '1px dashed var(--color-border)',
+      }}
+    >
+      {client.tools.length === 0 ? (
         <div
-          className="mt-2"
-          style={{
-            marginLeft: 16,
-            paddingLeft: 8,
-            borderLeft: '1px dashed var(--color-border)',
-          }}
+          className="text-[11px] py-1"
+          style={{ color: 'var(--color-text-secondary)' }}
         >
-          {client.tools.length === 0 ? (
-            <div
-              className="text-[11px] py-1"
-              style={{ color: 'var(--color-text-secondary)' }}
-            >
-              （未连接或暂无 capability —— 先启用本 server）
-            </div>
-          ) : (
-            client.tools.map((t) => (
-              <ToolRow
-                key={t.name}
-                server={client}
-                tool={t}
-                disabled={!client.enabled || toolToggling === `${client.name}::${t.name}`}
-                onChange={(next) => onToolToggle(client, t, next)}
-              />
-            ))
-          )}
+          （未连接或暂无 capability —— 先启用本 server）
         </div>
+      ) : (
+        client.tools.map((t) => (
+          <ToolRow
+            key={t.name}
+            server={client}
+            tool={t}
+            disabled={!client.enabled || toolToggling === `${client.name}::${t.name}`}
+            onChange={(next) => onToolToggle(client, t, next)}
+          />
+        ))
       )}
     </div>
   );
