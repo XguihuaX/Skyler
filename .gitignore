@@ -12,6 +12,10 @@ frontend/dist/
 *.db-shm
 *.db-wal
 *.db.backup-*
+
+# hotfix-8: config.yaml duplicate-block 备份（防未来 hotfix 期间一次性 snapshot 误 commit）
+config.yaml.backup-before-*
+
 .env
 .DS_Store
 *.log

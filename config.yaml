@@ -1,4 +1,4 @@
-default_model: openai/qwen3.6-plus
+default_model: openai/qwen3.6-max-preview
 planner_model: openai/qwen-turbo
 default_user_id: default
 available_models:
@@ -68,7 +68,7 @@ search:
 cache:
   profile_ttl_seconds: 300
 tts:
-  enabled: true
+  enabled: false
   provider: cosyvoice
   cosyvoice:
     model: cosyvoice-v3-flash
@@ -125,10 +125,6 @@ briefing:
 proactive:
   enabled: true
   character_id_override: null
-  # v3-G chunk 2.6 mode 互斥：'wake_call' / 'morning_briefing' / 'off'
-  # 'wake_call' 推荐——默认（模式 B 邀请对话，cron 短问候 + 用户响应触发简报）
-  # 'morning_briefing'（模式 A 单方面播报，cron 整段简报）
-  # 'off' 不注册任何 cron
   mode: wake_call
   morning_briefing:
     enabled: true
@@ -139,7 +135,6 @@ proactive:
     pending_ttl_minutes: 30
     default_snooze_minutes: 30
     city: 东京
-  # v3-G chunk 4 Part C — v3-F' trigger pack（模式 B 邀请对话）
   triggers:
     lunch_call:
       enabled: true
@@ -149,10 +144,10 @@ proactive:
       enabled: true
       cron: 30 18 * * *
     bedtime_chat:
-      enabled: false   # 默认关，敏感场景手动开
+      enabled: false
       cron: 30 22 * * *
     long_idle:
-      enabled: false   # 默认关，最容易骚扰
+      enabled: false
       idle_threshold_minutes: 30
       cooldown_minutes: 90
       heartbeat_grace_seconds: 30
@@ -184,11 +179,6 @@ mcp_clients:
       BRAVE_API_KEY: ${BRAVE_API_KEY}
     enabled: false
     expose_via_skyler_server: false
-  # v3.5 chunk 7 姿态 B demo —— Notion 官方 MCP server。
-  # 包名：@notionhq/notion-mcp-server（Notion 官方维护，makenotion/notion-mcp-server）。
-  # 凭证 NOTION_API_KEY 由 SettingsPanel "扩展能力" section 配置后写入
-  # mcp_credentials 表；启动子进程时 client.py 自动注入到 env，覆盖此处可能
-  # 留空的 env 字段。
   notion:
     description: 搜索 / 创建 / 更新 Notion 页面（需要 NOTION_API_KEY，UI 配置）
     transport: stdio
@@ -239,3 +229,4 @@ activity_watcher:
     - '10.0.*'
   trigger_throttle_minutes: 30   # 同类型 activity trigger 间隔
   max_daily_triggers: 5          # 一天最多触发 activity trigger 数（0 = 无上限）
+
