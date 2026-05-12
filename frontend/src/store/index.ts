@@ -189,6 +189,12 @@ interface AppState {
   notifications: AppNotification[];
   pushNotification: (n: { type: 'notify' | 'alarm'; content: string; todoId?: number }) => void;
 
+  // v3.5 chunk 8a — 后端权限自检失败 push 的 hint，前端 ActivityPermissionModal 弹窗。
+  // null = 不需要弹；string = 弹出 + 显示 hint。用户点 [打开系统设置] 跳转后由
+  // setActivityPermissionHint(null) 关掉。
+  activityPermissionHint: string | null;
+  setActivityPermissionHint: (v: string | null) => void;
+
   // VAD 参数（v2 模块 9 设置面板才能改，本模块用默认值）
   vadThreshold: number;       // 默认 65（0–100 区间）
   setVadThreshold: (v: number) => void;
@@ -372,6 +378,9 @@ export const useAppStore = create<AppState>((set) => ({
         { id: `${Date.now()}-${Math.random()}`, type, content, todoId, ts: Date.now() },
       ],
     })),
+
+  activityPermissionHint: null,
+  setActivityPermissionHint: (activityPermissionHint) => set({ activityPermissionHint }),
 
   vadThreshold: 65,
   setVadThreshold: (vadThreshold) => set({ vadThreshold }),

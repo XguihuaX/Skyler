@@ -379,11 +379,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # activity_watcher.enabled=false → 完全不启动（log 静默）。enabled=true →
     # 把 smart_handler 注册成 listener + start polling。listener / run_loop
     # 内部异常都吞 + log 不阻塞主对话。
+    # 启动后做一次 macOS 权限自检：NSWorkspace + AppleScript 都能跑则不报；
+    # AppleScript 失败 → log warning + 通过 ConnectionManager push 通知前端
+    # 弹"需要授权"modal。
     try:
-        from backend.integrations.activity_watcher import activity_watcher
+        from backend.integrations.activity_watcher import (
+            activity_watcher,
+            check_macos_permissions,
+        )
         from backend.proactive.activity_smart import activity_smart_handler
         activity_watcher.register_change_listener(activity_smart_handler)
         activity_watcher.start_polling()
+        # 权限自检（异步、不阻塞 startup）
+        async def _permission_check() -> None:
+            try:
+                result = await check_macos_permissions()
+                if not result["applescript_ok"] and result["ns_workspace_ok"]:
+                    logger.warning(
+                        "[activity] AppleScript permission missing; "
+                        "browser tab / document detection will silently fail. %s",
+                        result.get("hint"),
+                    )
+                    # 通过 ConnectionManager push 通知 default user（最佳努力）
+                    try:
+                        from backend.routes.ws import connection_manager
+                        default_uid = config_yaml.get("default_user_id") or "default"
+                        await connection_manager.push(default_uid, {
+                            "type": "activity_permission_missing",
+                            "hint": result.get("hint"),
+                        })
+                    except Exception as exc:
+                        logger.debug("[activity] WS push skipped: %s", exc)
+            except Exception as exc:
+                logger.warning("[activity] permission check failed: %s", exc)
+        asyncio.create_task(_permission_check())
     except Exception:
         logger.exception("[activity] watcher startup failed")
 

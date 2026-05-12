@@ -384,6 +384,40 @@ def _basename(path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Permission self-check（commit 7）
+# ---------------------------------------------------------------------------
+
+
+async def check_macos_permissions() -> dict:
+    """启动时一次性自检：NSWorkspace 能不能拿到 frontmost / AppleScript 能不能
+    探到 Chrome / Safari。
+
+    返 ``{ns_workspace_ok, applescript_ok, hint}``。前端首次启动应该在
+    ``ns_workspace_ok=true`` 但 ``applescript_ok=false`` 时弹"需要授权 Skyler
+    访问系统状态" + [打开系统设置] 跳转。
+    """
+    ns_ok = _am.get_active_app() is not None
+    # 用一段不依赖具体 app 是否启动的 AppleScript 验权限：``return "ok"`` 总
+    # 该成功；权限未授予会被 macOS 系统层拦截
+    test = _am._run_osascript('return "ok"')
+    applescript_ok = (test == "ok")
+    hint = None
+    if not ns_ok:
+        hint = "macOS NSWorkspace 不可用（非 macOS 或 pyobjc 缺失）"
+    elif not applescript_ok:
+        hint = (
+            "AppleScript 调用失败：可能是首次启动未授权。"
+            "前往 系统设置 → 隐私与安全性 → 自动化，允许 Skyler 控制"
+            "「Google Chrome」/「Safari」/「Microsoft Word」/「Pages」。"
+        )
+    return {
+        "ns_workspace_ok": ns_ok,
+        "applescript_ok": applescript_ok,
+        "hint": hint,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Singleton
 # ---------------------------------------------------------------------------
 

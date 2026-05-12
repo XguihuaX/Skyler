@@ -337,6 +337,12 @@ export function useWebSocket(): UseWebSocketReturn {
         s.pushNotification({ type: 'alarm', content: msg.content ?? '', todoId: msg.todo_id });
         break;
 
+      // v3.5 chunk 8a — 后端 startup 自检发现 AppleScript 权限未授予时 push
+      // 一条这个，让 ActivityPermissionModal 弹出来。
+      case 'activity_permission_missing':
+        s.setActivityPermissionHint((msg as { hint?: string }).hint ?? null);
+        break;
+
       default:
         console.warn('[WS] unknown message type:', msg.type);
     }

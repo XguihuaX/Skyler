@@ -99,6 +99,23 @@ class ActivityConfigPatch(BaseModel):
     fetch_url_content: Optional[bool] = None
 
 
+# ---------------------------------------------------------------------------
+# GET /api/activity/permissions
+# ---------------------------------------------------------------------------
+
+
+class PermissionsResponse(BaseModel):
+    ns_workspace_ok: bool
+    applescript_ok: bool
+    hint: Optional[str] = None
+
+
+@router.get("/activity/permissions", response_model=PermissionsResponse)
+async def activity_permissions() -> PermissionsResponse:
+    result = await aw.check_macos_permissions()
+    return PermissionsResponse(**result)
+
+
 @router.patch("/activity/config", response_model=ActivityConfigResponse)
 async def patch_activity_config(body: ActivityConfigPatch) -> ActivityConfigResponse:
     """部分字段 patch。在 ``config_yaml`` 的 ``activity_watcher`` block 上做
