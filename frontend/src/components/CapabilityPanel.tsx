@@ -11,6 +11,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Calendar,
+  ChevronDown,
+  ChevronRight,
   Circle,
   Clock,
   Cloud,
@@ -477,6 +479,22 @@ export default function CapabilityPanel() {
 
   const categories = Object.keys(grouped).sort();
 
+  // UX-003 commit 1: category-level accordion 折叠 state。``new Set()`` 初始 →
+  // 9 个 category 全折叠启动(每个 single line)。点 caret / header 整行翻
+  // 该 category 的开 / 收。calendar 特殊 UI(Google OAuth + 测试简报)在
+  // header 右侧持续可见,不被折叠隐藏(它是 category 整体级别,语义不属于
+  // 单 cap 列表)。
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+
+  const toggleCategory = useCallback((cat: string) => {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  }, []);
+
   return (
     <section
       className="rounded-lg p-4"
@@ -545,13 +563,37 @@ export default function CapabilityPanel() {
         </p>
       ) : (
         <div className="space-y-4">
-          {categories.map((cat) => (
-            <div key={cat}>
-              <div className="flex items-center justify-between mb-2">
+          {categories.map((cat) => {
+            const catExpanded = expandedCategories.has(cat);
+            return (
+            <div key={cat} data-category={cat}>
+              {/* UX-003: category header 整行可点 (caret 不止单点) 翻 fold。
+                  用 ``<div role="button">`` 而非 ``<button>`` —— 因为 header
+                  内嵌嵌 ``[测试简报]`` / Google OAuth 按钮(nested-button HTML
+                  非法 + a11y 反模式)。stopPropagation 保护那些子按钮不误翻
+                  fold。 */}
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => toggleCategory(cat)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggleCategory(cat);
+                  }
+                }}
+                aria-expanded={catExpanded}
+                aria-label={catExpanded ? `折叠 ${cat}` : `展开 ${cat}`}
+                className="w-full flex items-center justify-between mb-2 hover:opacity-80 transition cursor-pointer"
+              >
                 <h4
                   className="text-[11px] uppercase tracking-wide flex items-center gap-1.5"
                   style={{ color: 'var(--color-text-secondary)' }}
                 >
+                  {/* UX-003 caret (对齐 UX-001 / UX-002 视觉) */}
+                  {catExpanded
+                    ? <ChevronDown size={12} />
+                    : <ChevronRight size={12} />}
                   <span>{cat}</span>
                   {/* UX-002：category 级 capability 计数 badge */}
                   <span
@@ -566,11 +608,14 @@ export default function CapabilityPanel() {
                 </h4>
                 {/* UX-002 commit 3：calendar 类目专属 UI 全部归位到 category
                     header 右侧（Google OAuth status + 授权按钮 + 测试简报按钮）。
-                    原本在每张 calendar capability card 内的 Google OAuth footer
-                    属于"category 整体共享"语义，挂在单 capability 上会让每张卡
-                    重复显示同样的授权状态。 */}
+                    UX-003: header 现在是一个 <button> 整行可点翻 fold,所以右侧
+                    特殊 UI 包一层 div 用 stopPropagation 阻止点 [测试简报]/
+                    OAuth 时也误翻折叠态。 */}
                 {cat === 'calendar' && (
-                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <div
+                    className="flex items-center gap-2 flex-wrap justify-end"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {googleStatus && (
                       <CalendarGoogleAuthBadge
                         status={googleStatus}
@@ -609,55 +654,60 @@ export default function CapabilityPanel() {
                   {briefingPreview}
                 </p>
               )}
-              <div
-                className="rounded-md px-3"
-                style={{
-                  background: 'var(--color-bg-surface)',
-                  border: '1px solid var(--color-border)',
-                }}
-              >
-                {grouped[cat].map((cap) => (
-                  <CapabilityRow
-                    key={cap.name}
-                    name={cap.name}
-                    displayName={cap.display_name}
-                    briefDescription={_briefDesc(cap.description)}
-                    leftIcon={<CapabilityIcon name={cap.icon} />}
-                    statusBadge={
-                      <>
-                        <HealthDot status={cap.health.status} />
-                        <span
-                          className="text-[10px]"
-                          style={{ color: 'var(--color-text-secondary)' }}
-                        >
-                          {HEALTH_LABEL[cap.health.status]}
-                        </span>
-                        {cap.source_server && (
+              {/* UX-003 commit 1: category body 只在 catExpanded=true 时渲染。
+                  默认全 category 折叠成 single-line header。 */}
+              {catExpanded && (
+                <div
+                  className="rounded-md px-3"
+                  style={{
+                    background: 'var(--color-bg-surface)',
+                    border: '1px solid var(--color-border)',
+                  }}
+                >
+                  {grouped[cat].map((cap) => (
+                    <CapabilityRow
+                      key={cap.name}
+                      name={cap.name}
+                      displayName={cap.display_name}
+                      briefDescription={_briefDesc(cap.description)}
+                      leftIcon={<CapabilityIcon name={cap.icon} />}
+                      statusBadge={
+                        <>
+                          <HealthDot status={cap.health.status} />
                           <span
-                            className="ml-1 inline-flex items-center px-1 rounded text-[9px]"
-                            style={{
-                              background: 'var(--color-bg-elevated)',
-                              border: '1px solid var(--color-border-subtle)',
-                              color: 'var(--color-text-secondary)',
-                            }}
-                            title={`来自外部 MCP server: ${cap.source_server}`}
+                            className="text-[10px]"
+                            style={{ color: 'var(--color-text-secondary)' }}
                           >
-                            [ext · {cap.source_server}]
+                            {HEALTH_LABEL[cap.health.status]}
                           </span>
-                        )}
-                      </>
-                    }
-                    expandedContent={
-                      <CapabilityDetail
-                        cap={cap}
-                        onRefresh={onCardRefresh}
-                      />
-                    }
-                  />
-                ))}
-              </div>
+                          {cap.source_server && (
+                            <span
+                              className="ml-1 inline-flex items-center px-1 rounded text-[9px]"
+                              style={{
+                                background: 'var(--color-bg-elevated)',
+                                border: '1px solid var(--color-border-subtle)',
+                                color: 'var(--color-text-secondary)',
+                              }}
+                              title={`来自外部 MCP server: ${cap.source_server}`}
+                            >
+                              [ext · {cap.source_server}]
+                            </span>
+                          )}
+                        </>
+                      }
+                      expandedContent={
+                        <CapabilityDetail
+                          cap={cap}
+                          onRefresh={onCardRefresh}
+                        />
+                      }
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </section>
