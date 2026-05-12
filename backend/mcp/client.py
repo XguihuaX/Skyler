@@ -51,6 +51,8 @@ from backend.capabilities import (
 from backend.config import config_yaml
 # v3.5 chunk 7：DB 驱动的 credentials + runtime enable override
 from backend.mcp import credentials as _creds
+# UX-001：DB 驱动的 per-tool enable override
+from backend.mcp import tool_state as _tool_state
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,10 @@ class _ClientHandle:
         self.tool_count: int = 0
         self.connected: bool = False
         self.last_error: Optional[str] = None
+        # UX-001：connected server 暴露的 tool 元数据。enabled 反映 DB override
+        # （未在 mcp_tool_state 表里登记的 tool 默认 enabled=True）。
+        # disconnected → []。
+        self.tools: list[dict] = []
 
     def transport(self) -> str:
         return str(self.conf.get("transport") or "stdio")
@@ -167,8 +173,22 @@ async def _connect_one(handle: _ClientHandle) -> None:
         # 拉 tools 反向注册
         tools_resp = await session.list_tools()
         tools = list(tools_resp.tools)
+        # UX-001：先一次性拉本 server 的 per-tool override（少一次 N 次 DB 查询）
+        overrides = await _tool_state.list_overrides(handle.name)
         registered = 0
+        tool_meta: list[dict] = []
         for tool in tools:
+            t_enabled = overrides.get(tool.name, True)
+            tool_meta.append({
+                "name": tool.name,
+                "description": getattr(tool, "description", "") or "",
+                "enabled": t_enabled,
+            })
+            if not t_enabled:
+                # 用户在 UI 把这条单独关了 —— 不注册到 CapabilityRegistry，
+                # LLM 见不到，schema 不暴露。重启后 enabled 翻 True 时
+                # `set_tool_enabled` 走 register 路径补回来。
+                continue
             cap = _capability_from_external_tool(handle, session, tool)
             try:
                 CapabilityRegistry().register_runtime(cap)
@@ -183,11 +203,14 @@ async def _connect_one(handle: _ClientHandle) -> None:
         handle.session = session
         handle.exit_stack = stack
         handle.tool_count = registered
+        handle.tools = tool_meta
         handle.connected = True
         handle.last_error = None
+        skipped = len(tools) - registered
         logger.info(
-            "[mcp.client] %s connected (%s), %d tools registered",
-            handle.name, transport_kind, registered,
+            "[mcp.client] %s connected (%s), %d/%d tools registered "
+            "(%d disabled per UI override)",
+            handle.name, transport_kind, registered, len(tools), skipped,
         )
     except Exception:
         # 连接失败 → 释放已经入栈的资源
@@ -279,6 +302,7 @@ async def _disconnect_one(handle: _ClientHandle) -> None:
     handle.exit_stack = None
     handle.connected = False
     handle.tool_count = 0
+    handle.tools = []
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +415,76 @@ async def disable(name: str) -> None:
             await _disconnect_one(handle)
 
 
+async def set_tool_enabled(server_name: str, tool_name: str, enabled: bool) -> dict:
+    """UX-001：单 tool 级 enable/disable。持久化到 ``mcp_tool_state``。
+
+    server 已连接：
+      enabled=True  且当前未注册 → register + bump tool_count
+      enabled=False 且当前已注册 → unregister + decrement tool_count
+    server 未连接：仅持久化 override，下次 connect 时生效。
+
+    返回该 server 最新的 ``tools`` 列表（与 list_status 同 shape）+ ``tool_count``。
+
+    Raises:
+        KeyError: server name 不在 config
+        ValueError: tool_name 不在该 server 暴露的 tool 列表里
+    """
+    async with _lock:
+        if server_name not in _clients:
+            raise KeyError(server_name)
+        handle = _clients[server_name]
+        # 必须先有一份 tool meta（要么 server 已连接，要么 server 关着但
+        # 历史上连过一次 —— 当前实现：disconnected → tools=[]，所以 server
+        # 关时不允许翻 per-tool toggle。先 enable server 再翻 tool。）
+        idx = next((i for i, t in enumerate(handle.tools) if t["name"] == tool_name), None)
+        if idx is None:
+            raise ValueError(
+                f"tool {tool_name!r} not advertised by server {server_name!r} "
+                f"(connect server first to populate tool list)"
+            )
+        was_enabled = bool(handle.tools[idx]["enabled"])
+        # 持久化 + 内存同步
+        await _tool_state.set_enabled(server_name, tool_name, enabled)
+        handle.tools[idx]["enabled"] = enabled
+        # CapabilityRegistry diff：根据 transition 决定 register/unregister
+        if handle.connected and handle.session is not None:
+            cap_name = f"ext.{server_name}.{tool_name}"
+            reg = CapabilityRegistry()
+            if enabled and not was_enabled:
+                # 需要原始 tool 对象重建 capability。从 session list_tools 再拉一次。
+                tools_resp = await handle.session.list_tools()
+                tool_obj = next(
+                    (t for t in tools_resp.tools if t.name == tool_name), None,
+                )
+                if tool_obj is None:
+                    logger.warning(
+                        "[mcp.client] %s.%s vanished from list_tools; skipping re-register",
+                        server_name, tool_name,
+                    )
+                else:
+                    cap = _capability_from_external_tool(handle, handle.session, tool_obj)
+                    try:
+                        reg.register_runtime(cap)
+                    except ValueError:
+                        reg.unregister_runtime(cap.name)
+                        reg.register_runtime(cap)
+                    handle.tool_count += 1
+            elif not enabled and was_enabled:
+                # unregister 不存在的 cap 抛 KeyError → silent
+                try:
+                    reg.unregister_runtime(cap_name)
+                    handle.tool_count = max(0, handle.tool_count - 1)
+                except KeyError:
+                    pass
+        return {
+            "server_name": server_name,
+            "tool_name": tool_name,
+            "enabled": enabled,
+            "tool_count": handle.tool_count,
+            "tools": list(handle.tools),
+        }
+
+
 async def list_status() -> list:
     """给 ``/api/mcp/clients/status`` 用。返回 pydantic-friendly dict 列表。
 
@@ -417,6 +511,9 @@ async def list_status() -> list:
             "last_error": handle.last_error,
             "env_required": required,
             "missing_credentials": missing,
+            # UX-001：per-server tool 列表 + 单 tool enabled 状态。
+            # disconnected → []；UI 用 server enabled + tools 长度做"X cap"角标。
+            "tools": list(handle.tools),
         })
     return out
 

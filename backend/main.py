@@ -74,6 +74,9 @@ from backend.database.migrations.v3_5_chunk9_memory_forgetting_curve import (
 from backend.database.migrations.v3_5_chunk11_profile_data import (
     run_migration as migrate_v3_5_chunk11_profile_data,
 )
+from backend.database.migrations.v3_5_uxr1_mcp_tool_state import (
+    run_migration as migrate_v3_5_uxr1_mcp_tool_state,
+)
 from backend.database.migrations.v3_5_chunk10_memory_structured import (
     run_migration as migrate_v3_5_chunk10_memory_structured,
 )
@@ -213,6 +216,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 老 entries 标 extraction_source='legacy'；worker 启动后新 entries 标
     # 'worker'，save_memory tool 调用的标 'llm_save_memory'。
     await migrate_v3_5_chunk10_memory_structured()
+
+    # ── 1b20. UX-001: mcp_tool_state 表 ────────────────────────────────────
+    # chunk 7 mcp_client_state 是 server 级 toggle；本表加 per-tool（capability）
+    # 级 toggle。未登记的 tool 视为 enabled=True；server 关时 connect 阶段
+    # 根本不 register tools，无需查表。
+    await migrate_v3_5_uxr1_mcp_tool_state()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

@@ -43,6 +43,13 @@ class MCPServerStatus(BaseModel):
 # External MCP clients status / reconnect
 # ---------------------------------------------------------------------------
 
+class MCPToolItem(BaseModel):
+    """UX-001：单 tool 在 ExtensionsSection 折叠后的展开行。"""
+    name: str
+    description: str = ""
+    enabled: bool
+
+
 class MCPClientStatusItem(BaseModel):
     name: str
     description: str
@@ -55,6 +62,8 @@ class MCPClientStatusItem(BaseModel):
     # v3.5 chunk 7：UI 凭证配置驱动
     env_required: list[str] = []
     missing_credentials: list[str] = []
+    # UX-001：connected server 已注册的 tool 列表 + 单 tool enabled override
+    tools: list[MCPToolItem] = []
 
 
 class MCPClientsStatusResponse(BaseModel):
@@ -214,6 +223,48 @@ async def set_client_credentials(
         server_name=name,
         keys=[CredentialsListItem(**k) for k in keys],
     )
+
+
+# ---------------------------------------------------------------------------
+# UX-001：per-tool enable/disable
+# ---------------------------------------------------------------------------
+
+
+class ToolEnabledBody(BaseModel):
+    enabled: bool
+
+
+class ToolEnabledResponse(BaseModel):
+    server_name: str
+    tool_name: str
+    enabled: bool
+    tool_count: int
+    tools: list[MCPToolItem]
+
+
+@router.put(
+    "/mcp/clients/{name}/tools/{tool_name}/enabled",
+    response_model=ToolEnabledResponse,
+)
+async def set_tool_enabled(
+    name: str, tool_name: str, body: ToolEnabledBody,
+) -> ToolEnabledResponse:
+    """UI 单 tool toggle。
+
+    * server 未连接 → 422（先 enable server 再翻 tool）—— server.tools 为空
+      就没法知道 tool_name 合法不合法
+    * tool_name 不在 server 暴露列表 → 422
+    * 翻 disabled → unregister 该 ext.<server>.<tool> capability，立即对 LLM 不可见
+    * 翻 enabled → re-register
+    """
+    from backend.mcp import client as mcp_client
+    try:
+        result = await mcp_client.set_tool_enabled(name, tool_name, body.enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"client {name!r} not configured")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return ToolEnabledResponse(**result)
 
 
 @router.get("/mcp/server/status", response_model=MCPServerStatus)
