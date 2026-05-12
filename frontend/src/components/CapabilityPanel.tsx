@@ -40,13 +40,11 @@ import {
   triggerTestBriefing,
   type GoogleStatusResponse,
 } from '../lib/integrations';
-import {
-  fetchMcpClientsStatus,
-  fetchMcpServerStatus,
-  reconnectMcpClient,
-  type MCPClientStatusItem,
-  type MCPServerStatus,
-} from '../lib/mcp';
+// UX-002：删 MCP banner + 外部 clients section（与 SettingsPanel 底部
+// ExtensionsSection (UX-001 + hotfix-6) 信息重复）。原有 fetchMcpClientsStatus
+// / fetchMcpServerStatus / reconnectMcpClient / MCPClientStatusItem /
+// MCPServerStatus 全部不再 import。
+import CapabilityRow from './CapabilityRow';
 
 // ---------------------------------------------------------------------------
 // icon 映射：capability.icon 字符串 → lucide-react 组件。未知 fallback 圆点。
@@ -69,7 +67,26 @@ const ICON_MAP: Record<string, LucideIcon> = {
 
 function CapabilityIcon({ name }: { name: string }) {
   const Icon = ICON_MAP[name] ?? Circle;
-  return <Icon size={18} />;
+  return <Icon size={14} />;
+}
+
+
+// UX-002：把 cap.description 截到 ~50 字符做 ``briefDescription``（折叠态
+// 单行显示）。优先在标点边界截断让短摘要更自然。
+function _briefDesc(full: string): string {
+  if (!full) return '';
+  const limit = 50;
+  if (full.length <= limit) return full;
+  const slice = full.slice(0, limit);
+  // 在标点 / 空格处尾随截断
+  const breakAt = Math.max(
+    slice.lastIndexOf('，'),
+    slice.lastIndexOf('。'),
+    slice.lastIndexOf('；'),
+    slice.lastIndexOf(' '),
+  );
+  const cut = breakAt > 20 ? slice.slice(0, breakAt) : slice;
+  return cut + '…';
 }
 
 // ---------------------------------------------------------------------------
@@ -136,249 +153,6 @@ function Badge({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// v3-G chunk 1.5 — MCP server banner
-//
-// 顶部状态条，告诉用户 Skyler 自身作 MCP server 的 endpoint + Bearer token。
-// token 默认遮蔽，[👁] toggle 显示，[📋] 复制完整 Bearer 头到剪贴板。
-// ---------------------------------------------------------------------------
-
-function MCPServerBanner({ status }: { status: MCPServerStatus | null }) {
-  const [showToken, setShowToken] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  if (!status || !status.enabled) {
-    return null;
-  }
-
-  const token = status.bearer_token;
-  const tokenDisplay = !token
-    ? '⚠️ 未配置 MCP_BEARER_TOKEN'
-    : showToken
-      ? token
-      : '●'.repeat(Math.min(token.length, 20));
-
-  const onCopy = async () => {
-    if (!token) return;
-    try {
-      await navigator.clipboard.writeText(`Bearer ${token}`);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch (e) {
-      console.error('[MCPBanner] clipboard failed:', e);
-    }
-  };
-
-  return (
-    <div
-      className="mb-3 rounded-lg p-3"
-      style={{
-        background: 'color-mix(in srgb, var(--color-accent) 14%, var(--color-bg-surface))',
-        border: '1px solid var(--color-border-subtle)',
-      }}
-    >
-      <div className="flex items-center gap-2 flex-wrap">
-        <Globe size={14} style={{ color: 'var(--color-text-primary)' }} />
-        <span
-          className="text-xs font-medium"
-          style={{ color: 'var(--color-text-primary)' }}
-        >
-          MCP server 已启用
-        </span>
-        <span
-          className="text-[11px]"
-          style={{ color: 'var(--color-text-secondary)' }}
-        >
-          http://localhost:8000{status.endpoint}
-        </span>
-        <span
-          className="ml-auto text-[10px]"
-          style={{ color: 'var(--color-text-secondary)' }}
-        >
-          {status.exposed_tool_count} tools 已暴露
-        </span>
-      </div>
-      <div className="flex items-center gap-2 mt-2">
-        <span
-          className="text-[10px]"
-          style={{ color: 'var(--color-text-secondary)' }}
-        >
-          Token:
-        </span>
-        <code
-          className="text-[10px] px-1.5 py-0.5 rounded font-mono select-all"
-          style={{
-            background: 'var(--color-bg-input)',
-            color: 'var(--color-text-primary)',
-            border: '1px solid var(--color-border-subtle)',
-          }}
-        >
-          {tokenDisplay}
-        </code>
-        {token && (
-          <>
-            <button
-              type="button"
-              onClick={() => setShowToken((v) => !v)}
-              className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80"
-              style={{ color: 'var(--color-text-secondary)' }}
-              title={showToken ? '隐藏' : '显示完整 token'}
-            >
-              {showToken ? <EyeOff size={10} /> : <Eye size={10} />}
-            </button>
-            <button
-              type="button"
-              onClick={() => void onCopy()}
-              className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80"
-              style={{ color: 'var(--color-text-secondary)' }}
-              title="复制 Bearer 头到剪贴板"
-            >
-              <Copy size={10} />
-              {copied ? '已复制' : ''}
-            </button>
-          </>
-        )}
-        <a
-          href="https://github.com/XguihuaX/Skyler/blob/main/docs/mcp-server-setup.md"
-          target="_blank"
-          rel="noreferrer"
-          className="ml-auto text-[10px] hover:opacity-80"
-          style={{ color: 'var(--color-text-secondary)' }}
-        >
-          📖 配置说明
-        </a>
-      </div>
-      {!status.bearer_token_configured && (
-        <p
-          className="mt-2 text-[10px]"
-          style={{ color: 'var(--color-text-secondary)' }}
-        >
-          .env 里 MCP_BEARER_TOKEN 未配置 —— 当前所有调用会被 503 拒绝。生成一个：
-          <code
-            className="mx-1 px-1 rounded"
-            style={{ background: 'var(--color-bg-input)' }}
-          >
-            openssl rand -hex 32
-          </code>
-          填进 .env 后重启后端。
-        </p>
-      )}
-    </div>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// v3-G chunk 1.5 — 外部 MCP clients section
-// ---------------------------------------------------------------------------
-
-interface MCPClientsSectionProps {
-  clients: MCPClientStatusItem[];
-  reconnectingId: string | null;
-  onReconnect: (name: string) => Promise<void>;
-}
-
-function MCPClientsSection({
-  clients, reconnectingId, onReconnect,
-}: MCPClientsSectionProps) {
-  if (clients.length === 0) return null;
-
-  return (
-    <div className="mb-4">
-      <h4
-        className="text-[11px] mb-2 uppercase tracking-wide"
-        style={{ color: 'var(--color-text-secondary)' }}
-      >
-        外部 MCP servers
-      </h4>
-      <div className="space-y-1">
-        {clients.map((c) => {
-          const dotColor = c.connected
-            ? 'var(--color-accent)'
-            : c.enabled
-              ? '#dc2626'
-              : 'var(--color-text-secondary)';
-          const stateLabel = c.connected
-            ? '已连接'
-            : c.enabled
-              ? '连接失败'
-              : '未启用';
-          return (
-            <div
-              key={c.name}
-              className="rounded-lg px-3 py-2 flex items-center gap-2 flex-wrap"
-              style={{
-                background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
-                border: '1px solid var(--color-border-subtle)',
-              }}
-            >
-              <span
-                className="inline-block w-2 h-2 rounded-full"
-                style={{ background: dotColor }}
-              />
-              <span
-                className="text-xs font-medium"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                {c.name}
-              </span>
-              <span
-                className="text-[10px]"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                {c.transport} · {stateLabel}
-                {c.connected && ` · ${c.tool_count} tools`}
-              </span>
-              {c.description && (
-                <span
-                  className="text-[10px] truncate"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                >
-                  · {c.description}
-                </span>
-              )}
-              {c.last_error && (
-                <span
-                  className="text-[10px] truncate flex-1 min-w-0"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                  title={c.last_error}
-                >
-                  · {c.last_error}
-                </span>
-              )}
-              {c.enabled && (
-                <button
-                  type="button"
-                  onClick={() => void onReconnect(c.name)}
-                  disabled={reconnectingId === c.name}
-                  className="ml-auto text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
-                  style={{
-                    background: 'var(--color-bg-elevated)',
-                    color: 'var(--color-text-primary)',
-                    border: '1px solid var(--color-border-subtle)',
-                  }}
-                >
-                  <RefreshCw
-                    size={10}
-                    className={reconnectingId === c.name ? 'animate-spin' : ''}
-                  />
-                  {reconnectingId === c.name ? '重连中…' : '重连'}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <p
-        className="text-[10px] mt-2"
-        style={{ color: 'var(--color-text-secondary)' }}
-      >
-        外部 MCP server 在 config.yaml 顶层 <code>mcp_clients</code> 块配置；改完重启后端生效。
-        详见 docs/mcp-client-setup.md。
-      </p>
-    </div>
-  );
-}
 
 
 // ---------------------------------------------------------------------------
@@ -395,7 +169,12 @@ interface CardProps {
   googleBusy?: boolean;
 }
 
-function CapabilityCard({
+// UX-002: 改 CapabilityCard → CapabilityDetail —— 渲染**展开后**的 body
+// (description / consumers / triggers / error / Google footer / refresh)，
+// 不再 render header (icon + name + health) 因为那部分已在 CapabilityRow 折
+// 叠态显示。整体作为 ``<CapabilityRow expandedContent={<CapabilityDetail ...>} />``
+// 的展开内容。
+function CapabilityDetail({
   cap,
   onRefresh,
   googleStatus,
@@ -419,68 +198,35 @@ function CapabilityCard({
   const isCalendar = cap.category === 'calendar' && !!googleStatus;
 
   return (
-    <div
-      className="rounded-lg p-3"
-      style={{
-        background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
-        border: '1px solid var(--color-border-subtle)',
-      }}
-    >
-      <div className="flex items-start gap-3">
-        <span
-          className="w-9 h-9 rounded-md flex items-center justify-center shrink-0"
-          style={{
-            background: 'var(--color-bg-elevated)',
-            color: 'var(--color-text-primary)',
-          }}
-        >
-          <CapabilityIcon name={cap.icon} />
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span
-              className="text-sm font-medium truncate"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
-              {cap.display_name}
-            </span>
-            <span className="flex items-center gap-1 ml-auto shrink-0">
-              <HealthDot status={cap.health.status} />
-              <span
-                className="text-[10px]"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                {HEALTH_LABEL[cap.health.status]}
-              </span>
-            </span>
-          </div>
-          <p
-            className="text-[11px] mt-0.5"
-            style={{ color: 'var(--color-text-secondary)' }}
+    <div className="py-1">
+      {/* category · name + 可选 ext 角标（在展开内容里也保留完整 id，方便复制） */}
+      <p
+        className="text-[11px]"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        {cap.category} · {cap.name}
+        {cap.source_server && (
+          <span
+            className="ml-1.5 inline-flex items-center px-1 rounded text-[9px]"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              border: '1px solid var(--color-border-subtle)',
+              color: 'var(--color-text-secondary)',
+            }}
+            title={`来自外部 MCP server: ${cap.source_server}`}
           >
-            {cap.category} · {cap.name}
-            {cap.source_server && (
-              <span
-                className="ml-1.5 inline-flex items-center px-1 rounded text-[9px]"
-                style={{
-                  background: 'var(--color-bg-elevated)',
-                  border: '1px solid var(--color-border-subtle)',
-                  color: 'var(--color-text-secondary)',
-                }}
-                title={`来自外部 MCP server: ${cap.source_server}`}
-              >
-                [ext · {cap.source_server}]
-              </span>
-            )}
-          </p>
-          <p
-            className="text-xs mt-2"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
-            {cap.description}
-          </p>
+            [ext · {cap.source_server}]
+          </span>
+        )}
+      </p>
+      <p
+        className="text-xs mt-2"
+        style={{ color: 'var(--color-text-primary)' }}
+      >
+        {cap.description}
+      </p>
 
-          <div className="flex flex-wrap items-center gap-1 mt-2">
+      <div className="flex flex-wrap items-center gap-1 mt-2">
             <span
               className="text-[10px]"
               style={{ color: 'var(--color-text-secondary)' }}
@@ -562,26 +308,24 @@ function CapabilityCard({
             </div>
           )}
 
-          {cap.has_health_check && (
-            <div className="flex justify-end mt-2">
-              <button
-                type="button"
-                onClick={() => void handleRefresh()}
-                disabled={refreshing}
-                className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
-                style={{ color: 'var(--color-text-secondary)' }}
-                title="重新检查健康状态"
-              >
-                <RefreshCw
-                  size={10}
-                  className={refreshing ? 'animate-spin' : ''}
-                />
-                刷新状态
-              </button>
-            </div>
-          )}
+      {cap.has_health_check && (
+        <div className="flex justify-end mt-2">
+          <button
+            type="button"
+            onClick={() => void handleRefresh()}
+            disabled={refreshing}
+            className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+            style={{ color: 'var(--color-text-secondary)' }}
+            title="重新检查健康状态"
+          >
+            <RefreshCw
+              size={10}
+              className={refreshing ? 'animate-spin' : ''}
+            />
+            刷新状态
+          </button>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -599,11 +343,11 @@ export default function CapabilityPanel() {
   const [googleStatus, setGoogleStatus] = useState<GoogleStatusResponse | null>(null);
   const [googleBusy,   setGoogleBusy]   = useState(false);
 
-  // v3-G chunk 1.5：MCP server 状态。顶部 banner 显示。
-  const [mcpServerStatus, setMcpServerStatus] = useState<MCPServerStatus | null>(null);
-  // v3-G chunk 1.5：外部 MCP clients 状态。
-  const [mcpClients,        setMcpClients]        = useState<MCPClientStatusItem[]>([]);
-  const [mcpReconnectingId, setMcpReconnectingId] = useState<string | null>(null);
+  // UX-002: 删 mcpServerStatus / mcpClients / mcpReconnectingId state ——
+  // 信息搬到 SettingsPanel 底部 ExtensionsSection (UX-001 + hotfix-6) 唯一
+  // 入口，不在 CapabilityPanel 顶部 banner 复制。``mcp_external`` category
+  // 的 capability（filesystem ×14 + brave-search ×2）仍正常列在 capability
+  // 主列表里，用 ``[ext · source_server]`` 角标区分。
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -635,45 +379,13 @@ export default function CapabilityPanel() {
     }
   }, []);
 
-  const refreshMcpServerStatus = useCallback(async () => {
-    try {
-      const s = await fetchMcpServerStatus();
-      setMcpServerStatus(s);
-    } catch (e) {
-      console.error('[CapabilityPanel] mcp server status failed:', e);
-      setMcpServerStatus(null);
-    }
-  }, []);
-
-  const refreshMcpClients = useCallback(async () => {
-    try {
-      const s = await fetchMcpClientsStatus();
-      setMcpClients(s.clients);
-    } catch (e) {
-      console.error('[CapabilityPanel] mcp clients status failed:', e);
-      setMcpClients([]);
-    }
-  }, []);
-
-  const onReconnectClient = useCallback(async (name: string) => {
-    setMcpReconnectingId(name);
-    try {
-      await reconnectMcpClient(name);
-      await refreshMcpClients();
-      await loadAll();
-    } catch (e) {
-      console.error('[CapabilityPanel] reconnect failed:', e);
-    } finally {
-      setMcpReconnectingId(null);
-    }
-  }, [loadAll, refreshMcpClients]);
+  // UX-002: 删 refreshMcpServerStatus / refreshMcpClients / onReconnectClient
+  // ——MCP server / clients 管理移到 SettingsPanel 底部 ExtensionsSection。
 
   useEffect(() => {
     void loadAll();
     void refreshGoogleStatus();
-    void refreshMcpServerStatus();
-    void refreshMcpClients();
-  }, [loadAll, refreshGoogleStatus, refreshMcpServerStatus, refreshMcpClients]);
+  }, [loadAll, refreshGoogleStatus]);
 
   const onCardRefresh = useCallback(async (name: string) => {
     try {
@@ -787,15 +499,13 @@ export default function CapabilityPanel() {
         外部 webhook）。
       </p>
 
-      {/* v3-G chunk 1.5 — Skyler 自身作 MCP server 的 banner */}
-      <MCPServerBanner status={mcpServerStatus} />
-
-      {/* v3-G chunk 1.5 — 外部 MCP servers 状态条 */}
-      <MCPClientsSection
-        clients={mcpClients}
-        reconnectingId={mcpReconnectingId}
-        onReconnect={onReconnectClient}
-      />
+      {/*
+        UX-002: 删 ``<MCPServerBanner />`` + ``<MCPClientsSection />`` —— MCP
+        管理移到 SettingsPanel 底部 ExtensionsSection (UX-001 + hotfix-6) 唯一
+        入口。外部 MCP server 暴露的 capability（``mcp_external`` category，
+        filesystem ×14 + brave-search ×2）仍在下方 capability 列表里正常显示，
+        每行用 ``[ext · source_server]`` 角标区分来源。
+      */}
 
       {loading && items.length === 0 ? (
         <p
@@ -824,12 +534,23 @@ export default function CapabilityPanel() {
             <div key={cat}>
               <div className="flex items-center justify-between mb-2">
                 <h4
-                  className="text-[11px] uppercase tracking-wide"
+                  className="text-[11px] uppercase tracking-wide flex items-center gap-1.5"
                   style={{ color: 'var(--color-text-secondary)' }}
                 >
-                  {cat}
+                  <span>{cat}</span>
+                  {/* UX-002：category 级 capability 计数 badge */}
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded normal-case"
+                    style={{
+                      background: 'var(--color-bg-elevated)',
+                      color: 'var(--color-text-secondary)',
+                    }}
+                  >
+                    {grouped[cat].length} cap
+                  </span>
                 </h4>
-                {/* v3-G chunk 1：calendar 类目右侧加测试简报按钮 */}
+                {/* v3-G chunk 1：calendar 类目右侧加测试简报按钮（commit 3
+                    会把 Google OAuth 也一并搬到 category header 这一行） */}
                 {cat === 'calendar' && (
                   <button
                     type="button"
@@ -860,16 +581,54 @@ export default function CapabilityPanel() {
                   {briefingPreview}
                 </p>
               )}
-              <div className="space-y-2">
+              <div
+                className="rounded-md px-3"
+                style={{
+                  background: 'var(--color-bg-surface)',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
                 {grouped[cat].map((cap) => (
-                  <CapabilityCard
+                  <CapabilityRow
                     key={cap.name}
-                    cap={cap}
-                    onRefresh={onCardRefresh}
-                    googleStatus={googleStatus}
-                    onGoogleAuth={onGoogleAuth}
-                    onGoogleRevoke={onGoogleRevoke}
-                    googleBusy={googleBusy}
+                    name={cap.name}
+                    displayName={cap.display_name}
+                    briefDescription={_briefDesc(cap.description)}
+                    leftIcon={<CapabilityIcon name={cap.icon} />}
+                    statusBadge={
+                      <>
+                        <HealthDot status={cap.health.status} />
+                        <span
+                          className="text-[10px]"
+                          style={{ color: 'var(--color-text-secondary)' }}
+                        >
+                          {HEALTH_LABEL[cap.health.status]}
+                        </span>
+                        {cap.source_server && (
+                          <span
+                            className="ml-1 inline-flex items-center px-1 rounded text-[9px]"
+                            style={{
+                              background: 'var(--color-bg-elevated)',
+                              border: '1px solid var(--color-border-subtle)',
+                              color: 'var(--color-text-secondary)',
+                            }}
+                            title={`来自外部 MCP server: ${cap.source_server}`}
+                          >
+                            [ext · {cap.source_server}]
+                          </span>
+                        )}
+                      </>
+                    }
+                    expandedContent={
+                      <CapabilityDetail
+                        cap={cap}
+                        onRefresh={onCardRefresh}
+                        googleStatus={googleStatus}
+                        onGoogleAuth={onGoogleAuth}
+                        onGoogleRevoke={onGoogleRevoke}
+                        googleBusy={googleBusy}
+                      />
+                    }
                   />
                 ))}
               </div>
