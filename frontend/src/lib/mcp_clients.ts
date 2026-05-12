@@ -6,6 +6,12 @@
 
 const BACKEND_BASE = 'http://127.0.0.1:8000';
 
+export interface MCPToolStatus {
+  name: string;
+  description: string;
+  enabled: boolean;
+}
+
 export interface MCPClientStatus {
   name: string;
   description: string;
@@ -17,6 +23,17 @@ export interface MCPClientStatus {
   last_error: string | null;
   env_required: string[];
   missing_credentials: string[];
+  // UX-001：connected server 暴露的 tool 列表 + 单 tool enabled override。
+  // disconnected → []。
+  tools: MCPToolStatus[];
+}
+
+export interface MCPToolEnabledResponse {
+  server_name: string;
+  tool_name: string;
+  enabled: boolean;
+  tool_count: number;
+  tools: MCPToolStatus[];
 }
 
 export interface MCPClientsStatusResponse {
@@ -85,6 +102,32 @@ export async function fetchMCPCredentials(
   );
   if (!res.ok) throw new Error(`fetch credentials failed: ${res.status}`);
   return (await res.json()) as MCPCredentialsListResponse;
+}
+
+// UX-001：单 tool enable/disable
+export async function setMCPToolEnabled(
+  serverName: string,
+  toolName: string,
+  enabled: boolean,
+): Promise<MCPToolEnabledResponse> {
+  const res = await fetch(
+    `${BACKEND_BASE}/api/mcp/clients/${encodeURIComponent(serverName)}` +
+      `/tools/${encodeURIComponent(toolName)}/enabled`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    },
+  );
+  if (!res.ok) {
+    let msg = `set tool enabled failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) msg = String(j.detail);
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return (await res.json()) as MCPToolEnabledResponse;
 }
 
 export async function setMCPCredentials(

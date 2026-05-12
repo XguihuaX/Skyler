@@ -13,6 +13,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   RefreshCw,
   XCircle,
   AlertCircle,
@@ -23,7 +25,9 @@ import {
   fetchMCPCredentials,
   setMCPClientEnabled,
   setMCPCredentials,
+  setMCPToolEnabled,
   type MCPClientStatus,
+  type MCPToolStatus,
 } from '../lib/mcp_clients';
 
 interface ExtensionsSectionProps {
@@ -36,6 +40,18 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
   const [error, setError]     = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
   const [credModalFor, setCredModalFor] = useState<MCPClientStatus | null>(null);
+  // UX-001：accordion expand state per server name + per-tool toggle 进行中标记
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [toolToggling, setToolToggling] = useState<string | null>(null);
+
+  const toggleExpand = (name: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -74,6 +90,30 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
     }
   };
 
+  // UX-001：单 tool toggle。乐观更新（不等 refetch）+ 失败回滚 + 全量 refresh
+  const onToolToggle = async (
+    server: MCPClientStatus, tool: MCPToolStatus, next: boolean,
+  ) => {
+    const key = `${server.name}::${tool.name}`;
+    setToolToggling(key);
+    // 乐观更新（立即反馈）
+    setClients((prev) => prev.map((c) => c.name !== server.name ? c : {
+      ...c,
+      tools: c.tools.map((t) => t.name === tool.name ? { ...t, enabled: next } : t),
+      tool_count: next ? c.tool_count + 1 : Math.max(0, c.tool_count - 1),
+    }));
+    try {
+      await setMCPToolEnabled(server.name, tool.name, next);
+      // 后端权威值
+      await refresh();
+    } catch (e) {
+      showToast(`tool 操作失败：${(e as Error).message}`);
+      await refresh();
+    } finally {
+      setToolToggling(null);
+    }
+  };
+
   return (
     <>
       <Section title="扩展能力 (MCP)">
@@ -106,8 +146,12 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
             key={c.name}
             client={c}
             disabled={toggling === c.name}
+            isExpanded={expanded.has(c.name)}
+            onExpand={() => toggleExpand(c.name)}
             onToggle={onToggle}
             onConfigure={() => setCredModalFor(c)}
+            onToolToggle={onToolToggle}
+            toolToggling={toolToggling}
           />
         ))}
         <div className="flex justify-end pt-1">
@@ -175,14 +219,30 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 interface ClientRowProps {
   client: MCPClientStatus;
   disabled: boolean;
+  isExpanded: boolean;
+  onExpand: () => void;
   onToggle: (c: MCPClientStatus, next: boolean) => void;
   onConfigure: () => void;
+  onToolToggle: (server: MCPClientStatus, tool: MCPToolStatus, next: boolean) => void;
+  toolToggling: string | null;
 }
 
-function ClientRow({ client, disabled, onToggle, onConfigure }: ClientRowProps) {
+function ClientRow({
+  client,
+  disabled,
+  isExpanded,
+  onExpand,
+  onToggle,
+  onConfigure,
+  onToolToggle,
+  toolToggling,
+}: ClientRowProps) {
   const missing = client.missing_credentials.length > 0;
   const status = badgeFor(client);
   const toggleDisabled = disabled || missing;
+  // UX-001：connected server 才显示 tool 列表（disconnected 时 tools=[]，
+  // caret 仍渲染但点开"暂无 tool 列表，先启用此 server"占位）
+  const expandable = client.tools.length > 0 || client.connected;
 
   return (
     <div
@@ -192,6 +252,21 @@ function ClientRow({ client, disabled, onToggle, onConfigure }: ClientRowProps) 
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
+            {expandable ? (
+              <button
+                type="button"
+                onClick={onExpand}
+                className="p-0.5 -ml-1 rounded hover:opacity-80"
+                aria-label={isExpanded ? '折叠' : '展开'}
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                {isExpanded
+                  ? <ChevronDown size={12} />
+                  : <ChevronRight size={12} />}
+              </button>
+            ) : (
+              <span style={{ width: 16, display: 'inline-block' }} />
+            )}
             <span
               className="text-sm font-medium"
               style={{ color: 'var(--color-text-primary)' }}
@@ -205,17 +280,29 @@ function ClientRow({ client, disabled, onToggle, onConfigure }: ClientRowProps) 
               {status.icon}
               {status.label}
             </span>
+            {/* UX-001：tool count 角标（独立于 status badge 里的 "running · N tools"）*/}
+            {client.tools.length > 0 && (
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded"
+                style={{
+                  background: 'var(--color-bg-elevated)',
+                  color: 'var(--color-text-secondary)',
+                }}
+              >
+                {client.tool_count}/{client.tools.length} cap
+              </span>
+            )}
           </div>
           <div
             className="text-xs"
-            style={{ color: 'var(--color-text-secondary)' }}
+            style={{ color: 'var(--color-text-secondary)', marginLeft: 16 }}
           >
             {client.description || '(无描述)'}
           </div>
           {client.last_error && (
             <div
               className="text-[10px] mt-1"
-              style={{ color: 'rgb(244, 63, 94)' }}
+              style={{ color: 'rgb(244, 63, 94)', marginLeft: 16 }}
             >
               错误：{client.last_error}
             </div>
@@ -223,7 +310,7 @@ function ClientRow({ client, disabled, onToggle, onConfigure }: ClientRowProps) 
           {missing && (
             <div
               className="text-[10px] mt-1"
-              style={{ color: 'var(--color-text-secondary)' }}
+              style={{ color: 'var(--color-text-secondary)', marginLeft: 16 }}
             >
               请先配置：{client.missing_credentials.join(', ')}
             </div>
@@ -252,7 +339,116 @@ function ClientRow({ client, disabled, onToggle, onConfigure }: ClientRowProps) 
           )}
         </div>
       </div>
+      {isExpanded && (
+        <div
+          className="mt-2"
+          style={{
+            marginLeft: 16,
+            paddingLeft: 8,
+            borderLeft: '1px dashed var(--color-border)',
+          }}
+        >
+          {client.tools.length === 0 ? (
+            <div
+              className="text-[11px] py-1"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
+              （未连接或暂无 capability —— 先启用本 server）
+            </div>
+          ) : (
+            client.tools.map((t) => (
+              <ToolRow
+                key={t.name}
+                server={client}
+                tool={t}
+                disabled={!client.enabled || toolToggling === `${client.name}::${t.name}`}
+                onChange={(next) => onToolToggle(client, t, next)}
+              />
+            ))
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// ToolRow（UX-001：accordion 展开后的单 capability 行）
+// ---------------------------------------------------------------------------
+
+function ToolRow({
+  server,
+  tool,
+  disabled,
+  onChange,
+}: {
+  server: MCPClientStatus;
+  tool: MCPToolStatus;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  // UX-001：server 关时 tool 行展示但 toggle 禁用 + "随 server 关" 提示
+  const dimmed = !server.enabled;
+  return (
+    <div
+      className="flex items-center justify-between py-1"
+    >
+      <div className="min-w-0 pr-2">
+        <div
+          className="text-xs font-mono truncate"
+          style={{
+            color: dimmed
+              ? 'var(--color-text-secondary)'
+              : 'var(--color-text-primary)',
+          }}
+        >
+          {tool.name}
+        </div>
+        {tool.description && (
+          <div
+            className="text-[10px] truncate"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            {tool.description}
+          </div>
+        )}
+      </div>
+      <ToggleSmall
+        value={tool.enabled && server.enabled}
+        disabled={disabled}
+        onChange={onChange}
+      />
+    </div>
+  );
+}
+
+
+function ToggleSmall({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: boolean;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={value}
+      disabled={disabled}
+      onClick={() => onChange(!value)}
+      className="relative w-8 h-4 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      style={{ background: value ? 'var(--color-accent)' : 'var(--color-bg-elevated)' }}
+    >
+      <span
+        className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all ${
+          value ? 'left-[18px]' : 'left-0.5'
+        }`}
+      />
+    </button>
   );
 }
 
