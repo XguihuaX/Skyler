@@ -4,7 +4,7 @@
 >
 > **改名提示**：项目原名 MomoOS，2026-05 重命名为 **Skyler**。代码内 localStorage key（`momoos.mode` / `momoos.theme` / `momoos.convListCollapsed`）暂未跟改，保留为代码现实；后续做 v3 收尾 commit 时统一重命名 + 加 fallback 读取（旧 key → 新 key），不破坏用户既有状态。
 >
-> **当前状态**：v2.7 全部完成 + v3-A/B/C/D + v3-E1/E2 + v3-F + v3-G' 完成（约 v3 整体 90%）。详见 §十六 阶段性进度。
+> **当前状态（2026-05-12）**：v3 ✅ 完成 + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅（媒体接入）+ v3.5 chunks 5 / 6abc / 7 / 8a / 9 / 10 / 11 ✅ + UX-001 ✅ 全部上线。Memory 系统升级到**三层结构**（chunk 10 server-side worker + chunk 11 structured profile_data + chunk 9 遗忘曲线）；chunk 8a 简化屏幕感知（NSWorkspace + AppleScript + smart trigger，5 类 activity_* trigger）；UX-001 MCP per-tool accordion + 情绪 UI 修复。**65+ capabilities, 11 proactive triggers, 7 architectural abstractions**。剩 chunk 8b 完整屏幕感知（截屏 + OCR + VLM）+ v5 远期（autodl / SoVITS / 自定义音色）+ v6+ 多设备。详见 §十六 阶段性进度。
 
 ---
 

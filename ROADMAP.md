@@ -2,7 +2,7 @@
 
 > Living document. 每完成一个里程碑同步更新 + commit + push。
 >
-> 当前状态（2026-05-06）：v2.7 完整 + v3-A/B/C/D + **v3-E1 (8 commit) + v3-E2 多模型 (9 commit) + v3-G' TTS UI + instruct emotion (5 commit + 2 patch) 完成**（约 v3 整体 90%）。Hiyori / 八重神子 Live2D 端到端正常；TTS provider/voice 两级下拉 + 7 个 cosyvoice 音色（含 instruct-aware 男声 longanyang）+ emotion 真生效（instruction 格式严格匹配文档）。剩 v3-F' 主动对话 / v3-G 成长系统。
+> 当前状态（2026-05-12）：v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 9 / 10 / 11 + UX-001 全部完成**。Memory 三层（chunk 9 遗忘曲线 + chunk 10 server-side worker + chunk 11 structured profile_data）落地；chunk 8a 简化屏幕感知（active app + browser URL + smart trigger 5 类 label + 30min 节流 + 一天 5 次 cap）上线；UX-001 MCP per-tool accordion + 情绪 UI 修复。剩 chunk 8b 完整屏幕感知（截屏 + OCR + VLM）+ v5-D / T1 / T2 远期 + v6+ 多设备。
 
 ---
 
@@ -35,6 +35,10 @@
 | **v3.5 chunk 6b：网易云 mpv 自解码（6 个 local_* capability）** | ✅ 完成（5 commit，2026-05-11） | 100% |
 | **v3.5 chunk 6c：小红书 URL 被动解析（红线锁死）** | ✅ 完成（5 commit，2026-05-11） | 100% |
 | **v3.5 chunk 7：Skill 集成 demo（docx capability + Notion MCP）** | ✅ 完成（5 commit，2026-05-11） | 100% |
+| **v3.5 chunk 9：memory 性能 + 遗忘曲线 + 跨角色共享** | ✅ 完成（7 commit，2026-05-12） | 100% |
+| **v3.5 chunk 10：server-side MemoryExtractor worker（治本 LLM hallucinate save_memory）** | ✅ 完成（8 commit，2026-05-12） | 100% |
+| **v3.5 chunk 11：structured profile_data（治本反推词污染）** | ✅ 完成（8 commit，2026-05-12） | 100% |
+| **UX-001：MCP per-tool accordion + 情绪 UI 修复** | ✅ 完成（4 commit，2026-05-12） | 100% |
 | **v3.5 chunk 8a：简化屏幕感知（active app + browser URL + smart trigger）** | ✅ 完成（9 commit，2026-05-12） | 100% |
 | **v3.5 chunk 8b：完整屏幕感知（截屏 + OCR + VLM 抽象 + 浏览器扩展）** | 📋 计划中 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |

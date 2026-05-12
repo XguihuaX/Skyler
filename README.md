@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/v3-✅%20complete-success)
 
-> **Status (May 2026)**: v3 ✅ complete + v3.5 chunk 5 ✅ + chunk 7 ✅ + chunk 6 (a/b/c) ✅ shipped. Media-integration wrap-up complete: chunk 6b mpv subprocess+IPC self-decoder for netease songs (6 `netease.local_*` capabilities, NCM autoplay actually closes the loop via mpv's native macOS NowPlaying registration — no PyObjC wrapper needed since mpv 0.34+ handles it natively); chunk 6c passive xiaohongshu URL parser (single capability `xhs.parse_url`, zero proactive scraping methods exposed at module level — red line enforced in code, not just policy). 51+ capabilities, 6 proactive triggers, 950+ tests / 0 regressions, 5 abstractions—CapabilityRegistry / ProactiveTrigger ABC / bidirectional MCP / SAFE path util / mpv-IPC wrapper. Next up: chunk 8 v4 屏幕感知（VLM 抽象 + Tauri 截图 + 隐私黑名单）。
+> **Status (May 2026)**: v3 ✅ complete + v3.5 chunks 5 / 6 (a/b/c) / 7 / 8a / 9 / 10 / 11 ✅ + UX-001 ✅ shipped. Memory system 升级到**三层结构**：chunk 10 server-side MemoryExtractor worker (5min batch + 10 道 quality filter) 治本 LLM hallucinate `save_memory`，chunk 11 structured `profile_data` JSON schema 治本 profile_summary 反推词污染，chunk 9 forgetting curve + 跨角色共享 + `_build_messages` 性能优化。chunk 8a 简化屏幕感知（active app + browser URL + 公开页面正文 + smart proactive trigger，pyobjc NSWorkspace + osascript，全本地零云端）。UX-001：MCP per-tool accordion toggle + 情绪 UI 避开 TopBar。**65+ capabilities, 11 proactive triggers (6 cron + 5 activity-based), 1200+ tests / 0 regressions, 7 abstractions** — CapabilityRegistry / ProactiveTrigger ABC / bidirectional MCP / per-tool MCP toggle / SAFE path util / mpv-IPC wrapper / ActivityWatcher。Next up: chunk 8b 完整屏幕感知（截屏 + OCR + VLM 抽象 + 浏览器扩展）。
 >
 > *Project formerly known as MomoOS — rebranded to Skyler in 2026-05.*
 
@@ -39,13 +39,13 @@ Heavy inspiration from [Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open
 - **TTS** — CosyVoice (DashScope, default) → Edge-TTS fallback; per-character `voice_model` config; SoVITS planned
 - **Auto-mute mic** when the assistant is speaking (prevents feedback loop)
 
-### 🧠 Memory & Personality
-- **Short-term memory** — last 20 turns, always injected
-- **Long-term memory** — SQLite + sentence-transformers vector search, top-5 relevant memories per turn, isolated per character
-- **4 memory tools** (LiteLLM tool calling) — `save_memory` / `delete_memory` / `list_memories` / `compress_memories`; LLM autonomously manages what to remember
-- **Two-layer user profile** — memory entries (facts) + free-text `profile_summary` auto-rewritten incrementally every 50 turns or on conversation deletion
-- **Memory viewer drawer** — browse / add / edit / delete with type-colored tags (fact / instruction / emotion / activity / daily)
-- **Memory toggles** — long-term memory, profile, web search all toggleable in Settings
+### 🧠 Memory & Personality（三层结构，v3.5 chunk 9 + 10 + 11 起）
+- **Layer 1 短期** — `chat_history` 表，按 conversation_id 组织，ChatAgent 每轮取最近 N 行；也是 Layer 2 worker 的唯一输入源
+- **Layer 2 长期事实记忆** — `memory` 表，**入库主路径改成 server-side worker**（chunk 10 `MemoryExtractor`，每 5 min batch 提取 + 10 道 quality filter + entry_type 四分类 + extraction_source 四态来源标签）。`save_memory` tool 降级为"用户明确说要记"的显式入口。检索按 chunk 9 **遗忘曲线** `score = relevance * (1+log(1+ac)) / (1+age*decay)` + threshold gate + 跨角色共享
+- **Layer 3 用户画像** — chunk 11 `users.profile_data` JSON schema（profession / current_projects / interests / recurring_topics / communication_style / active_hours / language_preferences），validator 严格 hard-reject 反推词；legacy `profile_summary` 自由段保留作 fallback；每日 cron 自动重生
+- **Memory viewer drawer** — entry_type tab（事实 / 偏好 / 事件 / 承诺）+ extraction_source 角标（自动提取 / 你说要记 / 手动 / 旧）+ confidence 显示
+- **Activity awareness（chunk 8a）** — Momo 知道你在用什么 app + 浏览器看什么 URL + 后台 fetch 公开页面正文（黑名单一票保护银行/邮箱/社交/localhost），按规则 + 30min 节流 + 一天 5 次 cap 主动开口
+- **Memory toggles** — long-term memory, profile, activity awareness, web search 全在 Settings 可单独 toggle
 
 ### 🤖 Multi-Agent Intelligence (v3-C: simplified)
 - **ChatAgent direct flow** — LiteLLM tool calling drives memory + built-in tools in a single LLM round-trip (PlannerAgent retired in v3-C)
