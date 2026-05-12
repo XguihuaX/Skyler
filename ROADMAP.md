@@ -2,7 +2,7 @@
 
 > Living document. 每完成一个里程碑同步更新 + commit + push。
 >
-> 当前状态（2026-05-12）：v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 9 / 10 / 11 + UX-001 + hotfix-6 + UX-002 全部完成**。Memory 三层（chunk 9 遗忘曲线 + chunk 10 server-side worker + chunk 11 structured profile_data）落地；chunk 8a 简化屏幕感知（active app + browser URL + smart trigger 5 类 label + 30min 节流 + 一天 5 次 cap）上线；UX-001 MCP per-tool accordion + 情绪 UI 修复；hotfix-6 chunk 8a 切 VSCode 无主动消息根因修（IDE 集合补 macOS NSWorkspace 实际 localizedName）+ 6+ 条 INFO 级 trigger chain log；**UX-002 把 CapabilityPanel 67 cap 全部 accordion 化 + 删冗余 MCP banner + category 计数 + calendar Google OAuth 归位到 category header**。剩 chunk 8b 完整屏幕感知（截屏 + OCR + VLM）+ v5-D / T1 / T2 远期 + v6+ 多设备。
+> 当前状态（2026-05-13）：v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 9 / 10 / 11 + UX-001 + hotfix-6 + UX-002 + hotfix-7 全部完成**。Memory 三层(chunk 9 遗忘曲线 + chunk 10 server-side worker + chunk 11 structured profile_data)落地；chunk 8a 简化屏幕感知上线；UX-001 MCP per-tool accordion + 情绪 UI 修复；hotfix-6 chunk 8a 切 VSCode 无主动消息根因修 + 6+ 条 INFO 级 trigger chain log；UX-002 CapabilityPanel 67 cap accordion + 删冗余 MCP banner + calendar Google OAuth 归位；**hotfix-7 proactive trigger 路径 state_update tag 漏 strip 根因修 + WS send_text_chunk 5 道 strip 兜底契约 + TTS toggle "undefined" 真因修(Tauri Rust Err string normalize)**。剩 chunk 8b 完整屏幕感知(截屏 + OCR + VLM)+ v5-D / T1 / T2 远期 + v6+ 多设备。
 
 ---
 
@@ -41,6 +41,7 @@
 | **UX-001：MCP per-tool accordion + 情绪 UI 修复** | ✅ 完成（4 commit，2026-05-12） | 100% |
 | **hotfix-6：chunk 8a 切 VSCode 无主动消息根因修 + UX-001 平铺防回归** | ✅ 完成（6 commit，2026-05-12） | 100% |
 | **UX-002：CapabilityPanel 67 cap 全面 accordion + 删冗余 MCP banner + calendar header 归位** | ✅ 完成（4 commit，2026-05-12） | 100% |
+| **hotfix-7：proactive trigger state_update strip 漏防 + WS send 5 道兜底契约 + TTS toggle "undefined" 真因修** | ✅ 完成（5 commit，2026-05-13） | 100% |
 | **v3.5 chunk 8a：简化屏幕感知（active app + browser URL + smart trigger）** | ✅ 完成（9 commit，2026-05-12） | 100% |
 | **v3.5 chunk 8b：完整屏幕感知（截屏 + OCR + VLM 抽象 + 浏览器扩展）** | 📋 计划中 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |

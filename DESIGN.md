@@ -2792,6 +2792,78 @@ MCP_EXTERNAL  [16 cap]
 
 ---
 
+## 十五之N、strip 工程契约延续 + frontend error normalize（hotfix-7 起）
+
+### strip 第 5 道 — WS send_text_chunk 兜底
+
+hotfix-1 起 ``backend/utils/text_filters.py`` 顶部就已声明:
+
+> 工程契约(v3 封盘后):任何未来新加 LLM 标签输出格式都必须同步加入
+> ``_TOOL_CALL_FALLBACK_STRIP_PATTERNS`` 或对应 strip 函数 +
+> ``_PARTIAL_OPEN_TAG_RE``。漏一个 → TTS 立刻念出标签内容,链路闭环坏掉。
+
+实测教训(hotfix-7):chunk 3b 落地 ``<state_update>`` tag 时,主路径
+``ws.py`` 挂了 ``_parse_state_update``,但 **proactive engine 的两个 stream
+函数(``run_trigger`` + ``run_wake_call_trigger``)漏挂**。结果 wake_call /
+morning_briefing / lunch_call / dinner_call / activity-based 5 个 trigger
+触发时 raw ``<state_update mood="..." />`` 字面字符串以 text_chunk push 进
+前端 widget。
+
+修法分两层:
+
+1. **根因**: 两个 stream 函数都补 ``_parse_state_update`` + ``_apply_
+   proactive_state_update`` helper(与 ws.py ``_apply_and_push_state_update``
+   同语义,push 通道走 ``connection_manager.push``)
+2. **防回归**(契约的"第 5 道"): 每个 ``text_chunk`` push 之前**统一**
+   调 ``strip_all_for_tts(sentence)`` 兜底:
+
+   - ws.py 主路径 line 1000
+   - engine.py ``run_trigger`` text_chunk push
+   - engine.py ``run_wake_call_trigger`` text_chunk push
+
+   正常路径下 sentence 已被 5 道 parser(emotion / state_update / thinking /
+   motion / tool_call fallback)剥过,本兜底 idempotent no-op。任一 parser
+   漏点 / LLM 新格式时,chunk 不会带 raw 标签出 WS;空 chunk 跳过 push。
+
+3. **持久化路径** ``_strip_format_tags`` 同样升级到 ``strip_all_for_tts``
+   (原只覆盖 emotion / motion / thinking 三档,漏 state_update +
+   tool_call fallback,导致 chat_history 入库后被 chunk 9 hotfix-3
+   ``SUSPICIOUS_TAG_RE`` 兜底剥 + 每轮 log warning 噪声)。
+
+### 工程契约升级版
+
+任何新增 LLM 标签输出格式必须:
+
+1. 加 strip 函数(``strip_X``)+ 加入 ``strip_all_for_tts`` 串联调用链
+2. 加 ``_parse_X`` parser 在 ``backend/agents/chat.py``
+3. **两条路径都挂 parser**:
+   - ``backend/routes/ws.py`` 主路径(``_handle_message_safe`` 的 stream loop)
+   - ``backend/proactive/engine.py`` 两个 stream 函数(``run_trigger`` +
+     ``run_wake_call_trigger``)
+4. 加 ``_PARTIAL_OPEN_TAG_RE`` 容错(防流式 sentence boundary 落在标签里)
+5. 测试覆盖防回归(参 ``tests/test_hotfix7_proactive_strip.py`` 12 条断言:
+   每个 text_chunk push 之前 800 字符窗口内必须出现 parser call)
+
+### Frontend error normalize 契约
+
+Tauri ``invoke()`` 在 Rust 端返 ``Result<T, String>`` Err 时,JS reject 收
+到的是**plain string** —— **不是** ``Error`` 对象。前端 catch 用
+``(e as Error).message`` 取消息 → 字符串上无属性 → 返 ``undefined`` →
+toast 显示 ``undefined``。
+
+hotfix-7 定型约定:
+
+* ``frontend/src/lib/window.ts`` 所有 ``invoke`` 调用必须用 try/catch 包,
+  ``typeof e === 'string'`` 分流后 ``throw new Error(...)`` 重新抛
+* 调用方失败路径用 ``extractErrorMessage(e: unknown)`` 兜底
+  (``SettingsPanel.tsx`` 已落地),三档处理 string / Error / object
+* HTTP 失败(fetch 非 2xx)的 error 必须带 status + body 摘要,不只是
+  ``HTTP 500``
+
+类似契约可推广到任何 ``invoke`` 包装层(``invokeBridge`` / 等)。
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建
