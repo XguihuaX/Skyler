@@ -387,3 +387,168 @@ def reset_state_for_test() -> None:
     _last_fire_per_label.clear()
     _today_count = 0
     _today_date = None
+
+
+# ---------------------------------------------------------------------------
+# chunk 8a-ext 慢路径: judge poll_listener
+# ---------------------------------------------------------------------------
+
+
+_JUDGE_LABEL = "activity_judge_chime_in"
+
+
+async def judge_poll_handler(state) -> None:  # state: ActivityState (避免顶部 import 循环)
+    """ActivityWatcher.register_poll_listener(...) 入口。
+
+    每 poll(默 30s)触发。流程:
+      1. 总开关 + 用户活跃对话 5 min skip
+      2. 同 label 30 min fire-throttle skip(同 ``_last_fire_per_label``,与快
+         路径共享)—— 节省 LLM 调用
+      3. daily_cap 检查 —— 配额满了不必 judge
+      4. 从 ActivityWatcher.get_current_stay_info() 拿 stay key + duration
+      5. 距离上次说话分钟数 (拿 chat_history 最近 user turn)
+      6. ``activity_judge.maybe_judge(...)`` 调 LLM (含 min_stay / stay-key
+         throttle 自身判断)
+      7. speak=True → fire ActivityProactiveTrigger("activity_judge_chime_in",
+         detail={app, url, title, topic_hint}) + 记账 _last_fire / _today_count++
+
+    任一子步骤异常都吞 + log + 不阻塞 watcher 主 loop。
+    """
+    try:
+        from backend.proactive import activity_judge as _judge
+        from backend.integrations.activity_watcher import activity_watcher
+        from backend.proactive.triggers.activity import ActivityProactiveTrigger
+        from backend.proactive.engine import run_trigger
+    except Exception as exc:
+        logger.warning("[activity_judge_handler] import failed: %s", exc)
+        return
+
+    if not _judge.get_judge_enabled():
+        return
+
+    user_id = get_default_user_id()
+
+    # 1. 活跃对话 5 min skip (与快路径同语义)
+    try:
+        active = await _active_conversation_recent(user_id, within_seconds=300)
+    except Exception as exc:
+        logger.warning("[activity_judge_handler] active-conv check failed: %s; skip", exc)
+        return
+    if active:
+        logger.debug("[activity_judge_handler] skip: user active in last 5 min")
+        return
+
+    # 2. fire-throttle 同 label(节省 LLM 调用 — 即便 judge 想 yes,fire 也会
+    #    被节流挡)
+    async with _state_lock:
+        now = time.time()
+        last_fire = _last_fire_per_label.get(_JUDGE_LABEL, 0.0)
+        throttle_sec = get_throttle_minutes() * 60
+        if now - last_fire < throttle_sec:
+            remaining = int((throttle_sec - (now - last_fire)) / 60)
+            logger.debug(
+                "[activity_judge_handler] skip: %s fire-throttled (%d min remaining)",
+                _JUDGE_LABEL, remaining,
+            )
+            return
+
+        # 3. daily_cap
+        _reset_daily_if_new_day()
+        cap = get_max_daily_triggers()
+        if cap > 0 and _today_count >= cap:
+            logger.debug(
+                "[activity_judge_handler] skip: daily_cap %d reached", cap,
+            )
+            return
+
+    # 4. 拿 stay info
+    stay_info = activity_watcher.get_current_stay_info()
+    if not stay_info:
+        return
+
+    # 5. 计算距上次用户说话分钟数(LLM prompt 用)
+    since_last_speak = await _minutes_since_last_user_turn(user_id)
+
+    # 6. url_content snippet
+    content_snippet = ""
+    if state and getattr(state, "url_content", None):
+        url_content = state.url_content or {}
+        c = url_content.get("content", "")
+        if isinstance(c, str):
+            content_snippet = c
+
+    decision = await _judge.maybe_judge(
+        stay_info=stay_info,
+        content_snippet=content_snippet,
+        today_count=_today_count,
+        daily_cap=cap if cap > 0 else 999,
+        since_last_speak_minutes=since_last_speak,
+    )
+
+    if decision is None:
+        return  # 内部已 log(throttled / parse fail / etc.)
+
+    if not decision.speak:
+        # judge 决定不说话 — INFO log 让用户看到 reason
+        logger.info(
+            "[activity_judge_handler] decision speak=False reason=%r — skip fire",
+            decision.reason,
+        )
+        return
+
+    # 7. fire trigger
+    async with _state_lock:
+        _last_fire_per_label[_JUDGE_LABEL] = time.time()
+        globals()["_today_count"] = _today_count + 1
+        logger.info(
+            "[activity_judge_handler] firing %s topic_hint=%r count_today=%d/%d",
+            _JUDGE_LABEL, decision.topic_hint, _today_count + 1, cap if cap > 0 else 999,
+        )
+
+    try:
+        trigger = ActivityProactiveTrigger(
+            label=_JUDGE_LABEL,
+            detail={
+                "app": stay_info.get("app"),
+                "url": stay_info.get("url"),
+                "title": stay_info.get("title", ""),
+                "topic_hint": decision.topic_hint or "",
+            },
+        )
+        await run_trigger(trigger, user_id=user_id)
+        logger.info(
+            "[activity_judge_handler] proactive trigger sent: label=%s", _JUDGE_LABEL,
+        )
+    except Exception as exc:
+        logger.warning("[activity_judge_handler] run_trigger failed: %s", exc)
+
+
+async def _minutes_since_last_user_turn(user_id: str) -> Optional[float]:
+    """查 chat_history 最近 ``role='user' kind='normal'`` 的时间,返分钟数 or None。
+
+    与 ``_active_conversation_recent`` 平行但拿真时间值给 judge prompt 用。
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            stmt = (
+                select(ChatHistory.created_at)
+                .where(
+                    ChatHistory.user_id == user_id,
+                    ChatHistory.role == "user",
+                )
+                .order_by(ChatHistory.created_at.desc())
+                .limit(1)
+            )
+            row = (await session.execute(stmt)).first()
+    except Exception:
+        return None
+    if not row:
+        return None
+    last_ts = row[0]
+    if last_ts is None:
+        return None
+    try:
+        delta = (datetime.now() - last_ts).total_seconds()
+        return max(0.0, delta / 60.0)
+    except Exception:
+        return None

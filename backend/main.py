@@ -387,8 +387,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             activity_watcher,
             check_macos_permissions,
         )
-        from backend.proactive.activity_smart import activity_smart_handler
+        from backend.proactive.activity_smart import (
+            activity_smart_handler,
+            judge_poll_handler,
+        )
         activity_watcher.register_change_listener(activity_smart_handler)
+        # chunk 8a-ext: 慢路径 judge listener,每 poll(默 30s)跑一次
+        # maybe_judge — 实际 LLM 调用受 min_stay (5 min) + judge_throttle
+        # (10 min) + fire_throttle (30 min) 三重门挡,默频率很低。
+        activity_watcher.register_poll_listener(judge_poll_handler)
         activity_watcher.start_polling()
         # 权限自检（异步、不阻塞 startup）
         async def _permission_check() -> None:

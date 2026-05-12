@@ -101,12 +101,37 @@ def _late_night_ide_prompt(detail: dict) -> str:
 - 友好不矫情"""
 
 
+def _judge_chime_in_prompt(detail: dict) -> str:
+    """chunk 8a-ext 慢路径: judge LLM 决定开口后,主 LLM 用此 prompt 生成开场。
+
+    judge LLM 返的 ``topic_hint`` 直接注入,让主 LLM 知道往哪个方向搭话(不
+    强制,LLM 仍可自由发挥但有 anchor)。
+    """
+    app = detail.get("app") or "(未知)"
+    url = detail.get("url") or ""
+    title = detail.get("title") or ""
+    topic_hint = detail.get("topic_hint") or ""
+    snip_lines = [f"【触发】慢路径 judge 决定主动开口(用户在 ``{app}`` 上停留较久)。"]
+    if title:
+        snip_lines.append(f"页面标题: ``{title[:60]}``")
+    if topic_hint:
+        snip_lines.append(f"判断模型建议话题方向: **{topic_hint}**(可作 anchor,不必强用)")
+    return _BASE_GUIDANCE + "\n\n" + "\n".join(snip_lines) + """
+
+【你的开场要传达】
+- 顺手关心 / 聊几句,不要复述用户行为细节
+- 不要假装"看到了网页内容",只是觉得用户停得久了搭个话
+- 一句话切入 + 一句话承接 / 反问"""
+
+
 _PROMPT_BUILDERS = {
-    "activity_ide_open":        _ide_open_prompt,
-    "activity_music":           _music_open_prompt,
-    "activity_long_focus":      _long_focus_prompt,
-    "activity_url_tech_doc":    _url_tech_doc_prompt,
-    "activity_late_night_ide":  _late_night_ide_prompt,
+    "activity_ide_open":          _ide_open_prompt,
+    "activity_music":             _music_open_prompt,
+    "activity_long_focus":        _long_focus_prompt,
+    "activity_url_tech_doc":      _url_tech_doc_prompt,
+    "activity_late_night_ide":    _late_night_ide_prompt,
+    # chunk 8a-ext 慢路径
+    "activity_judge_chime_in":    _judge_chime_in_prompt,
 }
 
 
