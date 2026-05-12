@@ -74,6 +74,9 @@ from backend.database.migrations.v3_5_chunk9_memory_forgetting_curve import (
 from backend.database.migrations.v3_5_chunk11_profile_data import (
     run_migration as migrate_v3_5_chunk11_profile_data,
 )
+from backend.database.migrations.v3_5_chunk10_memory_structured import (
+    run_migration as migrate_v3_5_chunk10_memory_structured,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -205,6 +208,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # legacy ``profile_summary`` 字段保留作 fallback；chunk 11 cron 触发后
     # 用户的 profile_data 字段开始填充，注入 system prompt 优先用它。
     await migrate_v3_5_chunk11_profile_data()
+
+    # ── 1b19. V3.5 chunk 10: memory 表结构化 6 列 + extractor_state 表 ─────
+    # 老 entries 标 extraction_source='legacy'；worker 启动后新 entries 标
+    # 'worker'，save_memory tool 调用的标 'llm_save_memory'。
+    await migrate_v3_5_chunk10_memory_structured()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

@@ -2,6 +2,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     LargeBinary,
@@ -98,6 +99,18 @@ class Memory(Base):
     # v3.5 chunk 9 Part 4：forgetting curve 元数据
     access_count = Column(Integer, nullable=False, default=0, server_default="0")
     last_accessed_at = Column(DateTime, nullable=True)  # NULL → 视同 created_at
+    # v3.5 chunk 10：server-side extractor + 显式 save_memory tool 元数据
+    extracted_at = Column(DateTime, nullable=True)
+    source_turn_id = Column(Integer, nullable=True)
+    confidence = Column(Float, nullable=True)
+    quality_score = Column(Float, nullable=True)
+    # entry_type 与 type 区别：``type`` 是 chunk 2 五分类约束（fact/instruction/
+    # emotion/activity/daily）；``entry_type`` 是 chunk 10 worker 抽出的四分类
+    # （fact/preference/event/commitment），二者并存允许 UI 双维度展示。
+    entry_type = Column(Text, nullable=True)
+    extraction_source = Column(
+        Text, nullable=False, default="legacy", server_default="legacy",
+    )
 
     user = relationship("User", back_populates="memories")
 
