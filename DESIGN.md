@@ -3798,6 +3798,103 @@ DELETE FROM activity_sessions WHERE start_at < (now - cleanup_days)
 
 ---
 
+## 十五之U、Capability category 单一归属 + 剪贴板 accordion(UX-005 起)
+
+### 设计目标
+
+UX-005 治理 UX-003 三层 accordion 之后两个用户实测体感问题:
+
+1. **media/music 重叠**:netease provider 跨 ``music``(NCM API 7 caps)
+   + ``media``(本地 mpv 播放 6 caps)两个 category。CapabilityPanel 渲染
+   后用户看见"网易云"在 music tab 和 media tab 各出现一次,体感困惑
+   ("Momo 到底能不能控制它?")。
+2. **剪贴板预览列表始终展开**:SettingsPanel "剪贴板" section 5 条预览
+   list 默认全展开 + 5s 轮询持续刷新,**占用 panel 大量视觉空间**。
+
+### audit-first 发现
+
+完整扫描 15 个 capability 文件 / 57 个 cap。**唯一**跨 category provider 是
+netease:
+
+| Provider | Backend file | Category 改前 | Cap 数 |
+|----------|--------------|---------------|--------|
+| netease | netease_music.py | music | 7 |
+| netease | netease_playback.py | media | 6 |
+
+**audit 副发现 — spec 提到的"spotify / apple_music"在 backend 不存在**:
+它们只是 ``backend/proactive/activity_smart.py:_MUSIC_APPS`` frozenset
+里给 chime-in detection 用的字符串(``"spotify"`` / ``"apple music"``),
+**不是** capability。用户当时报的 music tab "spotify/apple_music 重复"是
+误解 — 当前 music tab 只有 netease 一个 provider,真正的混乱是 netease
+横跨 music+media 两 category。
+
+### 归属规则决定(audit 报告 → 用户确认)
+
+候选 3 方案,用户选 **Choice A — 全归 music**:
+
+* netease_playback.py 6 caps:``category=media`` → ``category=music``
+* netease_music.py 7 caps 已是 music,不动
+* 结果:music = netease 单 provider 13 caps;media = bilibili + media_control
+
+**副决策 — xhs 新建 social category**: xhs 1 cap(被动 URL 解析)语义是
+社交内容站,跟 bilibili 视频站性质不同。用户主动要求加 social category,
+未来 Twitter / Facebook / Instagram 等都归 social。
+
+### 归属变化对比
+
+| Category | 改前 | 改后 |
+|----------|------|------|
+| music | netease 7 | **netease 13**(API + local 合并) |
+| media | bilibili 12 + media_control 5 + **netease 6** + **xhs 1** | bilibili 12 + media_control 5 = **17 -1 = 16** |
+| social | (不存在) | **xhs 1**(新建) |
+
+(media 总数变化:24 → 16,-8 caps 搬出去到 music/social)
+
+### 三层 accordion 视觉不变
+
+``_extractProvider`` / ``PROVIDER_DISPLAY`` / ``ProviderGroupRow`` 全部
+**不动** — 它们对具体 category 数 unagnostic,只对 provider key 做 grouping。
+唯一改的是 ``CapabilityPanel.tsx`` 顶部的 audit 注释列表(reflect 新 single/
+multi provider count)。
+
+### 剪贴板 accordion 折叠
+
+audit decision:backend ``_MAX_ITEMS=50`` deque + API ``n=5/max=20``,规模
+**不到** chunk 14 ActivityTimelineDrawer 那种"几百条历史 + 搜索筛选"
+量级。直接 accordion 折叠就够,**不需要**独立 Drawer。
+
+实现:``SettingsPanel.tsx ClipboardSection`` 加 ``listExpanded`` state
+(默 false),header 改 ``<button>`` chevron ``▸/▾`` + ``📋 最近 N 条``
+显示计数,展开后 header 行内显示 ``[↻ 刷新]`` + ``[全部清除]``(``role=
+"button" + tabIndex + stopPropagation`` UX-003 教训,防 click 冒泡触发
+外层 toggle + 避免 HTML 嵌套 ``<button>`` 非法结构),预览列表 + 空状态
+文案搬到 ``{listExpanded && ...}`` 内层。5s 轮询不变。
+
+### Audit guard 防回归(commit 3)
+
+``tests/test_ux005_category_uniqueness.py`` 6 case 锁两个 invariant:
+* **任意 provider 不跨多 category**: 任何人改 capability 元数据让 provider
+  再回到跨 category 状态(典型:netease 同时 music+media)立刻 fail
+* UX-005 commit 1 决定的具体归属(netease={music} / xhs={social} / media
+  provider 集合 == {bilibili, media})
+* category 计数下限(music >= 13 / social >= 1,防意外删 capability)
+
+### 文件清单
+
+* ``backend/capabilities/netease_playback.py``(6 处 ``category="media"``
+  → ``"music"``,replace_all 一次性改)
+* ``backend/capabilities/xiaohongshu.py``(1 处 ``category="media"`` →
+  ``"social"``)
+* ``frontend/src/components/CapabilityPanel.tsx``(+1 行 -1 行 audit 注释)
+* ``frontend/src/components/SettingsPanel.tsx``(+103 行 -65 行,
+  ClipboardSection accordion 折叠化)
+* ``tests/test_ux005_category_uniqueness.py``(new,130 行,6 case)
+
+209 PASS 跨 chunk 8a / 8a-ext / chunk 14 / UX-005 + bilibili/netease/
+clipboard/ux002 共 12 测试文件 / 0 regression。
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建

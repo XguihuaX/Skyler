@@ -2,7 +2,7 @@
 
 > Living document. 每完成一个里程碑同步更新 + commit + push。
 >
-> 当前状态(2026-05-13):v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 8a-ext / 8a-ext V2 / 9 / 10 / 11 / 14 + UX-001/UX-002/UX-003 + hotfix-3 ~ 10 全部完成**。chunk 14 activity timeline 系统:跟 chat_history 平行的第二条 timeline,session writer poll listener 在 (app, url) 元组变化时写一行 + Timeline API + 3 LLM capability + ChatAgent system prompt 注入 + ActivityTimelineDrawer + 每日 cleanup cron 保 30 天。Memory 三层(chunk 9 / chunk 10 worker / chunk 11 profile_data)落地;chunk 8a 简化屏幕感知 + **chunk 8a-ext 智能陪伴 judge 慢路径**(qwen-turbo 判断停留 5+ min app/URL 是否值得 chime in,快慢路径并存共享 daily_cap)+ **chunk 8a-ext V2 idle 闸**(macOS ``ioreg HIDIdleTime`` 检测键鼠静止 > 300s → skip judge 避免"人不在电脑前自言自语",零新 pip 依赖)+ **hotfix-9 get_browser_url frontmost gate**(修 chunk 8a spec 漏洞:Chrome 后台时 AppleScript 仍返 active tab,导致 watcher 把后台 bilibili URL 当成 active stay 误触发 judge)+ **hotfix-10 get_active_app osascript path**(修 chunk 8a 起 NSWorkspace.frontmostApplication 在 headless 进程缓存于启动那一拍的 bug,backend daemon 30 min 后仍报 app='终端' 全错);UX-001/UX-002/UX-003 SettingsPanel 三层 accordion 全栈完成;hotfix-3..hotfix-10 共 7 个修复。剩 chunk 14 frontend/cron/tests/docs + chunk 8b 完整屏幕感知 + v5-D/T1/T2 远期 + v6+ 多设备。
+> 当前状态(2026-05-13):v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 8a-ext / 8a-ext V2 / 9 / 10 / 11 / 14 + UX-001/UX-002/UX-003/UX-005 + hotfix-3 ~ 10 全部完成**。chunk 14 activity timeline 系统:跟 chat_history 平行的第二条 timeline,session writer poll listener 在 (app, url) 元组变化时写一行 + Timeline API + 3 LLM capability + ChatAgent system prompt 注入 + ActivityTimelineDrawer + 每日 cleanup cron 保 30 天。Memory 三层(chunk 9 / chunk 10 worker / chunk 11 profile_data)落地;chunk 8a 简化屏幕感知 + **chunk 8a-ext 智能陪伴 judge 慢路径**(qwen-turbo 判断停留 5+ min app/URL 是否值得 chime in,快慢路径并存共享 daily_cap)+ **chunk 8a-ext V2 idle 闸**(macOS ``ioreg HIDIdleTime`` 检测键鼠静止 > 300s → skip judge 避免"人不在电脑前自言自语",零新 pip 依赖)+ **hotfix-9 get_browser_url frontmost gate**(修 chunk 8a spec 漏洞:Chrome 后台时 AppleScript 仍返 active tab,导致 watcher 把后台 bilibili URL 当成 active stay 误触发 judge)+ **hotfix-10 get_active_app osascript path**(修 chunk 8a 起 NSWorkspace.frontmostApplication 在 headless 进程缓存于启动那一拍的 bug,backend daemon 30 min 后仍报 app='终端' 全错);UX-001/UX-002/UX-003 SettingsPanel 三层 accordion 全栈完成;hotfix-3..hotfix-10 共 7 个修复。剩 chunk 14 frontend/cron/tests/docs + chunk 8b 完整屏幕感知 + v5-D/T1/T2 远期 + v6+ 多设备。
 
 ---
 
@@ -50,6 +50,7 @@
 | **v3.5 chunk 8a-ext：智能陪伴 judge 慢路径(qwen-turbo + stay 5+ min + 共享 daily_cap)** | ✅ 完成（6 commit，2026-05-13） | 100% |
 | **v3.5 chunk 8a-ext V2：macOS idle 闸(ioreg HIDIdleTime + judge 第 4 道闸,防"人不在电脑前自言自语")** | ✅ 完成（5 commit，2026-05-13） | 100% |
 | **v3.5 chunk 14：activity timeline 系统(跟 chat_history 平行,session writer + Timeline API + 3 capability + ChatAgent 注入 + Drawer + cleanup cron)** | ✅ 完成（9 commit，2026-05-13） | 100% |
+| **UX-005：CapabilityPanel media/music 去重(netease 单一归 music + xhs 新 social)+ SettingsPanel 剪贴板 accordion 折叠** | ✅ 完成（4 commit，2026-05-13） | 100% |
 | **v3.5 chunk 8b：完整屏幕感知（截屏 + OCR + VLM 抽象 + 浏览器扩展）** | 📋 计划中 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |
 
