@@ -567,6 +567,9 @@ function ClipboardSection({ showToast }: ClipboardSectionProps) {
   const [enabled, setEnabled] = useState(true);
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [loading, setLoading] = useState(false);
+  // UX-005: 预览列表默认收起,与 UX-003 三层 accordion 视觉一致 — 用户点击
+  // header 才展开。轮询 5s 不动(列表收起也继续更新,展开后立刻看到最新)。
+  const [listExpanded, setListExpanded] = useState(false);
 
   // v3-G chunk 4 Part B: 启动时同步真实后端状态（不依赖 localStorage）
   useEffect(() => {
@@ -641,79 +644,114 @@ function ClipboardSection({ showToast }: ClipboardSectionProps) {
         🔒 剪贴板内容仅本地内存，重启清空，不外传。
       </div>
 
+      {/* UX-005: 预览列表 accordion 折叠化 — header 点击 toggle,默认收起。
+          视觉与 UX-003 三层 accordion 二级 ProviderGroupRow 一致。 */}
       <div className="py-2">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-            最近 {items.length} 条
+        <button
+          type="button"
+          onClick={() => setListExpanded((v) => !v)}
+          className="w-full flex items-center justify-between text-xs py-1.5 px-1 rounded hover:opacity-80"
+          style={{ color: 'var(--color-text-secondary)' }}
+          aria-expanded={listExpanded}
+        >
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-3 text-center">
+              {listExpanded ? '▾' : '▸'}
+            </span>
+            <span>📋 最近 {items.length} 条</span>
           </span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={fetchItems}
-              disabled={loading}
-              className="text-xs px-2 py-1 rounded"
-              style={{
-                background: 'var(--color-bg-input)',
-                border: '1px solid var(--color-border)',
-                color: 'var(--color-text-primary)',
-                opacity: loading ? 0.5 : 1,
-              }}
-            >
-              {loading ? '…' : '↻ 刷新'}
-            </button>
-            <button
-              type="button"
-              onClick={onClearAll}
-              className="text-xs px-2 py-1 rounded"
-              style={{
-                background: 'var(--color-bg-input)',
-                border: '1px solid var(--color-border)',
-                color: 'var(--color-text-primary)',
-              }}
-            >
-              全部清除
-            </button>
-          </div>
-        </div>
-        {items.length === 0 ? (
-          <div
-            className="text-xs italic py-2"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            （还没捕获到剪贴板内容；复制点东西试试）
-          </div>
-        ) : (
-          <ul className="space-y-1.5">
-            {items.map((it) => (
-              <li
-                key={it.captured_at}
-                className="text-xs px-2 py-1.5 rounded cursor-pointer hover:opacity-80"
+          {listExpanded && (
+            <span className="flex gap-2"
+              onClick={(e) => e.stopPropagation()}>
+              {/* stopPropagation:UX-003 教训防按钮 click 冒泡触发折叠 toggle */}
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); void fetchItems(); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void fetchItems();
+                  }
+                }}
+                className="text-xs px-2 py-1 rounded cursor-pointer"
                 style={{
                   background: 'var(--color-bg-input)',
-                  border: '1px solid var(--color-border-subtle)',
+                  border: '1px solid var(--color-border)',
+                  color: 'var(--color-text-primary)',
+                  opacity: loading ? 0.5 : 1,
+                }}
+              >
+                {loading ? '…' : '↻ 刷新'}
+              </span>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); void onClearAll(); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void onClearAll();
+                  }
+                }}
+                className="text-xs px-2 py-1 rounded cursor-pointer"
+                style={{
+                  background: 'var(--color-bg-input)',
+                  border: '1px solid var(--color-border)',
                   color: 'var(--color-text-primary)',
                 }}
-                title={it.content}
-                onClick={() => onPreview(it)}
               >
-                <div className="flex items-center justify-between">
-                  <span
-                    className="text-[10px] uppercase tabular-nums"
-                    style={{ color: 'var(--color-text-secondary)' }}
+                全部清除
+              </span>
+            </span>
+          )}
+        </button>
+
+        {listExpanded && (
+          <div className="mt-1.5">
+            {items.length === 0 ? (
+              <div
+                className="text-xs italic py-2"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                （还没捕获到剪贴板内容；复制点东西试试）
+              </div>
+            ) : (
+              <ul className="space-y-1.5">
+                {items.map((it) => (
+                  <li
+                    key={it.captured_at}
+                    className="text-xs px-2 py-1.5 rounded cursor-pointer hover:opacity-80"
+                    style={{
+                      background: 'var(--color-bg-input)',
+                      border: '1px solid var(--color-border-subtle)',
+                      color: 'var(--color-text-primary)',
+                    }}
+                    title={it.content}
+                    onClick={() => onPreview(it)}
                   >
-                    {it.content_type}
-                  </span>
-                  <span
-                    className="text-[10px]"
-                    style={{ color: 'var(--color-text-secondary)' }}
-                  >
-                    {(it.captured_iso || '').slice(11, 19)}
-                  </span>
-                </div>
-                <div className="truncate">{it.content}</div>
-              </li>
-            ))}
-          </ul>
+                    <div className="flex items-center justify-between">
+                      <span
+                        className="text-[10px] uppercase tabular-nums"
+                        style={{ color: 'var(--color-text-secondary)' }}
+                      >
+                        {it.content_type}
+                      </span>
+                      <span
+                        className="text-[10px]"
+                        style={{ color: 'var(--color-text-secondary)' }}
+                      >
+                        {(it.captured_iso || '').slice(11, 19)}
+                      </span>
+                    </div>
+                    <div className="truncate">{it.content}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
       </div>
     </Section>
