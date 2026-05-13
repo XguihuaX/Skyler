@@ -84,6 +84,20 @@ def get_min_session_seconds() -> int:
         return 30
 
 
+def get_cleanup_days() -> int:
+    """保留天数(默 30)。超过的 session 由每日 cron 清除。0 = 关闭清理。"""
+    try:
+        return max(0, int(_cfg().get("cleanup_days", 30)))
+    except (TypeError, ValueError):
+        return 30
+
+
+def get_cleanup_cron_expr() -> str:
+    """cleanup cron 表达式(默 23:59 每日,timezone 走 scheduler.timezone)。"""
+    val = _cfg().get("cleanup_cron", "59 23 * * *")
+    return str(val) if val else "59 23 * * *"
+
+
 # ---------------------------------------------------------------------------
 # Categorization
 # ---------------------------------------------------------------------------
@@ -484,4 +498,42 @@ async def format_today_activity_for_prompt(
         lines.append(f"最近 30 分钟主要在: {get_display_name(recent_app)}")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# v3.5 chunk 14 commit 7 — daily cleanup cron
+# ---------------------------------------------------------------------------
+
+
+async def cleanup_old_sessions() -> int:
+    """每日 cleanup_cron 触发,删 ``start_at < (now - cleanup_days)`` 的 session。
+
+    cleanup_days=0 → no-op(用户显式禁用清理,数据永久保留)。
+
+    返删除行数(0 = 没有过期 / no-op)。失败 logger.exception 不抛 — cron
+    failure 不阻塞 scheduler 也不破其他 cron job。
+    """
+    days = get_cleanup_days()
+    if days <= 0:
+        logger.info(
+            "[activity_timeline] cleanup skipped: cleanup_days=%d (disabled)",
+            days,
+        )
+        return 0
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    try:
+        async with engine.begin() as conn:
+            res = await conn.execute(text(
+                "DELETE FROM activity_sessions WHERE start_at < :cutoff"
+            ), {"cutoff": cutoff})
+        n = int(getattr(res, "rowcount", 0))
+        logger.info(
+            "[activity_timeline] cleanup deleted %d row(s) older than %d days "
+            "(cutoff=%s)",
+            n, days, cutoff.isoformat(),
+        )
+        return n
+    except Exception as exc:
+        logger.exception("[activity_timeline] cleanup failed: %s", exc)
+        return 0
 

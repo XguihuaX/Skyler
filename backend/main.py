@@ -355,6 +355,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "[cron] profile_daily_regenerate registration failed"
         )
 
+    # ── 6b'''. v3.5 chunk 14 — activity_sessions daily cleanup cron ─────
+    # 删 > config.activity_timeline.cleanup_days(默 30 天)的 session 行。
+    # cleanup_days=0 → cleanup_old_sessions 函数自己 no-op。
+    try:
+        from backend.services.activity_timeline import (
+            cleanup_old_sessions,
+            get_cleanup_cron_expr,
+        )
+        _cleanup_cron_expr = get_cleanup_cron_expr()
+        cron_scheduler.schedule_cron(
+            "activity_timeline_cleanup", _cleanup_cron_expr,
+            cleanup_old_sessions,
+        )
+        logger.info(
+            "[cron] activity_timeline_cleanup registered: %s",
+            _cleanup_cron_expr,
+        )
+    except ValueError:
+        logger.info(
+            "[cron] activity_timeline_cleanup already registered (hot-reload)"
+        )
+    except Exception:
+        logger.exception(
+            "[cron] activity_timeline_cleanup registration failed"
+        )
+
     # ── 6b''. v3.5 chunk 10 — MemoryExtractor worker ─────────────────────
     # 每 N 分钟扫 chat_history 提取 memory entries。worker 用
     # asyncio.create_task fire-and-forget；shutdown 阶段 stop()。
