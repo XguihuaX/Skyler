@@ -1,37 +1,146 @@
-# Skyler 技术设计文档 v3-WIP（2026-05）
+# Skyler 技术设计文档 v4-alpha(2026-05)
 
-> 本文档是给 Claude Code 使用的开发蓝图。每次开启新会话时，将本文档粘贴进去作为上下文。
+> 本文档是给 Claude Code 使用的开发蓝图。每次开启新会话时,将本文档粘贴进去作为上下文。
 >
-> **改名提示**：项目原名 MomoOS，2026-05 重命名为 **Skyler**。代码内 localStorage key（`momoos.mode` / `momoos.theme` / `momoos.convListCollapsed`）暂未跟改，保留为代码现实；后续做 v3 收尾 commit 时统一重命名 + 加 fallback 读取（旧 key → 新 key），不破坏用户既有状态。
+> **改名提示**:项目原名 MomoOS,2026-05 重命名为 **Skyler**。代码内 localStorage key(`momoos.mode` / `momoos.theme` / `momoos.convListCollapsed`)暂未跟改,保留为代码现实;后续做 v4 收尾 commit 时统一重命名 + 加 fallback 读取(旧 key → 新 key),不破坏用户既有状态。
 >
-> **当前状态（2026-05-12）**：v3 ✅ 完成 + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅（媒体接入）+ v3.5 chunks 5 / 6abc / 7 / 8a / 9 / 10 / 11 ✅ + UX-001 ✅ 全部上线。Memory 系统升级到**三层结构**（chunk 10 server-side worker + chunk 11 structured profile_data + chunk 9 遗忘曲线）；chunk 8a 简化屏幕感知（NSWorkspace + AppleScript + smart trigger，5 类 activity_* trigger）；UX-001 MCP per-tool accordion + 情绪 UI 修复。**65+ capabilities, 11 proactive triggers, 7 architectural abstractions**。剩 chunk 8b 完整屏幕感知（截屏 + OCR + VLM）+ v5 远期（autodl / SoVITS / 自定义音色）+ v6+ 多设备。详见 §十六 阶段性进度。
+> **当前状态(2026-05-13)**:v4-alpha shipped。chunk 14 activity timeline、UX-004 v1 tool-call transition、UX-005 capability 单一归属、UX-007 Momo bubble fade,以及 hotfix-3 ~ hotfix-10 已上线。**65+ capabilities, 11 proactive triggers, 7 architectural abstractions, 950+ 测试**。剩 chunk 8b 完整屏幕感知 + chunk 12/13/15 + 长期路线见 [ROADMAP.md](ROADMAP.md) 四支柱组织。
+
+---
+
+## 零、为什么是这些选择(Why these choices)
+
+Skyler 的核心架构决策 —— Capability Registry / 双向 MCP / persona 级状态机 / 活动时间线 —— 不是"觉得这样优雅"。每个都是 §一 定位决定的直接结果。这一章先把"为什么"摆出来,后面章节具体说"怎么做"时不再重复 motivate。
+
+### 0.1 为什么 Capability Registry(`@register_capability`)
+
+定位是"可塑型角色容器" → 扩展是核心 → 扩展机制必须低摩擦。
+
+替代方案被否的原因:
+- ❌ 写死的 tool 列表 + if/else 分发:每加一个 skill 改一处 agent 代码,违背"接口简易"
+- ❌ Plugin manifest + 加载器(LangChain 风格):学习成本高,违背"易扩展"
+- ❌ 完全靠 MCP server 把所有 skill 外置:MCP server 启动慢、跨进程 overhead、调试痛苦,日常内建 skill 不该承担这个成本
+
+→ **`@register_capability` 装饰器 + JSON schema** 是唯一契约。一个 Python 函数装饰一行就是 LLM 可调的 tool。`Consumer` enum(`CHAT_AGENT / SCHEDULER / WEBHOOK`)允许同一个 capability 被不同子系统消费。整套 plugin API 就这一个装饰器和一个 enum。
+
+详见 §十五之A Capability Registry 架构。
+
+### 0.2 为什么双向 MCP(client + server)
+
+定位是"所有权归你 + 生态参与"。
+
+只做 MCP client:Skyler 只能消费,不能贡献。社区写的 skill 无法被 Claude Desktop / Cursor / Claude Code 复用,Skyler 变成孤岛。
+
+只做 MCP server:Skyler 只能贡献,不能消费。filesystem / brave-search / Notion 等社区已经写好的 server 无法直接接入,等于重新发明轮子。
+
+→ **双向**:Skyler 既是 client(消费外部 server)也是 server(把 capability 注册表 + 角色状态 + 记忆暴露给任何 MCP client,带 Bearer 认证)。你的 AI 角色变成 MCP 生态里的一个节点,不是孤岛。
+
+详见 §十五 MCP 工具扩展。
+
+### 0.3 为什么 persona 级 `character_states`
+
+定位是"角色化 + 长期使用"。
+
+替代方案被否的原因:
+- ❌ 状态全靠 prompt 注入,每轮 reset:角色没有"自己",每天都是新的相遇 —— 这是 ChatGPT 模式,不是陪伴
+- ❌ 写死的状态机(`if mood == happy: ...`):僵硬,违背"角色 LLM 驱动演化"
+
+→ **DB 表持久化 + LLM 驱动**:`character_states` 表跟踪 mood / intimacy / current_thought / current_activity / available;LLM 通过 `<state_update>` 标签更新(跟 `<emotion>` 平行);每日 intimacy_decay cron 模拟"不联系就疏远"的真实感。
+
+这是 Skyler 长期 vision *persona-level learning*(角色跟用户一起成长)的基础设施 —— 没有持久化的状态机就没有"成长"。
+
+详见 §十五之C 角色状态系统 + [ROADMAP.md](ROADMAP.md) "Later" 支柱。
+
+### 0.4 为什么活动时间线(chunk 14)是顶层 first-class system
+
+定位是"陪伴感"。陪伴的关键不是回应快,是**记住**。
+
+不只记用户说了什么(`chat_history`),还记用户今天**在做什么**(`activity_sessions`)。Momo 能说"看你 VS Code 待了 3 小时,跟昨天那个项目吧?",是因为活动时间线是跟 `chat_history` 平行的**第二条 timeline**,不是塞在 chat_history 里的 metadata。
+
+5 道隐私闸(黑名单 / 写入层 dedup / idle 过滤 / 显式删除 / 全本地)是"本地优先"原则在数据层的具体体现 —— 角色知道用户今天做了什么,但数据不离开本机。
+
+详见 §十五之T Activity Timeline 系统。
+
+### 0.5 为什么主动陪伴 = trigger pack + activity 双路径
+
+定位是"角色化主动性",但有边界 —— 角色应该在该出现时出现,不该是每个 polling 都说话(那叫 spam,不叫陪伴)。
+
+两条路径:
+- **Trigger pack**(时间驱动):wake_call / lunch_call / dinner_call / bedtime_chat / long_idle / morning_briefing —— 时间窗 + cooldown + daily cap,人设性事件
+- **Activity-based**(上下文驱动):`ide_open` / `music_playing` / `long_focus` / `late_night_ide` —— 快路径分类 + LLM 慢路径判官 + idle 闸(人离开电脑就闭嘴)
+
+两条路径都共用同一套 throttle / cooldown / 静默时段闸,保证 daily cap 跨 trigger source 全局有效。
+
+详见 §十五之B Proactive Engine + §十五之L Activity-based Trigger + §十五之Q Judge 慢路径。
 
 ---
 
 ## 一、项目定位
 
-Skyler 是一个**本地运行的 AI Agent 桌面伴侣**，定位是**双重身份**：
+Skyler 是一个**可塑型 AI 角色容器**(hackable AI companion framework)—— 桌面端、角色驱动、能拆到 agent 内核、所有权归用户。
 
-- 🎭 **Galgame 风格情感伴侣外观** —— Live2D 看板娘、persona 驱动对话、emotion 驱动 TTS 多音色、角色状态面板
-- 🛠️ **生活 & 工具型 agent 内核** —— 长期记忆、MCP 工具生态、自然语言定时任务、屏幕感知、剪贴板助手、每日简报
+### 1.1 北极星
 
-外观是 Galgame 看板娘（情感面）→ 内核是能记忆、能执行任务、能定时主动、能看屏幕的全栈 agent（工具面）。和纯陪伴向的 Open-LLM-VTuber、纯远程工具向的 Hermes Agent **都不同** —— Skyler 的目标是这两者的合一。
+每一层都是设计成可以拆开来换的:capability(`@register_capability`)、Live2D 模型 / motion / emotion 绑定、TTS provider、LLM provider(LiteLLM)、MCP server(双向)、persona / 状态机。Skyler 本体提供 agent 内核(MOMOOS)、能力注册表、主动陪伴层、UI shell;剩下的拼成什么样,由用户塑造。
 
-技术能力：
-- 语音（手动 / VAD 自动检测）+ 文字多模态输入
-- ASR 识别结果实时回显到前端 + 进入 chat 历史
-- 流式文字 + 分句 TTS 输出（CosyVoice 默认 / Edge 后备 / SoVITS 占位）
-- ChatAgent + LLM tool calling 自主管理记忆（save / delete / list / compress）
-- 双层记忆系统（memory 事实条目 + profile_summary 整体印象）
-- ChatGPT 模式多对话 + 多角色（每角色独立 conversations / memory）
-- 后端主动推送（闹钟、长任务完成、后台事件、屏幕感知评论）
-- Tauri 2 桌面应用（透明看板娘 + 完整面板双模式，Galgame 风布局）
-- emotion 标签（`<emotion>X</emotion>`）解析驱动 TTS 多音色（v3-D 后端就绪）
-- 8 套 UI 主题切换（v3-A 完成）
-- 屏幕感知（v4 规划，主动 + 被动模式，VLM 云端分析）
-- 单用户本地应用，无需登录认证（多设备访问推迟到 v6+，见 §二十 跨平台策略）
+> "我能不能有一个真正属于我自己的 AI 陪伴,本地跑、用我喜欢的角色、调我自己注册的工具" —— Skyler 是给这种人写的。
 
-**借鉴来源**：Open-LLM-VTuber（avatar UX）+ Hermes Agent（skill 累积型工具 agent）。完整借鉴清单见 §十九。
+### 1.2 目标用户
+
+有动手能力的二次元半技术宅(hackers who want an AI character of their own):
+
+- 能跑命令行,能写一点 Python
+- 在意数据所有权(本地 SQLite、本地 sentence-transformers 嵌入,无强制云依赖)
+- 喜欢"角色驱动的 AI"概念,反感冷冰冰的通用 chatbot
+- 宁可拿到能扩展的框架,不要磨光但改不动的 app
+
+### 1.3 三角坐标(产品空间)
+
+|  | 形态 | 角色驱动 | 可改造性 |
+|---|---|---|---|
+| Open-LLM-VTuber | 桌面 + Live2D | ⭐⭐⭐ Live2D + persona | ⭐⭐(磨光的 app) |
+| Hermes Agent | CLI + messaging gateway | ❌(任务驱动)| ⭐⭐⭐⭐⭐(框架性质) |
+| **Skyler** | **桌面 + Live2D** | **⭐⭐⭐⭐ persona + 状态机** | **⭐⭐⭐⭐⭐(框架性质)** |
+
+Skyler 站在 OLV(强角色)和 Hermes(强可改)中间的空地。架构选型是顺着这个空地推出来的,不是按竞品 feature 表抄出来的。详见 §十九。
+
+### 1.4 六大支柱
+
+按"通用扩展能力 vs Skyler 独有"分两组:
+
+**通用扩展能力**(任何"长期使用 + 自己改造"的桌面 AI 都需要):
+1. **可扩展** —— Capability Registry / 双向 MCP / 多 LLM provider(LiteLLM)/ 多 TTS provider(CosyVoice / Edge / SoVITS)/ 多 Live2D 模型(runtime 抽象层)
+2. **易扩展** —— 5 行装饰器加 skill / 1 行 config 接外部 MCP / 替 Live2D 4 步走完(`docs/live2d-setup.md`)
+3. **接口简易** —— `@register_capability` 是唯一 plugin 契约;没有别的 plugin manifest / 加载器 API 要学
+
+**Skyler 独有**(定位决定的):
+4. **本地优先** —— SQLite / sentence-transformers / Apple EventKit / faster-whisper 都本地;cloud LLM 是可选不强制(可以全切 local Ollama)
+5. **角色化** —— persona 级 `character_states`(mood / intimacy / current_thought / activity)持久化跨 session,LLM 驱动演化,不是写死规则
+6. **主动性** —— 不只是被叫才动;trigger pack(wake_call / lunch_call / 长 idle)+ activity-based(IDE / 音乐 / 长 focus / 深夜)让角色在该出现时主动出现
+
+每条支柱对应的具体架构决策见 §零 + §五 + §十五各子节。
+
+### 1.5 技术能力清单(v4-alpha 当前)
+
+- 语音(手动 / VAD)+ 文字多模态输入
+- ASR 实时回显 + 进入 chat 历史
+- 流式文字 + 分句 TTS(CosyVoice 默认 / Edge 后备 / SoVITS 长期)
+- ChatAgent + LLM tool calling 自主管理 memory + 内建 capability + 外部 MCP
+- 三层记忆系统(short-term `chat_history` / long-term facts `memory` + server-side worker / structured `users.profile_data`)
+- 活动时间线(chunk 14 起)—— 30s 轮询 app/URL session + ChatAgent system prompt 注入 + 5 道隐私闸
+- 每角色独立 conversations / memory;用户画像 *跨角色* 共享(一份对用户的印象)
+- 后端主动推送(闹钟 / 长任务完成 / 屏幕活动 trigger / persona 内省)
+- Tauri 2 桌面应用(透明 widget + 完整 panel 双模式)
+- emotion 标签(`<emotion>X</emotion>`)解析驱动 TTS 多音色
+- 角色状态系统(`character_states`)+ `<state_update>` LLM 标签协议
+- 双向 MCP(consumer + provider,Bearer 认证)
+- 8 套 UI 主题(`var(--color-*)` 走 CSS variables)
+- 屏幕感知(active app + 浏览器 URL + 页面正文,19 条隐私黑名单)
+- Tool 调用过渡语 + frontend loading pill(UX-004 v1 起,audio streaming v2 留 chunk 15)
+- Capability Registry 双层集成(integrations 低层 + capabilities 装饰器层)
+- 单用户本地应用,无登录认证(多设备访问长期 roadmap,见 §二十)
+
+剩余路线 + 北极星支柱 + tech debt 见 [ROADMAP.md](ROADMAP.md)。
 
 ---
 
@@ -4467,10 +4576,10 @@ CosyVoiceTTS._blocking_synthesize:
 你接管 Skyler 项目的开发。
 
 【项目背景】
-Skyler 是本地运行的 AI Agent 桌面伴侣（原名 MomoOS，2026-05 改名）。
-定位：Galgame 风格情感伴侣外观 + 生活&工具型 agent 内核。
+Skyler 是一个可塑型 AI 角色容器（hackable AI companion framework）—— 桌面端、角色驱动、能拆到 agent 内核、所有权归用户（原名 MomoOS，2026-05 改名）。
+目标用户：有动手能力的二次元半技术宅。三角坐标：Skyler 站在 Open-LLM-VTuber（强角色但磨光）和 Hermes Agent（强可改但 CLI）中间的空地。
 技术栈：FastAPI + WebSocket（后端） + React 18 + Vite + Tauri 2（前端） + SQLite + SQLAlchemy async。
-完整背景：仓库根 README.md / DESIGN.md / ROADMAP.md。
+完整背景：仓库根 README.md / DESIGN.md（§零 + §一）/ ROADMAP.md。
 
 【当前状态】
 v2.7 + v3-A/B/C/D 完成，v3 整体约 60%。
@@ -4564,77 +4673,61 @@ pillow              # v4：图像处理
 
 ---
 
-## 十九、Open-LLM-VTuber & Hermes Agent 借鉴清单
+## 十九、三角坐标:Skyler 在 Open-LLM-VTuber 与 Hermes Agent 之间
 
-Skyler 的功能选型借鉴自两个开源项目。本节明确**借鉴了什么、为什么不借鉴某些**，避免后续设计漂移。
+Skyler 站在两个项目之间的空地。本节不是"借鉴 OLV 哪些 feature + Hermes 哪些 feature"清单,而是说清楚 Skyler 在产品空间里的位置 —— 同意 OLV 的什么设计判断、同意 Hermes 的什么设计判断、跟它俩明确不同的地方、当前真实存在的差距。
 
-### 19.1 Open-LLM-VTuber（avatar UX 参考）
+### 19.1 在哪些设计判断上 Skyler 同意 OLV
 
-**已采纳并集成进路线图**：
+[Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber) 是打磨好的桌面 VTuber 陪伴体验。Skyler 在以下设计方向上跟 OLV 共享判断:
 
-| 特性 | Skyler 对应阶段 | 备注 |
+- **桌面 Live2D 看板娘是有效的陪伴 UX**(不是 GitHub Issues 风的 CLI)
+- **TTS 多音色 + emotion 驱动是角色感的关键**(不是单一 voice 念稿子)
+- **语音打断 + 并发 TTS + 文本 emotion 预处理是基础体验需求**(详见 §六)
+- **motion 跟 emotion 绑定可以加强角色具象**(详见 §十四之A Live2D 架构)
+- **MCP 协议接入是合理选型**(详见 §十五 MCP 工具扩展)
+
+### 19.2 在哪些设计判断上 Skyler 同意 Hermes
+
+[Hermes Agent](https://github.com/NousResearch/hermes-agent)(Nous Research)是服务器跑的个人 agent 平台。Skyler 跟 Hermes 共享以下设计判断:
+
+- **Agent 应该是"框架"而不是"app"**(用户能拆开来改,见 §零所有 0.x)
+- **Skill 应该是 declarative 注册**,不需要复杂 plugin manifest(见 §十五之A Capability Registry)
+- **子 agent 隔离 / 多执行 backend 是长任务的合理架构**(屏幕分析 / 批量记忆压缩 / 云端 fine-tune)
+- **self-improving 是 agent 长期价值的关键** —— 但 Skyler 把这个判断应用到**角色**这一层,不是 skill 这一层(详见 19.3)
+
+### 19.3 Skyler 跟它俩明确不同的地方
+
+- **不是开箱即用 VTuber app**(OLV 是):Skyler 期望用户至少能跑命令行、能改 config、能写一点 Python。这个用户筛选是有意的 —— 详见 §一 1.2 目标用户。
+- **不是 CLI / 服务器 agent**(Hermes 是):Skyler 是桌面应用,角色具象化(Live2D / 立绘 / 状态面板)是 first-class concern,不是可选 plugin。
+- **self-improving 哲学的应用对象不同**:
+  - Hermes:skill 越用越好(skill 库变厚 + 单 skill 内部演化)
+  - Skyler:**角色越用越像一个具体的人**(persona-level learning,通过 `character_states` 长期演化)
+  - 同一个"系统会变好"哲学,但落在不同对象上。详见 [ROADMAP.md](ROADMAP.md) "Later" 支柱。
+
+### 19.4 哪些缺口是真实存在的
+
+诚实承认 —— 在某些维度 Hermes 当前比 Skyler 强。这些不是被否定的功能,是 Skyler 当前没做到的真实差距:
+
+| 维度 | Skyler | Hermes |
 |---|---|---|
-| 语音打断（停止生成 token + 停止播放） | v3-F | DESIGN §7.6 红线第一条 |
-| TTS 多段并发合成 + 优先播首句 | v3-F | 当前 sentence-by-sentence 串行 |
-| TTS 预处理器（剥离 `*动作*` / `(注释)` 不读出） | v3-F | 极低成本，高收益 |
-| 视觉能力（屏幕共享 + 相机 + AI 浏览器） | v4 | 与 DESIGN §13 屏幕感知合并 |
-| AI 主动说话 + 内心独白（`<thinking>` 标签） | v3-F + v3-G | 增加角色立体感 |
-| Live2D 触摸响应 | v3-E | 不同 hit area 触发不同 motion |
-| motionMap（说话同步动作） | v3-E | emotion 系统的扩展 |
-| MCP 协议接入 | v3-G / v4 | DESIGN §15 已有规划 |
-| 多并发 session + 多设备访问 | v6+ | **代价极高**，见 §二十 |
-| Character Status Panel（v1.4 路线图） | v3-G 成长系统 | 与下方 19.3 成长系统合并 |
+| 自我提升 skill 学习 | ❌(理念差异 + 路线图远期) | ⭐⭐⭐⭐⭐ |
+| 跨平台 messaging gateway(Telegram 等)| ❌(中期 roadmap) | ⭐⭐⭐⭐⭐ |
+| 训练数据导出 | ❌(远期 roadmap,隐藏卖点) | ⭐⭐⭐⭐⭐ |
 
-**未采纳**：
+完整对比 + 用户视角说明见 [README §Comparison](README.md#comparison)。
 
-| 特性 | 不采纳原因 |
+### 19.5 明确不做的事(避免设计漂移)
+
+| 不做的事 | 原因 |
 |---|---|
-| 群聊（多角色同时在场对话） | 与单角色 Galgame 看板娘定位冲突 |
-| Bilibili 弹幕客户端 | 直播场景，与桌面伴侣定位无关 |
-| Letta / MemGPT 长期记忆 | Skyler 的 SQLite + sentence-transformers 已够用，引入 Letta 增加运维复杂度且经常变 API |
+| 群聊(多角色同时在场对话) | 跟单角色驱动定位冲突 |
+| Bilibili 弹幕直播客户端 | 直播场景,跟桌面角色 agent 定位无关 |
+| Letta / MemGPT 独立 memory 系统 | 现有 SQLite + sentence-transformers 已够用,引入 Letta 增加运维复杂度 |
+| WhatsApp / WeChat gateway | API 限制 + 商业风险(注:Telegram / Discord 在中期 roadmap) |
+| 跟 LangChain / AutoGen 比拼通用 agent 框架 | Skyler 是角色驱动桌面 agent,不是通用 agent 框架 |
 
-### 19.2 Hermes Agent（生活 & 工具型 agent 参考）
-
-Hermes 定位是"住在你服务器上的远程持久 agent"，与 Skyler 桌面伴侣定位**不同**，但有几条核心设计可直接借鉴。
-
-**已采纳并集成进路线图**：
-
-| 特性 | Skyler 对应阶段 | 备注 |
-|---|---|---|
-| 自我提升 skill 累积循环 | v6+ 长期愿景 | 与 profile_summary 联动深化"对你的了解" |
-| 自然语言 cron 调度 | v3-G | 扩展现有 alarm 系统为通用任务调度 |
-| 子 agent 隔离（长任务独立 context） | v5 | 屏幕分析 / 批量记忆压缩这类长任务用 |
-| 多执行 backend（local / Docker / SSH / Modal） | v5 autodl 部署 | 远程 GPU 推理需要 |
-| Persona 编辑器（SOUL.md 风格） | 已部分完成 | `characters.persona` + CharacterManagerDrawer |
-
-**未采纳**：
-
-| 特性 | 不采纳原因 |
-|---|---|
-| 16+ messaging gateway（Telegram / Discord / WhatsApp / Signal 等） | Skyler 是桌面应用，不是远程 agent；用户跟 Skyler 互动入口是桌面看板娘而非 IM |
-
-### 19.3 成长系统设计（v3-G）
-
-DESIGN 原版只写了名字没展开。结合 OLV v1.4 的 Character Status Panel 计划，定为以下形式：
-
-**核心：角色状态面板** —— UI 区域显示当前心情 / 亲密度 / 当前思绪 / 当前正在做什么。
-
-**数据来源**：
-- 心情：当前 turn 的 `<emotion>` 标签 + 最近 N 轮平均情绪
-- 亲密度：累计互动 turn 数 + 连续打卡天数 + 重要事件触发
-- 当前思绪：ChatAgent 回复时输出的 `<thinking>X</thinking>` 标签内容
-- 当前正在做什么：默认 "陪着你"；后台执行任务时显示具体内容（与子 agent 隔离结合）
-
-**互动反馈**：
-- 亲密度阈值解锁称呼变化、对话语气微调（注入 system prompt）
-- 纪念日（首次见面 / N 天打卡）触发特殊主动消息
-- profile_summary 与亲密度联动 —— 越熟越深的"对你的整体印象"
-
-**实现位置**：
-- 后端：`backend/database/models.py` 加 `relationship` 表（character_id × user_id × intimacy / streak / first_met / last_active）
-- 后端：迁移脚本 `v3_g.py` 幂等加表
-- 前端：新组件 `CharacterStatusPanel.tsx`，Panel 内某处展示
-- ChatAgent：每 turn 末尾更新 relationship 表
+注:成长系统设计已在 §十五之C 完整展开,不在本节重复。
 
 ---
 
