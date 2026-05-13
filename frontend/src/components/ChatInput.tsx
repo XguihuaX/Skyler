@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Ban, CornerDownLeft, Mic, Volume2, VolumeX, Sparkles } from 'lucide-react';
+import { Ban, CornerDownLeft, Mic, Volume2, VolumeX, Sparkles, Loader2 } from 'lucide-react';
 import { useAppStore } from '../store';
 import { useAppApi } from '../contexts/appApi';
 import StatusBadge from './StatusBadge';
 import { setConfigField } from '../lib/window';
+import { toolLoadingLabel } from '../lib/tool_labels';
 
 export default function ChatInput() {
   const [text, setText] = useState('');
@@ -14,6 +15,7 @@ export default function ChatInput() {
   const recordingMode = useAppStore((s) => s.recordingMode);
   const ttsEnabled   = useAppStore((s) => s.ttsEnabled);
   const currentThinking = useAppStore((s) => s.currentThinking);
+  const currentToolName = useAppStore((s) => s.currentToolName);
 
   const { sendText, sendInterrupt, startManual, stopManualAndSend, toggleVad } = useAppApi();
 
@@ -95,6 +97,26 @@ export default function ChatInput() {
         >
           <Sparkles size={12} className="shrink-0" />
           <span className="truncate">{currentThinking}</span>
+        </div>
+      )}
+
+      {/* UX-004: tool loading indicator。LLM 调 tool 期间显示前缀 mapping 文案
+          (查日历… / 查歌单… / etc),fallback "查询中…"。LLM 若遵守 prompt
+          先输出过渡语,此 indicator 与过渡语并存形成"语言 + 视觉"双重反馈;
+          LLM 不遵守时此 indicator 兜底视觉反馈。tool_use_done 时由 store
+          自动清空。 */}
+      {currentToolName && (
+        <div
+          className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs animate-pulse max-w-[220px] overflow-hidden text-ellipsis whitespace-nowrap"
+          style={{
+            background: 'color-mix(in srgb, var(--color-bg-elevated) 60%, transparent)',
+            color: 'var(--color-text-secondary)',
+            border: '1px dashed var(--color-border-subtle)',
+          }}
+          title={`tool: ${currentToolName}`}
+        >
+          <Loader2 size={12} className="shrink-0 animate-spin" />
+          <span className="truncate">{toolLoadingLabel(currentToolName)}</span>
         </div>
       )}
       {/* Text field */}

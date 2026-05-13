@@ -215,6 +215,14 @@ interface AppState {
   setCurrentThinking: (v: string | null) => void;
   clearCurrentThinking: () => void;
 
+  // UX-004: 当前 LLM 正在调用的 tool 名(``calendar.today_events`` 等)
+  // null = 没有 tool 在跑(LLM 在普通文本流模式)
+  // 由 WS 'tool_use_start' 写入,'tool_use_done' 清空。前端按 tool name
+  // 前缀做 label mapping(``calendar.* → 查日历``);多 tool 并行只显示
+  // 最近 set 的(用户主要关注当下卡顿点)。
+  currentToolName: string | null;
+  setCurrentToolName: (v: string | null) => void;
+
   // v3-E1 step5: AI 当轮情感（每轮最多一次，由后端 emotion 消息推送）
   // null = 当前轮无 emotion 标签（中性消息）/ 还没收到。由 WS 'emotion' 消息
   // 写入；新轮开始时由调用方 clear。
@@ -396,6 +404,9 @@ export const useAppStore = create<AppState>((set) => ({
   currentThinking: null,
   setCurrentThinking: (currentThinking) => set({ currentThinking }),
   clearCurrentThinking: () => set({ currentThinking: null }),
+
+  currentToolName: null,
+  setCurrentToolName: (currentToolName) => set({ currentToolName }),
 
   currentEmotion: null,
   setCurrentEmotion: (currentEmotion) => set({ currentEmotion }),

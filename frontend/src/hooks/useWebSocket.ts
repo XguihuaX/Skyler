@@ -343,6 +343,21 @@ export function useWebSocket(): UseWebSocketReturn {
         s.setActivityPermissionHint((msg as { hint?: string }).hint ?? null);
         break;
 
+      // UX-004: LLM 调 tool 之前 backend emit。tool_name 走 toolLoadingLabel
+      // 前缀 mapping 由 UI 自己渲染(useWebSocket 不耦合 label 显示规则)。
+      case 'tool_use_start': {
+        const name = (msg as { tool_name?: string }).tool_name ?? null;
+        if (name) s.setCurrentToolName(name);
+        break;
+      }
+
+      // UX-004: tool 返回时 backend emit,带 duration_ms。前端清空 loading
+      // (LLM 后续二次 LLM call 接续 text_chunk 流)。duration_ms 当前未消
+      // 费,留给未来 "Momo 这个工具好慢哦" feedback UI 用(字段语义保留)。
+      case 'tool_use_done':
+        s.setCurrentToolName(null);
+        break;
+
       default:
         console.warn('[WS] unknown message type:', msg.type);
     }
@@ -481,6 +496,9 @@ export function useWebSocket(): UseWebSocketReturn {
     s.clearCurrentEmotion();
     // v3-E1 step6：新一轮开始，清掉上一轮的 motion
     s.clearCurrentMotion();
+    // UX-004:新一轮开始,清掉上一轮残留的 tool loading(理论上 tool_use_done
+    // 已经清过,这里是 belt-and-suspenders 防 backend 路径异常未发 done)
+    s.setCurrentToolName(null);
     // 乐观更新：立刻显示 user 气泡
     s.appendChatMessage({
       id: newClientId('u'),
@@ -516,6 +534,9 @@ export function useWebSocket(): UseWebSocketReturn {
     s.clearCurrentEmotion();
     // v3-E1 step6：新一轮开始，清掉上一轮的 motion
     s.clearCurrentMotion();
+    // UX-004:新一轮开始,清掉上一轮残留的 tool loading(理论上 tool_use_done
+    // 已经清过,这里是 belt-and-suspenders 防 backend 路径异常未发 done)
+    s.setCurrentToolName(null);
     console.log(`[FRONT] send voice b64_len=${audioBase64.length}`);
     // 语音的 user 气泡等 asr_result 携带 message_id 时一起插入，
     // 避免内容为空的占位气泡。
