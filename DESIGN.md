@@ -3408,6 +3408,145 @@ V1 30 case + V2 21 case = **51 PASS, 0 regression**(``--asyncio-mode=auto``)。
 
 ---
 
+## 十五之S、get_active_app 走 osascript 修 headless 缓存(hotfix-10)
+
+### Bug
+
+``backend/integrations/activity_monitor.get_active_app()`` 自 chunk 8a 起
+用 ``AppKit.NSWorkspace.sharedWorkspace().frontmostApplication().localizedName()``。
+看似稳:**fresh** Python 进程里第一次调用确实拿到当前 frontmost。但
+**long-running headless** 进程里它**只返进程启动那一拍的 frontmost**,
+之后用户切多少次 app 都不更新。
+
+实测证据(chunk 14 实施期间用户报告):
+* backend daemon 启动时 Terminal frontmost
+* 用户后续切 Safari / Chrome / IDE / etc
+* backend log tick=2 ~ tick=27 持续 30+ 分钟全是 ``app='终端' url=—``
+* 用户 CLI ``from backend.integrations import activity_monitor;
+  activity_monitor.get_active_app()`` 在同一长跑进程也返 ``'终端'``
+
+### Root cause
+
+NSWorkspace.frontmostApplication 不是同步查询 — 它通过 **distributed
+notifications** 接收"frontmost 变化"事件并维护内部缓存。dispatch 这些
+事件需要 ``NSRunLoop`` 在主线程跑。headless Python 进程(daemon / 子进程
+/ 任何非 GUI 应用)**没有 NSRunLoop**,事件永远不被 deliver → 内部缓存
+永远是初始值。
+
+经典 macOS pyobjc 坑。同类型 bug 在 ``NSNotificationCenter`` /
+``NSDistributedNotificationCenter`` 类 API 都会出现。
+
+### 修法 — osascript 子进程,不依赖 RunLoop
+
+```python
+res = subprocess.run(
+    ["osascript", "-e", "POSIX path of (path to frontmost application)"],
+    capture_output=True, text=True, timeout=2.0, check=False,
+)
+path = res.stdout.strip().rstrip("/")       # /Applications/Safari.app/
+name = os.path.basename(path)               # Safari.app
+if name.endswith(".app"): name = name[:-4]  # Safari
+```
+
+每次 fork osascript 子进程,**自己**起完整 AppleScript 环境查 frontmost,
+返完即退。延迟 30-80ms,与 chunk 8a-ext V2 ``ioreg HIDIdleTime`` / chunk
+8a Chrome/Safari tab AppleScript 同 pattern,**零新依赖**(``subprocess`` /
+``shutil`` 已用)。
+
+### 副作用 — 返英文 bundle 名
+
+NSWorkspace.localizedName 给中文 macOS 用户 Apple 原生 bundle 返中文:
+``"终端"``(Terminal)/ ``"Safari浏览器"``(Safari)/ ``"代码"``(Code,极少
+数本地化版)。osascript ``POSIX path of`` 永远返 ``/Applications/X.app/``,
+basename **永远是英文 bundle 名**:``Terminal`` / ``Safari`` / ``Code``。
+
+下游兼容性验证(audit 前已逐个 grep 确认):
+
+| 下游 | 是否兼容英文 bundle 名 |
+|------|----------------------|
+| ``_IDE_APPS`` (activity_smart) | ✅ 已含 ``'code'`` / ``'terminal'`` / ``'cursor'`` lowercase 英文 keys |
+| ``_BROWSER_APPS`` (activity_monitor) | ✅ 已含 ``'safari'`` / ``'google chrome'`` / ``'firefox'`` 等 |
+| ``_MUSIC_APPS`` (activity_smart) | ✅ 已含 ``'spotify'`` / ``'apple music'`` 等 |
+| chunk 14 ``categorize()`` | ✅ 复用 _IDE_APPS / _BROWSER_APPS / _MUSIC_APPS |
+| chunk 14 ``activity_sessions.app_name`` 列 | ✅ 跨 locale 稳定的英文名(优于中文) |
+| ``stay_key = f"app:{app}"`` | ✅ 英文名跨 locale 一致,throttle 字典 key 稳定 |
+
+hotfix-6/8 加的中文别名(``"终端"`` / ``"google chrome 浏览器"`` / 等)
+post-fix 转为 dead code,但**不删** — backward compat + 历史文档价值
+(任何旧 DB 行仍能用)。
+
+### Audit 副产物 bug — pre-hotfix-10 Safari 中文 macOS 已挂
+
+``_BROWSER_APPS`` 含 ``"safari 浏览器"`` (带空格)。但 macOS NSWorkspace
+真实返 ``"Safari浏览器"`` (**无**空格)。所以中文 macOS Safari 用户在
+hotfix-10 **之前**:
+* ``get_active_app()`` 返 ``"Safari浏览器"``
+* ``get_browser_url()`` lookup ``"safari浏览器".lower()`` ∉ ``_BROWSER_APPS``
+* 返 None → snapshot.browser=None → 永远走 app stay,**不**记录 URL
+
+hotfix-10 incidentally 通过 osascript 英文 bundle 名绕过这条 bug。
+
+### LLM-facing display name(hotfix-10 commit 2)
+
+DB / stay_key / lookup 一律英文 bundle 名,但 chunk 14 ``format_today_
+activity_for_prompt`` 注入主对话的文本看到 ``Code 3小时`` / ``Terminal
+1小时``:
+* ``Code`` 太技术,LLM 容易解析为"代码"概念词
+* ``Terminal`` 比 ``终端`` 对中文 macOS 用户疏远
+
+加 ``activity_monitor._APP_DISPLAY_NAMES`` 字典 + ``get_display_name()``
+helper:
+
+```python
+_APP_DISPLAY_NAMES = {
+    "Code": "VS Code",
+    "Code - Insiders": "VS Code Insiders",
+    "Terminal": "终端",
+}
+```
+
+**仅 ``format_today_activity_for_prompt`` 用** — storage / stay_key / DB /
+capability return **决不**走 mapping。未列表里的 bundle 名直接返原值
+(Spotify / Slack / Notion / Safari 等国际化品牌名英文阅读体验 OK)。
+
+扩展原则:**只**加"用户明显期待中文展示"的 entry,不要扩成通用 i18n 字典。
+未来若用户群分化,前端可在 UI 层做更全 mapping,backend 保持稳态。
+
+### 跨平台 graceful
+
+| 平台 / 情景 | get_active_app 行为 |
+|------------|---------------------|
+| macOS osascript 正常 | 英文 bundle name |
+| macOS osascript 缺失 | None |
+| macOS osascript TimeoutExpired (2s) | None + warning log |
+| macOS osascript 非零 returncode(用户未授权)| None + debug log |
+| macOS osascript exit 0 但 stdout 空 | None |
+| 非 macOS | None(``IS_MACOS`` 短路) |
+
+所有 None 路径与 chunk 8a / 8a-ext silent fallback 风格一致 — 决不抛错
+阻塞 ActivityWatcher / ChatAgent。
+
+### 测试
+
+* ``tests/test_activity_monitor.py`` -3 旧 NSWorkspace case +9 新 osascript
+  case +3 get_display_name case
+* ``tests/test_chunk8a_ext_judge.py`` 顺手修 V2 idle gate latent flake —
+  ``test_maybe_judge_calls_llm_when_eligible`` 没 mock get_idle_seconds,
+  host idle > 300s 时偶发失败(V2 commit 加闸时漏 mock,留为后台 latent)
+
+138 PASS 跨 6 个 chunk 8a/8a-ext 测试文件 / 0 regression。
+
+### 文件清单
+
+* ``backend/integrations/activity_monitor.py``(-23 行旧 NSWorkspace impl
+  +73 行 osascript impl + 47 行 _APP_DISPLAY_NAMES 块)
+* ``backend/services/activity_timeline.py``(+3 行 — format 函数过
+  get_display_name)
+* ``tests/test_activity_monitor.py``(-22 行 +103 行,12 new tests)
+* ``tests/test_chunk8a_ext_judge.py``(+6 行,2 tests 加 idle mock 修 flake)
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建
