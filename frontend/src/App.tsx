@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useEffect, useState } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import { useAppStore } from './store';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useAudio } from './hooks/useAudio';
@@ -8,6 +8,7 @@ import NotificationToast from './components/NotificationToast';
 import CharacterStatePanel from './components/CharacterStatePanel';
 import ActivityPermissionModal from './components/ActivityPermissionModal';
 import SplashOverlay from './components/SplashOverlay';
+import FanLayout from './components/character/FanLayout';
 import { AppApiContext, AppApi } from './contexts/appApi';
 import { applyModeWindowProps, fetchConfig } from './lib/window';
 import {
@@ -22,35 +23,33 @@ import { fetchTtsVoices } from './lib/tts';
 // 方便子组件统一从 App 导入
 export { useAppApi } from './contexts/appApi';
 
-// v4-fan chunk 2: P0 spike entry (?spike=blur)。lazy import 让 spike 文件
-// 在 production bundle 里 tree-shake 掉(没人传 query 就不 import)。
-// Fan-3 ship 时连同 __spike__/ 目录一起 git rm。
-const BlurSpike = lazy(
-  () => import('./components/character/__spike__/BlurSpike'),
-);
-
-// v4-fan chunk 2: ?spike=blur 路由检查。在 module scope 一次性算,避免
-// 任何 hook 顺序问题。spike 路径下完全跳过 MainApp,不挂 WS / audio。
-const _SPIKE_MODE: string | null = (() => {
-  if (typeof window === 'undefined') return null;
-  return new URLSearchParams(window.location.search).get('spike');
+// v4-fan chunk 3: ?fan=1 dev demo entry。在 module scope 一次性算,
+// 避免任何 hook 顺序问题。FanLayout overlay 渲染在 MainApp 内部,
+// MainApp 的 fetchCharacters / WS 等 hooks 仍正常执行,只是把主视
+// 图 (Widget / Panel) 替换为全屏 fan demo。Fan-6 ship 后由真入口
+// (TopBar 按钮 / Sidebar entry)取代,这个 dev 短路可一并删。
+//
+// 用 location 而非 hook,因为路由判定一次锁定生命周期(URL 变化要
+// 整个 App reload 才生效,符合 dev 切换 UX)。
+const _FAN_DEMO: boolean = (() => {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('fan') === '1';
 })();
 
 function App() {
-  if (_SPIKE_MODE === 'blur') {
-    return (
-      <Suspense
-        fallback={<div style={{ color: '#fff', padding: 16 }}>loading spike…</div>}
-      >
-        <BlurSpike />
-      </Suspense>
-    );
-  }
   return <MainApp />;
 }
 
 function MainApp() {
   const mode = useAppStore((s) => s.mode);
+  // v4-fan chunk 3: ?fan=1 demo 用 store characters / currentCharacterId,
+  // setCurrentCharacterId(id) 走现有 reactive 链(Live2DCanvas / WS 都
+  // 自动跟随,无 backend 调用)。仅在 _FAN_DEMO 时实际渲染,但 hooks
+  // 必须无条件订阅(rules-of-hooks)。开销:3 个 selector,可忽略。
+  const characters         = useAppStore((s) => s.characters);
+  const currentCharacterId = useAppStore((s) => s.currentCharacterId);
+  const setCurrentCharacterId = useAppStore((s) => s.setCurrentCharacterId);
+
   const [warming, setWarming] = useState(true);
   // v3.5 chunk 5b：splash 完成前主视图 opacity=0；splash silent-skip 时
   // SplashOverlay 内部立即 onFinished()，所以这里默认 false（"未完成"）但
@@ -255,6 +254,57 @@ function MainApp() {
           </div>
         )}
       </div>
+      {/* v4-fan chunk 3 dev demo:?fan=1 → 全屏 FanLayout overlay 接管视觉,
+          压在 Widget/Panel 之上但低于 SplashOverlay(z 999 vs 10000)。
+          Hooks (WS / audio / fetchCharacters) 仍然走;只是把主视图遮住。
+          Fan-6 把 FanLayout 接到真入口(TopBar 按钮)后,这段 _FAN_DEMO
+          连同 module 顶部的路由判定一起删。 */}
+      {_FAN_DEMO && characters.length > 0 && (
+        <div
+          className="fixed inset-0 z-[999]"
+          style={{
+            background:
+              'radial-gradient(circle at 50% 60%, '
+              + 'var(--color-bg-elevated) 0%, '
+              + 'var(--color-bg-surface) 50%, '
+              + 'var(--color-bg-base) 100%)',
+          }}
+        >
+          <FanLayout
+            characters={characters}
+            selectedCharId={currentCharacterId}
+            onSelectCharacter={setCurrentCharacterId}
+          />
+          <div
+            className="fixed top-3 left-3 font-mono text-xs rounded-md px-3 py-2 pointer-events-none"
+            style={{
+              color: 'var(--color-text-primary)',
+              background: 'rgba(0, 0, 0, 0.55)',
+              border: '1px solid var(--color-border-subtle)',
+              maxWidth: 320,
+              lineHeight: 1.5,
+            }}
+          >
+            Fan-3 demo · ?fan=1<br />
+            <span style={{ opacity: 0.75 }}>
+              {characters.length} 卡 · 360° / N = {(360 / characters.length).toFixed(1)}°/卡<br />
+              点非中心卡 → 最短路径转到 top<br />
+              当前 selected:{characters.find((c) => c.id === currentCharacterId)?.name ?? '—'}
+            </span>
+          </div>
+        </div>
+      )}
+      {_FAN_DEMO && characters.length === 0 && (
+        <div
+          className="fixed inset-0 z-[999] flex items-center justify-center font-mono text-sm"
+          style={{
+            color: 'var(--color-text-primary)',
+            background: 'var(--color-bg-base)',
+          }}
+        >
+          loading characters… (确保 backend 在跑 + /api/characters/list 可达)
+        </div>
+      )}
       {/* v3.5 chunk 5b：splash overlay。z-index 高于一切（10000），自己管
           自己的存在感（disabled / 404 → mount 同 tick 立即 onFinished）。 */}
       {!splashDone && <SplashOverlay onFinished={() => setSplashDone(true)} />}
