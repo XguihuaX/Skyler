@@ -12,6 +12,7 @@ import {
 import CapabilityPanel from './CapabilityPanel';
 import ExtensionsSection from './ExtensionsSection';
 import ActivityAwarenessSection from './ActivityAwarenessSection';
+import ActivityTimelineDrawer from './ActivityTimelineDrawer';
 import MemoryManagerDrawer from './MemoryManagerDrawer';
 import UserProfileSection from './UserProfileSection';
 
@@ -857,6 +858,65 @@ interface MemorySectionProps {
   count: number | null;
 }
 
+// ---------------------------------------------------------------------------
+// v3.5 chunk 14 — Activity timeline section
+//
+// 与 MemorySection 同 layout(标题 + 单卡片 + 主按钮),只暴露"打开 timeline"
+// 入口。记录开关 / 黑名单 / idle 阈值 共享上方 ActivityAwarenessSection,
+// 不重复 toggle 避免 UI 噪音。
+// ---------------------------------------------------------------------------
+
+
+interface ActivityTimelineSectionProps {
+  onOpenTimeline: () => void;
+}
+
+
+function ActivityTimelineSection({ onOpenTimeline }: ActivityTimelineSectionProps) {
+  return (
+    <section
+      className="mb-4 rounded-lg p-4"
+      style={{
+        background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
+        border: '1px solid var(--color-border-subtle)',
+      }}
+    >
+      <h3
+        className="text-sm font-medium mb-3"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        活动记录
+      </h3>
+      <div
+        className="flex items-center justify-between p-4 rounded-lg"
+        style={{ background: 'color-mix(in srgb, var(--color-bg-surface) 40%, transparent)' }}
+      >
+        <div className="flex flex-col">
+          <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
+            每日活动 timeline
+          </span>
+          <span className="text-[11px] mt-0.5"
+            style={{ color: 'var(--color-text-secondary)' }}>
+            跟聊天记录平行的活动 timeline,Momo 能引用今天做了什么
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenTimeline}
+          className="px-3 py-1.5 text-xs rounded-md transition"
+          style={{
+            background: 'var(--color-accent)',
+            color: 'var(--color-bubble-user-text)',
+          }}
+        >
+          查看
+        </button>
+      </div>
+    </section>
+  );
+}
+
+
 function MemorySection({
   userId,
   characterId,
@@ -1367,6 +1427,8 @@ export default function SettingsPanel() {
   }, []);
 
   const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
+  // chunk 14: activity timeline drawer 开关
+  const [timelineDrawerOpen, setTimelineDrawerOpen] = useState(false);
   const [memoryCount, setMemoryCount] = useState<number | null>(null);
 
   // Hydrate ASR/VAD prefs from localStorage on mount
@@ -1506,6 +1568,13 @@ export default function SettingsPanel() {
           后端 ActivityWatcher 默认 enabled，前端可在此 toggle 关 + 增删黑名单。 */}
       <ActivityAwarenessSection showToast={showToast} />
 
+      {/* v3.5 chunk 14 —— 活动 timeline(每日 session 记录,跟 chat_history 平行)。
+          Drawer 内显示按 app 聚合的当日 sessions + category 横条 + 单条删 / 整日清。
+          黑名单 / 离开检测 toggle 跟上方"活动感知"共享 — 在这里只暴露 timeline 入口。 */}
+      <ActivityTimelineSection
+        onOpenTimeline={() => setTimelineDrawerOpen(true)}
+      />
+
       <CharacterStateSection showToast={showToast} />
 
       <Section title="ASR / VAD">
@@ -1590,6 +1659,13 @@ export default function SettingsPanel() {
         characterId={currentCharacterId}
         onClose={() => setMemoryManagerOpen(false)}
         onCountChange={setMemoryCount}
+      />
+
+      {/* chunk 14: activity timeline drawer mount */}
+      <ActivityTimelineDrawer
+        open={timelineDrawerOpen}
+        onClose={() => setTimelineDrawerOpen(false)}
+        showToast={showToast}
       />
 
       {/* Toasts */}
