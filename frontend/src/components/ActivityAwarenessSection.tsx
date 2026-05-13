@@ -40,6 +40,9 @@ export default function ActivityAwarenessSection({
   const [urlsOpen, setUrlsOpen] = useState(false);
   const [newApp, setNewApp] = useState('');
   const [newUrl, setNewUrl] = useState('');
+  // chunk 8a-ext V2: idle 闸阈值本地草稿 — 与 cfg.judge_idle_threshold_seconds 同步,
+  // blur / Enter 时 PATCH。空串视作 0 (用户清空意图 = 关闸)。
+  const [idleDraft, setIdleDraft] = useState<string>('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -61,6 +64,11 @@ export default function ActivityAwarenessSection({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // 同步 cfg → 输入草稿(用户改完 PATCH 后 cfg 刷新,草稿跟上)
+  useEffect(() => {
+    if (cfg) setIdleDraft(String(cfg.judge_idle_threshold_seconds));
+  }, [cfg?.judge_idle_threshold_seconds]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refresh status every 30s 让 UI 反映当前 active app 切换
   useEffect(() => {
@@ -114,6 +122,24 @@ export default function ActivityAwarenessSection({
     void onPatch({ blocked_url_patterns: [...cfg.blocked_url_patterns, v] });
   };
 
+  // chunk 8a-ext V2: 提交 idle 闸阈值
+  const commitIdle = () => {
+    if (!cfg) return;
+    const raw = idleDraft.trim();
+    const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
+    if (Number.isNaN(parsed)) {
+      showToast('请输入整数秒数(0 = 关闸)');
+      setIdleDraft(String(cfg.judge_idle_threshold_seconds));
+      return;
+    }
+    const clamped = Math.max(0, Math.min(3600, parsed));
+    if (clamped === cfg.judge_idle_threshold_seconds) {
+      setIdleDraft(String(clamped));
+      return;
+    }
+    void onPatch({ judge_idle_threshold_seconds: clamped });
+  };
+
   return (
     <Section title="活动感知" icon={<Activity size={14} />}>
       {loading && !cfg && (
@@ -150,6 +176,35 @@ export default function ActivityAwarenessSection({
               onChange={(v) => onPatch({ judge_enabled: v })}
             />
           </Row>
+
+          {/* chunk 8a-ext V2: 键鼠 idle 闸阈值(只在 judge 开启时有意义) */}
+          {cfg.judge_enabled && (
+            <Row
+              label="离开检测阈值（秒）"
+              hint={
+                cfg.judge_idle_threshold_seconds > 0
+                  ? `键鼠静止超 ${cfg.judge_idle_threshold_seconds} 秒视为离开电脑，跳过 judge（仅 macOS 生效）。0 = 关闭检测`
+                  : '已关闭：人不在电脑前时也会判断（不推荐）'
+              }
+            >
+              <input
+                type="number"
+                min={0}
+                max={3600}
+                step={30}
+                value={idleDraft}
+                onChange={(e) => setIdleDraft(e.target.value)}
+                onBlur={commitIdle}
+                onKeyDown={(e) => { if (e.key === 'Enter') commitIdle(); }}
+                className="w-20 px-1.5 py-0.5 text-xs rounded focus:outline-none text-right"
+                style={{
+                  background: 'var(--color-bg-input)',
+                  border: '1px solid var(--color-border)',
+                  color: 'var(--color-text-primary)',
+                }}
+              />
+            </Row>
+          )}
 
           {/* fetch_url_content */}
           <Row

@@ -78,6 +78,8 @@ class ActivityConfigResponse(BaseModel):
     judge_model: str
     judge_min_stay_minutes: int
     judge_throttle_minutes: int
+    # chunk 8a-ext V2: 键鼠 idle 闸阈值(秒);0 = 关闭闸,非 macOS 自动绕过
+    judge_idle_threshold_seconds: int
 
 
 @router.get("/activity/config", response_model=ActivityConfigResponse)
@@ -94,6 +96,7 @@ async def activity_config() -> ActivityConfigResponse:
         judge_model=judge.get_judge_model(),
         judge_min_stay_minutes=judge.get_min_stay_minutes(),
         judge_throttle_minutes=judge.get_judge_throttle_minutes(),
+        judge_idle_threshold_seconds=judge.get_idle_threshold_seconds(),
     )
 
 
@@ -109,6 +112,9 @@ class ActivityConfigPatch(BaseModel):
     fetch_url_content: Optional[bool] = None
     # chunk 8a-ext: 智能陪伴 judge 总开关(默认 ON,关掉后慢路径完全静默)
     judge_enabled: Optional[bool] = None
+    # chunk 8a-ext V2: idle 闸阈值(秒)。值为 0 即关闸,负数被 clamp 到 0,非 macOS
+    # ioreg 失败自动绕过保持 V1 行为。前端 UI 允许 [0, 1800] 区间(0..30 min)。
+    judge_idle_threshold_seconds: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -162,5 +168,18 @@ async def patch_activity_config(body: ActivityConfigPatch) -> ActivityConfigResp
         # 不在 ``activity_watcher`` block 内,与 ActivityJudge config 读取一致。
         from backend.config import config_yaml as _cfg
         _cfg.setdefault("activity_judge", {})["enabled"] = bool(body.judge_enabled)
+
+    if body.judge_idle_threshold_seconds is not None:
+        # chunk 8a-ext V2: idle 闸阈值。clamp 到 [0, 3600] 防 UI 误输入。
+        # 0 = 关闸; > 0 = 静止超 N 秒 → skip judge。
+        from backend.config import config_yaml as _cfg
+        try:
+            v = max(0, min(3600, int(body.judge_idle_threshold_seconds)))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="judge_idle_threshold_seconds 必须为整数",
+            )
+        _cfg.setdefault("activity_judge", {})["idle_threshold_seconds"] = v
 
     return await activity_config()

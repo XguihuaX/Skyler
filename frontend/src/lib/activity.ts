@@ -36,6 +36,8 @@ export interface ActivityConfigResponse {
   judge_model: string;
   judge_min_stay_minutes: number;
   judge_throttle_minutes: number;
+  // chunk 8a-ext V2: 键鼠 idle 闸阈值(秒);0 = 关闸,非 macOS 自动绕过
+  judge_idle_threshold_seconds: number;
 }
 
 export interface ActivityConfigPatch {
@@ -44,6 +46,7 @@ export interface ActivityConfigPatch {
   blocked_url_patterns?: string[];
   fetch_url_content?: boolean;
   judge_enabled?: boolean;     // chunk 8a-ext 智能陪伴 toggle
+  judge_idle_threshold_seconds?: number; // chunk 8a-ext V2 idle 闸阈值秒(0 关闸)
 }
 
 export async function fetchActivityStatus(): Promise<ActivityStatusResponse> {
