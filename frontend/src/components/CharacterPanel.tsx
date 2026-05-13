@@ -7,6 +7,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  Upload,
 } from 'lucide-react';
 import { useAppStore } from '../store';
 import {
@@ -18,7 +19,12 @@ import {
   updateBaseInstruction,
   type CharacterRow,
 } from '../lib/config';
-import { fetchLive2DModels } from '../lib/live2d';
+import {
+  fetchLive2DModels,
+  type Live2DUploadResult,
+} from '../lib/live2d';
+import Live2DDropzone from './live2d/Live2DDropzone';
+import MotionMapConfirmDialog from './live2d/MotionMapConfirmDialog';
 import {
   fetchBackgrounds,
   type BackgroundItem,
@@ -299,6 +305,14 @@ export default function CharacterPanel() {
   const [backgrounds, setBackgrounds]     = useState<BackgroundItem[]>([]);
   const [bgLoading, setBgLoading]         = useState(false);
   const [bgError,   setBgError]           = useState<string | null>(null);
+  // Stage 2.2.1: Live2D dropzone modal + 上传成功后的 motion_map 确认弹窗
+  const [showLive2DUpload, setShowLive2DUpload] = useState(false);
+  const [pendingMotionMap, setPendingMotionMap] = useState<{
+    targetCharacterId: number;
+    targetCharacterName: string;
+    result: Live2DUploadResult;
+  } | null>(null);
+  const [applyingMotionMap, setApplyingMotionMap] = useState(false);
 
   const showToast = useCallback((text: string) => {
     const id = Date.now() + Math.random();
@@ -343,6 +357,78 @@ export default function CharacterPanel() {
   useEffect(() => {
     void refreshLive2D();
   }, [refreshLive2D]);
+
+  // Stage 2.2.1: Live2D dropzone 上传成功回调
+  //
+  // 流程:
+  //   1. toast 带 textures / motions 计数
+  //   2. 自动设置 form.live2d_model = result.slug(让 dropdown 选中新模型)
+  //   3. await refreshLive2D() 让 dropdown 列表立即出现新 slug
+  //   4. 仅 edit 模式 + 有 motion entries 时弹 motion_map 确认对话框;
+  //      create 模式提示用户保存角色后再配,本组件无 character.id 不能 PATCH
+  const onLive2DUploadSuccess = useCallback(
+    async (result: Live2DUploadResult) => {
+      setShowLive2DUpload(false);
+      const motionCount = result.motions_count;
+      const textureCount = result.textures_count;
+      showToast(
+        `已上传 ${result.slug}(${textureCount} 个 texture / ${motionCount} 个 motion)`,
+      );
+      // 自动选中新 slug + 刷新 dropdown
+      setForm((prev) => (prev ? { ...prev, live2d_model: result.slug } : prev));
+      await refreshLive2D();
+
+      // 决定是否弹 motion_map 确认对话框
+      setForm((curr) => {
+        if (!curr) return curr;
+        if (
+          curr.mode === 'edit'
+          && curr.id !== null
+          && Object.keys(result.motion_map).length > 0
+        ) {
+          setPendingMotionMap({
+            targetCharacterId: curr.id,
+            targetCharacterName: curr.name || `character ${curr.id}`,
+            result,
+          });
+        } else if (
+          curr.mode === 'create'
+          && Object.keys(result.motion_map).length > 0
+        ) {
+          showToast(
+            'motion_map 默认值已就绪;保存角色后可在 motion_map_json 编辑',
+          );
+        }
+        return curr;
+      });
+    },
+    [refreshLive2D, showToast],
+  );
+
+  const onApplyMotionMap = useCallback(async () => {
+    if (!pendingMotionMap) return;
+    setApplyingMotionMap(true);
+    try {
+      await patchCharacter(pendingMotionMap.targetCharacterId, {
+        motion_map_json: JSON.stringify(pendingMotionMap.result.motion_map),
+      });
+      showToast(`已应用 motion_map 到 ${pendingMotionMap.targetCharacterName}`);
+      setPendingMotionMap(null);
+      await refresh();
+    } catch (e) {
+      console.error('[CharacterPanel] apply motion_map failed:', e);
+      showToast(`应用 motion_map 失败:${(e as Error).message}`);
+    } finally {
+      setApplyingMotionMap(false);
+    }
+  }, [pendingMotionMap, refresh, showToast]);
+
+  const onSkipMotionMap = useCallback(() => {
+    setPendingMotionMap(null);
+    showToast(
+      '已跳过 motion_map;可在 character.motion_map_json 字段手动配置',
+    );
+  }, [showToast]);
 
   // v3.5 chunk 5a：背景资产 mount 时拉一次，[刷新] 按钮 + 新增 / 编辑表单
   // 打开时复用 callback。失败不阻塞主路径——下拉只剩 "(无)"，用户能继续
@@ -912,20 +998,36 @@ export default function CharacterPanel() {
                 >
                   Live2D 模型
                 </label>
-                <button
-                  type="button"
-                  onClick={() => void refreshLive2D()}
-                  disabled={live2dLoading}
-                  className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                  title="重新扫描 frontend/public/live2d/"
-                >
-                  <RefreshCw
-                    size={10}
-                    className={live2dLoading ? 'animate-spin' : ''}
-                  />
-                  刷新
-                </button>
+                <div className="flex items-center gap-1">
+                  {/* Stage 2.2.1: 上传新模型按钮 */}
+                  <button
+                    type="button"
+                    onClick={() => setShowLive2DUpload(true)}
+                    className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80"
+                    style={{
+                      background: 'var(--color-accent)',
+                      color: 'var(--color-bubble-user-text)',
+                    }}
+                    title="拖入 .zip 上传新 Live2D 模型"
+                  >
+                    <Upload size={10} />
+                    上传模型
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void refreshLive2D()}
+                    disabled={live2dLoading}
+                    className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                    title="重新扫描 frontend/public/live2d/"
+                  >
+                    <RefreshCw
+                      size={10}
+                      className={live2dLoading ? 'animate-spin' : ''}
+                    />
+                    刷新
+                  </button>
+                </div>
               </div>
               <div className="relative">
                 <select
@@ -1207,6 +1309,24 @@ export default function CharacterPanel() {
           text={`确认删除角色「${pendingDelete.name}」？\n该角色名下的对话与记忆不会自动迁移。`}
           onConfirm={confirmDelete}
           onCancel={() => setPendingDelete(null)}
+        />
+      )}
+
+      {/* Stage 2.2.1: Live2D 上传 + motion_map 确认 */}
+      {showLive2DUpload && (
+        <Live2DDropzone
+          onClose={() => setShowLive2DUpload(false)}
+          onSuccess={(result) => void onLive2DUploadSuccess(result)}
+        />
+      )}
+      {pendingMotionMap && (
+        <MotionMapConfirmDialog
+          characterName={pendingMotionMap.targetCharacterName}
+          slug={pendingMotionMap.result.slug}
+          motionMap={pendingMotionMap.result.motion_map}
+          applying={applyingMotionMap}
+          onApply={() => void onApplyMotionMap()}
+          onSkip={onSkipMotionMap}
         />
       )}
 
