@@ -444,6 +444,10 @@ async def format_today_activity_for_prompt(
     if total < 60:
         return None
 
+    # hotfix-10: LLM-facing 用 display_name 而非 bundle name(``Code`` →
+    # ``VS Code``,``Terminal`` → ``终端``)。storage / DB / stay_key 仍是英文 bundle。
+    from backend.integrations.activity_monitor import get_display_name
+
     lines = ["## 用户今日活动"]
     lines.append(f"今天已活跃 {_fmt_duration_zh(total)}。")
     lines.append("")
@@ -453,7 +457,7 @@ async def format_today_activity_for_prompt(
         app_agg.items(), key=lambda kv: -kv[1]["total"],
     )[:5]
     for app, info in top5:
-        line = f"- {app} {_fmt_duration_zh(info['total'])}"
+        line = f"- {get_display_name(app)} {_fmt_duration_zh(info['total'])}"
         if info["top_url"]:
             # URL 简化:取 host(去 protocol + path)给 LLM 一眼看清
             url = info["top_url"]
@@ -477,7 +481,7 @@ async def format_today_activity_for_prompt(
         lines.append(line)
     if recent_app:
         lines.append("")
-        lines.append(f"最近 30 分钟主要在: {recent_app}")
+        lines.append(f"最近 30 分钟主要在: {get_display_name(recent_app)}")
 
     return "\n".join(lines)
 

@@ -112,6 +112,50 @@ def _run_osascript(script: str) -> Optional[str]:
 _FRONTMOST_APPLESCRIPT = "POSIX path of (path to frontmost application)"
 
 
+# ---------------------------------------------------------------------------
+# v3.5 hotfix-10 — LLM-facing display name 本地化
+#
+# get_active_app 返英文 bundle 名(``"Code"`` / ``"Terminal"``)给下游 keyed
+# lookup 用,storage / stay_key / DB 一律保留英文 bundle 名 — 跨 locale 稳定。
+#
+# 但 LLM-facing 文本(chunk 14 format_today_activity_for_prompt 注入主对话)
+# 想用更人话的中文 display name:
+#   * "Code 3小时"   太技术,LLM 不懂这是 VSCode
+#   * "Terminal 1小时" 比"终端 1小时"对中文用户疏远
+# 用本字典给 LLM 注入路径 only,*不要*在 storage / 内部逻辑用。
+#
+# 未在表里的 bundle 名直接返原值(``Spotify`` / ``Slack`` / ``Notion`` 等
+# 国际化品牌名英文阅读体验已经不差,加 mapping 反而显得多余)。
+# ---------------------------------------------------------------------------
+
+
+_APP_DISPLAY_NAMES: dict = {
+    # IDE / 编辑器:bundle 名太技术,LLM 看到 "Code" 容易理解错
+    "Code": "VS Code",
+    "Code - Insiders": "VS Code Insiders",
+    # Apple 原生 + 中文 macOS 用户习惯:Terminal 中文展示更亲切
+    "Terminal": "终端",
+    # 中文用户惯用产品名(品牌方自己也用中英文双称呼)
+    # 这些 app 的 bundle 名往往是英文,但 NSWorkspace localizedName 是中文
+    # —— 切回 osascript 后丢了 localizedName,这里手动补
+    # (扩展时只加"用户明显期待中文展示"的;通用英文品牌名不加)
+}
+
+
+def get_display_name(bundle_name: Optional[str]) -> str:
+    """bundle name → LLM-facing display name。
+
+    *只*用于注入主对话(chunk 14 chat prompt)或前端用户可见文案。
+    storage / stay_key / DB / capability return 一律保留英文 bundle name。
+
+    bundle_name=None / 空 → 返 ``"(unknown)"`` (chunk 14 注入文本 fallback)。
+    bundle_name 不在 mapping → 直接返原值(国际化品牌名英文阅读体验已 OK)。
+    """
+    if not bundle_name:
+        return "(unknown)"
+    return _APP_DISPLAY_NAMES.get(bundle_name, bundle_name)
+
+
 def get_active_app() -> Optional[str]:
     """当前 frontmost app 的**英文 bundle 名**(如 ``"Google Chrome"`` /
     ``"Code"`` / ``"Safari"`` / ``"Terminal"`` / ``"Spotify"``)。
