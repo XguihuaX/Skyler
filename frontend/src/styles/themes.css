@@ -185,6 +185,28 @@
   --color-scrollbar:        #5A4878;
 }
 
+/* ===================================================================
+ * v4-fan chunk 2 — Fan UI 卡牌共享 token
+ *
+ * 三个 token 走 :root 一份默认即可,各主题不重写——卡牌阴影本质是
+ * "中性灰偏深"的环境光阴影,主题切换不应该让阴影变粉 / 变绿。
+ * 真正的主题感由 splash art 自己的色调承担。
+ *
+ *   --shadow-card-rest  rest 态:轻盈,不抢主图;Y 偏移 + 模糊收敛
+ *   --shadow-card-lift  hover/selected 态:抬起感,Y 加大 + 模糊扩散
+ *   --gradient-card-default  splash art 缺位时的占位底色渐变
+ * =================================================================== */
+:root {
+  --shadow-card-rest:
+      0 6px 18px rgba(0, 0, 0, 0.32),
+      0 2px 4px  rgba(0, 0, 0, 0.20);
+  --shadow-card-lift:
+      0 24px 48px rgba(0, 0, 0, 0.45),
+      0 8px 16px  rgba(0, 0, 0, 0.30);
+  --gradient-card-default:
+      linear-gradient(160deg, #2a2a2a 0%, #1a1a1a 100%);
+}
+
 /* ---------- 全局滚动条样式（webkit） ---------- */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }

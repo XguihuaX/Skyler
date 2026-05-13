@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useState } from 'react';
+import { lazy, Suspense, useMemo, useEffect, useState } from 'react';
 import { useAppStore } from './store';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useAudio } from './hooks/useAudio';
@@ -22,7 +22,34 @@ import { fetchTtsVoices } from './lib/tts';
 // 方便子组件统一从 App 导入
 export { useAppApi } from './contexts/appApi';
 
+// v4-fan chunk 2: P0 spike entry (?spike=blur)。lazy import 让 spike 文件
+// 在 production bundle 里 tree-shake 掉(没人传 query 就不 import)。
+// Fan-3 ship 时连同 __spike__/ 目录一起 git rm。
+const BlurSpike = lazy(
+  () => import('./components/character/__spike__/BlurSpike'),
+);
+
+// v4-fan chunk 2: ?spike=blur 路由检查。在 module scope 一次性算,避免
+// 任何 hook 顺序问题。spike 路径下完全跳过 MainApp,不挂 WS / audio。
+const _SPIKE_MODE: string | null = (() => {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get('spike');
+})();
+
 function App() {
+  if (_SPIKE_MODE === 'blur') {
+    return (
+      <Suspense
+        fallback={<div style={{ color: '#fff', padding: 16 }}>loading spike…</div>}
+      >
+        <BlurSpike />
+      </Suspense>
+    );
+  }
+  return <MainApp />;
+}
+
+function MainApp() {
   const mode = useAppStore((s) => s.mode);
   const [warming, setWarming] = useState(true);
   // v3.5 chunk 5b：splash 完成前主视图 opacity=0；splash silent-skip 时

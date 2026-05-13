@@ -113,6 +113,9 @@ export interface CharacterRow {
   // v3.5 chunk 5a: per-character 背景层 URL（image / video）。null = 用
   // CharacterView 原 fallback 链（Live2D → 静态 jpeg），完全兼容旧角色。
   background_path:   string | null;
+  // v4-fan chunk 1: Fan UI 扇面卡牌底图。Vite static URL（如
+  // ``/splash-art/2.jpg``）。null → CharacterCard 走 _placeholder.png 占位。
+  splash_art_url:    string | null;
   created_at: string | null;
 }
 
