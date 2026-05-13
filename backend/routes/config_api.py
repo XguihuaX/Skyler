@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.config import config_yaml, reload_config_yaml
+from backend.utils.yaml_atomic import write_config_atomic
 
 router = APIRouter()
 
@@ -177,27 +178,15 @@ async def get_base_instruction_endpoint() -> Any:
 async def set_base_instruction_endpoint(body: BaseInstructionUpdateBody) -> dict:
     """更新通用设定并写回 config.yaml。
 
-    步骤：
-      1. 重新从磁盘读 yaml（避免覆盖其他进程刚刚写入的字段）
-      2. 只更新 base_instruction 一项
-      3. 用 yaml.safe_dump 写回（allow_unicode 保留中文原样）
-      4. 调 reload_config_yaml() 让进程内字典立即生效
+    Stage 2.1.0：read-modify-write 链路下放到 ``write_config_atomic``
+    helper(tmp + os.rename 原子 swap + per-path asyncio.Lock 串行化)。
+    Mutate 完成后调 reload_config_yaml() 让进程内字典立即生效。
     """
-    try:
-        if _CONFIG_PATH.exists():
-            with open(_CONFIG_PATH, encoding="utf-8") as f:
-                current: dict = yaml.safe_load(f) or {}
-        else:
-            current = {}
+    def _mutate(current: dict) -> None:
         current["base_instruction"] = body.base_instruction
-        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-            yaml.safe_dump(
-                current,
-                f,
-                allow_unicode=True,
-                sort_keys=False,
-                default_flow_style=False,
-            )
+
+    try:
+        await write_config_atomic(_CONFIG_PATH, _mutate)
         reload_config_yaml()
     except yaml.YAMLError as exc:
         raise HTTPException(
