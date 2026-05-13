@@ -144,7 +144,7 @@ Here's what Skyler currently does. None of these are locked — every layer is b
 - **Streaming output** — text and audio arrive sentence by sentence
 - **TTS** — CosyVoice (DashScope, default) → Edge-TTS fallback; per-character `voice_model` config; SoVITS planned
 - **Auto-mute mic** when the assistant is speaking (prevents feedback loop)
-- **Tool-call transition** — when the agent calls a tool, it first emits a short transition line ("let me check…") and the input area shows a contextual loading pill ("checking calendar…") so you're never left wondering whether it's frozen <!-- TODO: chunk 15/UX-006 完成后回填 audio pipeline sentence-by-sentence streaming 让过渡语真出声 -->
+- **Tool-call transition** — when the agent calls a tool, it first emits a short transition line ("let me check…") and the input area shows a contextual loading pill ("checking calendar…") so you're never left wondering whether it's frozen. chunk 14 producer/consumer + chunk 6b TTS pipeline 已实现 sentence-by-sentence streaming,经 chunk 15 实测验证体感流畅
 
 ### 🧠 Memory & Personality (three layers)
 - **Layer 1 — short-term** — `chat_history` table, organized by `conversation_id`; the agent picks the last N turns; also the sole input source for the Layer 2 worker

@@ -173,7 +173,7 @@ python -m tools.check_moc3_version frontend/public/live2d/yae/
 - **流式输出** —— 文字和音频按句到达
 - **TTS** —— CosyVoice(DashScope,默认)→ Edge-TTS 后备;每角色独立 `voice_model` 配置;SoVITS 计划中
 - **assistant 说话时自动静音 mic**(防回声 loop)
-- **Tool 调用过渡** —— agent 调 tool 时先冒一句过渡话("让我看看…"),输入框同时显示对应 loading pill("查日历…"),你不会卡在 30 秒沉默里不知道是不是卡死了 <!-- TODO: chunk 15/UX-006 完成后回填过渡语真出声(audio pipeline sentence-by-sentence streaming) -->
+- **Tool 调用过渡** —— agent 调 tool 时先冒一句过渡话("让我看看…"),输入框同时显示对应 loading pill("查日历…"),你不会卡在 30 秒沉默里不知道是不是卡死了。chunk 14 producer/consumer + chunk 6b TTS pipeline 已实现 sentence-by-sentence streaming,经 chunk 15 实测验证体感流畅
 
 ### 🧠 记忆 & 人格(三层结构)
 - **第 1 层 短期** —— `chat_history` 表,按 conversation_id 组织,ChatAgent 每轮取最近 N 行;也是第 2 层 worker 的唯一输入源
