@@ -483,6 +483,40 @@ MEMORY_TOOLS: List[dict] = [
     },
 ]
 
+# UX-004: 工具调用前的过渡语行为规范。与 ``_TOOL_PROMPT_ADDENDUM`` 战术指令
+# (when/how to call each tool) 分开 —— 本块只讲"调用前先说话"的 *Momo 哲学*。
+#
+# 注入位置: head_parts(emotion/thinking/motion/state/BASE_INSTRUCTION/persona)
+# 末尾,在 chunk 11 profile / chunk 14 activity / memory recall *之前*。理由:
+# tool 调用行为是输出格式约束,与 emotion/persona 同层级,不应跟语义层(用户
+# 画像/今日活动/相关记忆)混在一起。
+#
+# v1 统一默认(用户决策):character-specific 过渡语示例不在本 commit 加 —
+# 八重 / 未来角色靠自己 persona 自然变体即可。chunk 12 persona 加厚时再
+# 引入 ``tool_transition_examples`` 字段(README Known Problems / tech debt
+# 已记录)。
+#
+# TTS 决策(用户决策 Choice A):过渡语**只走文字流**(text_chunk),不预拆给
+# TTS 单独合成。最终 TTS 仍是完整回复 full-utterance。Choice B(过渡语单独
+# TTS interleave)需要 TTS 架构改 sentence-by-sentence streaming,留 chunk 15
+# / UX-006(tech debt 已记录)。
+_TOOL_BEHAVIOR_BLOCK = (
+    "【工具调用行为】\n"
+    "当你需要调用工具(查日历 / 看今日活动 / 查歌单 / 看 B 站 / 查网页 / "
+    "看剪贴板 / 等)时,**必须先输出一句简短的过渡语**(6-15 字)让用户知道你在"
+    "查询,然后再触发工具调用。\n\n"
+    "过渡语要自然贴合你的人设,不要每次重复同一句。例如:\n"
+    "  - \"嗯,让我看看\"\n"
+    "  - \"等我查一下\"\n"
+    "  - \"稍等,我看看日历\"\n"
+    "  - \"好,我去查查\"\n"
+    "  - (按当前角色 persona 自然变体)\n\n"
+    "绝对避免:\n"
+    "  - 直接 silent 调用工具不说话(用户体感'app 卡死')\n"
+    "  - 过渡前输出长篇分析或解释(把分析留到工具返回后)"
+)
+
+
 _TOOL_PROMPT_ADDENDUM = (
     "\n\n你有以下 tool 可用，请按用户意图主动调用——不是装饰品，是真的能办事的工具。\n\n"
     "【日历类】Apple Calendar (macOS EventKit)：\n"
@@ -1112,6 +1146,9 @@ async def _build_messages(
     if base:
         head_parts.append(base)
     head_parts.append(persona_block)
+    # UX-004: 过渡语行为规范紧贴 persona 之后,与 emotion/thinking/state 同层级
+    # (输出格式约束块),不混进下方 profile/activity/memory recall 语义层
+    head_parts.append(_TOOL_BEHAVIOR_BLOCK)
     system_parts: List[str] = ["\n\n".join(head_parts)]
 
     _profile_enabled   = get_profile_enabled()
