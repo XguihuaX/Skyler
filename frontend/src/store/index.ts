@@ -294,6 +294,13 @@ interface AppState {
   currentCharacterId: number | null;
   setCurrentCharacterId: (v: number | null) => void;
 
+  // v4-fan chunk 4 — Character Gallery 全屏入口。true → CharacterGallery
+  // overlay 接管视觉(fan browse + detail modal),false → 正常主 UI。
+  // ESC / 关闭按钮 / CTA 切换都会复位 false。Widget 模式不开放入口
+  // (TopBar 不渲染),只 Panel 模式可达。
+  galleryOpen: boolean;
+  setGalleryOpen: (v: boolean) => void;
+
   // v3-E2 commit 3b — Live2D 模型扫描结果，CharacterPanel 下拉数据源。
   // 由 GET /api/live2d/models 填充；CharacterPanel mount 和点击刷新按钮时拉。
   live2dModels: Live2DModel[];
@@ -461,6 +468,9 @@ export const useAppStore = create<AppState>((set) => ({
   setCharacters: (characters) => set({ characters }),
   currentCharacterId: null,
   setCurrentCharacterId: (currentCharacterId) => set({ currentCharacterId }),
+
+  galleryOpen: false,
+  setGalleryOpen: (galleryOpen) => set({ galleryOpen }),
 
   live2dModels: [],
   setLive2dModels: (live2dModels) => set({ live2dModels }),

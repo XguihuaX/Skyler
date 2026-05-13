@@ -37,6 +37,7 @@
  *      发生,仍可见但 spec 容忍。
  */
 import { useEffect, useMemo, useState } from 'react';
+import { motion } from 'framer-motion';
 import CharacterCard from './CharacterCard';
 import type { CharacterRow } from '../../lib/config';
 
@@ -75,6 +76,13 @@ interface FanLayoutProps {
   onSelectCharacter: (id: number) => void;
   layoutParams?: Partial<FanLayoutParams>;
   debug?: boolean;
+  /**
+   * v4-fan chunk 4: 当 detail modal 打开时,该卡 wrapper opacity → 0,
+   * 让 framer-motion 的 ``layoutId={`fan-card-${id}`}`` shared layout
+   * 动画接管该卡视觉(从 browse 位置 morph 到 detail 位置),不会出现
+   * "browse 卡 + detail 卡同时可见" 的视觉打架。
+   */
+  hideHeroForId?: number | null;
 }
 
 const MIN_OPACITY = 0.15;
@@ -175,6 +183,7 @@ export default function FanLayout({
   onSelectCharacter,
   layoutParams,
   debug = false,
+  hideHeroForId = null,
 }: FanLayoutProps) {
   const [viewportH, setViewportH] = useState(
     typeof window !== 'undefined' ? window.innerHeight : 800,
@@ -276,6 +285,11 @@ export default function FanLayout({
           const opacity = fadeOpacity(displayed, params.arcDegree);
           const isSelected = offset === 0;
 
+          // v4-fan chunk 4: detail modal 打开时,该卡 wrapper 视觉藏起,
+          // 让 motion.div 的 layoutId hero 动画独占该卡的 from→to morph。
+          // pointerEvents 也关掉防误点(hero 进行时不该再 click 触发新切换)。
+          const isHeroSource = hideHeroForId === c.id;
+
           return (
             <div
               key={c.id}
@@ -283,27 +297,32 @@ export default function FanLayout({
               style={{
                 left:    x - CARD_W / 2,
                 top:     y - CARD_H,
-                opacity,
+                opacity: isHeroSource ? 0 : opacity,
                 transition:    `opacity ${params.transitionDuration}ms ease-out`,
-                pointerEvents: 'auto',
+                pointerEvents: isHeroSource ? 'none' : 'auto',
                 willChange:    'opacity',
               }}
             >
-              <CharacterCard
-                character={c}
-                variant="browse"
-                rotation={base}
-                selected={isSelected}
-                onClick={() => {
-                  setCurrentIndex((prev) => {
-                    const prevMod = posMod(prev, N);
-                    if (prevMod === charIdx) return prev;
-                    const delta = shortestDelta(charIdx, prevMod, N);
-                    return prev + delta;
-                  });
-                  onSelectCharacter(c.id);
-                }}
-              />
+              <motion.div
+                layoutId={`fan-card-${c.id}`}
+                transition={{ layout: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } }}
+              >
+                <CharacterCard
+                  character={c}
+                  variant="browse"
+                  rotation={base}
+                  selected={isSelected}
+                  onClick={() => {
+                    setCurrentIndex((prev) => {
+                      const prevMod = posMod(prev, N);
+                      if (prevMod === charIdx) return prev;
+                      const delta = shortestDelta(charIdx, prevMod, N);
+                      return prev + delta;
+                    });
+                    onSelectCharacter(c.id);
+                  }}
+                />
+              </motion.div>
               {debug && (
                 <div
                   className="absolute font-mono text-[10px] whitespace-nowrap pointer-events-none"
