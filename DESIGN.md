@@ -3547,6 +3547,257 @@ capability return **决不**走 mapping。未列表里的 bundle 名直接返原
 
 ---
 
+## 十五之T、Activity Timeline 系统(chunk 14 起)
+
+### 设计目标
+
+chunk 8a + 8a-ext + V2 + hotfix-9/10 让 Momo 知道**"用户现在在 X app/URL"**
+(实时)并能基于实时 stay 触发 chime in。但**Momo 不记得"用户今天都做了什么"**:
+* 用户早上 B 站看 2 小时 → 切 IDE 写代码 3 小时 → 晚上 Momo 不知道
+* 用户跟 Momo 聊天时,Momo 没法说"你今天 B 站看了多久,看什么呢"
+
+chunk 14 加 **activity_timeline 系统**:跟 ``chat_history`` 平行的第二条
+timeline,持久化记录用户每天 app/URL 活动 sessions;Momo 在主对话中能引用
+今日活动(``## 用户今日活动`` system prompt 块),也能通过 capability 主动
+查指定日期 / 关键词。
+
+### 三层架构
+
+```
+                                    ┌─────────────────────────────────┐
+                                    │ NSWorkspace / osascript / ioreg │
+                                    │ (hotfix-10 + 8a-ext V2)         │
+                                    └─────────────────────────────────┘
+                                                 │ frontmost app / URL / idle
+                                                 ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ ActivityWatcher (chunk 8a)                                       │
+│   * snapshot() 每 30s sniff state                                │
+│   * register_change_listener  → 即时 chime in (chunk 8a fast)    │
+│   * register_poll_listener    → maybe_judge (chunk 8a-ext slow)  │
+│                                 → session_writer_poll_handler ★  │
+└──────────────────────────────────────────────────────────────────┘
+                                                 │
+                            ┌────────────────────┼─────────────────────┐
+                            ▼                    ▼                     ▼
+                  fire activity_*           judge_chime_in       activity_sessions
+                  trigger (chunk 8a)        (chunk 8a-ext)       DB row (chunk 14)
+                                                                       │
+                                                                       ▼
+                            ┌──────────────────────────────────────────────┐
+                            │ /api/activity/timeline GET / DELETE          │
+                            │ ToolRegistry: activity.{today_summary,       │
+                            │   recent_apps, search_history}               │
+                            │ ChatAgent _build_messages 注入 system prompt │
+                            │ SettingsPanel ActivityTimelineDrawer         │
+                            │ 每日 23:59 cleanup_old_sessions cron         │
+                            └──────────────────────────────────────────────┘
+```
+
+三层职责清晰分离:
+* **chunk 8a / 8a-ext**: 实时感知 + 当下决策(chime in)
+* **chunk 14**: 持久化记录 + 历史查询 + LLM 上下文注入
+* 共享 ActivityWatcher poll listener hook + 同一 ``blocked_apps`` /
+  ``blocked_url_patterns`` 黑名单 + 同一 ``idle_threshold_seconds``
+
+### Session boundary 检测 — poll-listener + 独立游标
+
+audit 期间评估过两种 hook:
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| ``register_change_listener`` 监听 url_changed / app_changed | 事件驱动,精准 | ``_detect_changes`` 在 listener 触发**前**就 reset ``_url_dwell_start`` / ``_app_focus_start`` → duration 信息丢失;long_dwell / long_focus latching(timer = ``-1.0``)污染 duration 计算 |
+| ``register_poll_listener`` + 独立游标 ★ | 完全解耦 watcher 内部 timer 状态;长稳;30s 颗粒度天然匹配 ``min_session_seconds=30`` 短 session 过滤 | 每 30s 才查,sub-poll 切换看不到(可接受 — 这种切换本就是噪音不该写入) |
+
+选**方案 2**。``backend/services/activity_timeline.py`` 维护模块级
+``_prev_app`` / ``_prev_url`` / ``_prev_title`` / ``_prev_start_at`` /
+``_prev_idle``,每 poll 比对 ``(active_app, browser_url)`` 元组,变化 →
+写一行 ``activity_sessions``,游标重置。
+
+### 五道闸过滤
+
+session 写入前依次过:
+
+1. **元组未变** → no-op(stay 还在进行,只更新 idle 标记)
+2. **duration < min_session_seconds**(默 30s)→ 静默 debug log skip
+3. **黑名单**(chunk 8a ``blocked_apps`` / ``blocked_url_patterns`` +
+   ``url_fetcher.is_url_blocked``)→ INFO log skip
+4. **总开关 ``activity_timeline.enabled=false``** → debug log skip(游标
+   仍更新,关掉再打开不留空洞)
+5. **DB INSERT 异常** → ``logger.exception`` 不抛 — 决不阻塞 watcher poll loop
+
+idle 标记 ``is_idle_filtered``: 复用 chunk 8a-ext V2 ``get_idle_seconds`` +
+``get_idle_threshold_seconds``(默 300s)。idle 期间结束的 session **仍**
+写入(timeline UI 显示完整记录),但 ``is_idle_filtered=1`` —
+capability summary 计算 + chat 注入路径 exclude。
+
+### Schema
+
+``activity_sessions``(commit 1 migration):
+
+```sql
+CREATE TABLE activity_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL DEFAULT 'default',
+  start_at DATETIME NOT NULL,
+  end_at DATETIME NOT NULL,
+  duration_seconds INTEGER NOT NULL,
+  app_name TEXT NOT NULL,            -- hotfix-10 英文 bundle 名
+  browser_url TEXT,                  -- NULL when非浏览器 frontmost
+  browser_title TEXT,
+  category TEXT,                     -- backend categorize() 推断
+  is_idle_filtered INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_activity_sessions_user_date ON activity_sessions(user_id, start_at);
+CREATE INDEX idx_activity_sessions_app       ON activity_sessions(app_name);
+```
+
+backup 模板对齐 chunk 6b hotfix-3:跑前 ``shutil.copyfile momoos.db
+.backup-before-chunk14``,二次跑跳过(幂等)。
+
+### categorize() 规则
+
+7 分类(优先级 URL > app,理由:用户开 Chrome 看 youtube 应分 video 而非
+plain browser):
+
+| category | URL host 子串 / app 集合 |
+|----------|--------------------------|
+| video | youtube.com / bilibili.com/video / netflix / twitch / iqiyi / ... |
+| social | twitter / x.com / facebook / instagram / weibo / reddit / xiaohongshu |
+| tech_doc | docs.python.org / mdn / fastapi / docs.rs / vuejs / ... |
+| ide | _IDE_APPS(code / cursor / pycharm / xcode / vim / 终端 / ...) |
+| browser | _BROWSER_APPS(safari / chrome / firefox / edge / arc / ...) |
+| music | _MUSIC_APPS(spotify / apple music / 网易云音乐 / ...) |
+| other | fallback |
+
+复用 chunk 8a-ext ``_IDE_APPS`` / ``_MUSIC_APPS`` / ``_TECH_DOC_URL_PATTERNS``
++ hotfix-9 ``_BROWSER_APPS`` —— 同一 app 在 chime-in 决策路径和 timeline
+归类路径**必须**归同一 category,不能裂缝。
+
+### API endpoints(commit 3)
+
+* ``GET /api/activity/timeline?date=YYYY-MM-DD&days=N&include_idle=bool``
+  - days clamp [1, 90]
+  - 返 sessions[] + summary_by_app[top_urls top5] + summary_by_category{}
+* ``DELETE /api/activity/timeline/{id}`` — 单条
+* ``DELETE /api/activity/timeline?date=YYYY-MM-DD`` — 整日
+  - ``date=all`` 显式语义清当前 user 全表
+  - ``date=None`` 拒绝 → 400(防误删)
+
+### Capability(commit 4)
+
+3 个 ``@register_capability`` 装饰自动入 ToolRegistry,Consumer.CHAT_AGENT,
+让 LLM 主动查:
+
+* ``activity.get_today_summary`` — top 5 apps + by_category + recent_focus
+  (最近 30 min 内最后一段 stay)
+* ``activity.get_recent_apps(days=7)`` — top 20 apps GROUP BY 聚合,clamp [1,30]
+* ``activity.search_history(keyword, days=30)`` — LIKE 搜 app_name / URL /
+  title,clamp [1, 90],返 top 50 matches。**双重隐私**: ``is_idle_filtered=1``
+  显式排除(用户 AFK 时段的 stay 不该被回忆出来),且黑名单已在写入层过滤
+
+silent degradation: DB 异常 → ``{available: false, reason: db_error}``,
+绝不抛错给 ChatAgent(与 screen.* 同思路)。
+
+### ChatAgent 注入(commit 5)
+
+``backend/services/activity_timeline.format_today_activity_for_prompt(user_id)``
+机械模板生成 ~200 字 prompt 块,**零 LLM 调用**(对齐 chunk 11
+``format_profile_for_prompt`` 原则):
+
+```
+## 用户今日活动
+今天已活跃 5小时15分钟。
+
+主要花在:
+- VS Code 3小时
+- Google Chrome 2小时5分钟(主要看 jobs.bilibili.com B 站 - 社招岗位列表 1小时35分钟)
+- Spotify 10分钟
+
+最近 30 分钟主要在: Spotify
+```
+
+要点:
+* hotfix-10 ``_APP_DISPLAY_NAMES``:``Code → "VS Code"`` / ``Terminal →
+  "终端"`` LLM 友好(storage 仍英文 bundle 名)
+* top URL host 简化(``https://x.com/path`` → ``x.com``)+ title 截 30 字
+  防 prompt 膨胀
+* ``is_idle_filtered=1`` 排除(AFK 时段不该被 Momo 提)
+* 总活跃 < 60s → 返 None(刚启动 / 短时使用,信息无价值,不污染 prompt)
+* 总开关 ``inject_into_chat: true`` 与 ``enabled`` 解耦 — 用户可"记录但
+  不在对话被引用"
+* 注入位置: ``_build_messages`` 在 chunk 11 profile 注入(line 1126-1139)
+  之后、long-term memory recall(line 1141)之前。理由:
+  - profile = "你是谁"(用户身份层)
+  - **activity = "你今天做了什么"(用户上下文层)**  ← 新插入
+  - memory recall = "我们以前聊过什么"(语义召回层)
+* try/except 包外层 — 决不让 timeline 注入失败阻塞主对话流
+
+### Frontend(commit 6)
+
+``frontend/src/lib/activity_timeline.ts``: TS 客户端,字段对齐 backend
+pydantic model。formatLocalTime helper: backend 写 UTC naive,前端按
+user-local 显示。
+
+``frontend/src/components/ActivityTimelineDrawer.tsx`` (487 行): 视觉与
+MemoryManagerDrawer 完全对齐(右滑 60% 宽 + backdrop-blur + Escape 关 +
+点左侧空白关)。功能:
+* 日期 picker + 前后天 + [跳到今天]
+* 总活跃时长 header
+* [包含 idle session] checkbox + [刷新] + [清空本日]
+* category 分布横条(7 色 + tooltip)+ legend
+* 按 app 聚合 accordion list(开/合 + 内层 sessions 行 + idle 角标 + 单
+  条 hover 删除按钮)
+* 每 app 末尾显示 top URL host + 时长
+
+SettingsPanel 加新 ``ActivityTimelineSection`` (放 ``ActivityAwareness
+Section`` 之后): 标题"活动记录"+ 单卡片 [查看] 按钮(与 MemorySection
+[管理] 视觉一致)。**特意不重复**总开关 / 黑名单 / idle 阈值 — 这些已在
+上方 ``ActivityAwarenessSection``。
+
+### Cleanup cron(commit 7)
+
+每日 ``cleanup_cron``(默 23:59)触发 ``cleanup_old_sessions()``:
+```python
+DELETE FROM activity_sessions WHERE start_at < (now - cleanup_days)
+```
+
+* cleanup_days 默 30,0 = no-op(用户显式永久保留)
+* 注册位置:main.py lifespan 6b'''(profile_daily_regenerate 之后,
+  MemoryExtractor worker 之前),与现有 cron 注册风格一致
+
+### Privacy 边界(累积)
+
+| 层 | 措施 |
+|----|------|
+| 数据源 | chunk 8a snapshot 黑名单字段直接置 None,listener 完全看不到敏感场景 |
+| 写入层 | chunk 14 commit 2 写 session 前**再过一次**黑名单 defensive |
+| 查询层 | capability search_history 显式 ``is_idle_filtered=0`` 双重排除 idle 时段 |
+| UI 层 | drawer [清空本日] + 单条删除;``date=None`` API 强制拒绝防误删 |
+| 数据保留 | cron 默 30 天后自动清理 |
+| 网络 | 全本地 SQLite,**不上传** |
+
+### 文件清单
+
+* ``backend/database/migrations/v3_5_chunk14_activity_sessions.py``(new, 127 行)
+* ``backend/services/activity_timeline.py``(new, 488 行 — session writer +
+  inject formatter + cleanup_old_sessions)
+* ``backend/routes/activity_api.py``(+205 行 — 3 endpoint)
+* ``backend/capabilities/activity.py``(new, 264 行 — 3 cap)
+* ``backend/agents/chat.py``(+13 行 — _build_messages 注入)
+* ``backend/main.py``(+22 行 — migration + 2 listener register + cleanup cron)
+* ``backend/integrations/activity_monitor.py``(+47 行 — hotfix-10 _APP_DISPLAY_NAMES)
+* ``config.yaml``(+5 行 — activity_timeline block)
+* ``frontend/src/lib/activity_timeline.ts``(new, 109 行)
+* ``frontend/src/components/ActivityTimelineDrawer.tsx``(new, 487 行)
+* ``frontend/src/components/SettingsPanel.tsx``(+76 行 — section + drawer mount)
+* ``tests/test_chunk14_activity_timeline.py``(new, 523 行,27 case)
+
+163 PASS 跨 chunk 8a / 8a-ext / chunk 14 共 7 个测试文件 / 0 regression。
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建
