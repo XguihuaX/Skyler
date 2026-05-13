@@ -13,9 +13,9 @@
  *   - **任意 N 卡间距相同**(都 = stepDeg),不会"少卡时大、多卡时小"——
  *     这是 Fan-3.1 跟 Fan-3.2 用户体感上最重要的差别。
  *
- * **默认 arcDegree**:120 → 60(stepDeg 默认 10°)。卡 160px @ R=600
- * 角宽 ≈ 15°,stepDeg=10° 让相邻卡 ~30-50% 重叠,扇面紧凑。要更松调
- * ``?arc=90``;要更紧 ``?arc=40``。
+ * **默认 arcDegree**:120 → 72(stepDeg 默认 12°)。卡 160px @ R=600
+ * 角宽 ≈ 15°,stepDeg=12° 让相邻卡 ~20% 重叠,扇面紧凑但不挤。要更
+ * 松调 ``?arc=90``;要更紧 ``?arc=60``;聚焦 ``?vc=5``。
  *
  * 渲染分支(只决定渲染哪几张卡,跟 stepDeg 无关):
  *   - **N > W**:仅窗口内 W 张(selected ± floor(W/2)),DOM 上不存在窗
@@ -33,9 +33,8 @@
  *      未来 Fan-3.3 加 1-2 buffer cards each side。
  *   2. 小 N (N ≤ W) case 的 "back card":currentIndex 改变时,处于"绕远端"
  *      的卡 offset 会从 -N/2 wrap 到 +N/2,该卡 base 跳变,wrapper left/top
- *      snap。Fan-3.2 stepDeg 变小后,跳变绝对值也变小(N=5 wrap 跳 4*10°=
- *      40° vs Fan-3.1 60°),且发生在 ±20° 视野内(Fan-3.1 是 ±30°),
- *      可见性反而稍提升 — 但仍在 spec 容忍范围。
+ *      snap。Fan-3.2 stepDeg=12° 让 N=5 wrap 跳 4*12°=48°,在 ±24° 视野内
+ *      发生,仍可见但 spec 容忍。
  */
 import { useEffect, useMemo, useState } from 'react';
 import CharacterCard from './CharacterCard';
@@ -48,8 +47,8 @@ export interface FanLayoutParams {
   centerOffsetY: number;
   /**
    * 可见弧度数 (中心 ±arcDeg/2 内 opacity=1,外侧 fade)。
-   * **默认 60** (Fan-3.2:120 → 60,紧凑 fan)。stepDeg 派生:
-   * ``arcDeg / (visibleCount - 1)`` = 60/6 = 10° (默认 W=7)。
+   * **默认 72** (Fan-3.2:120 → 72,紧凑 fan)。stepDeg 派生:
+   * ``arcDeg / (visibleCount - 1)`` = 72/6 = 12° (默认 W=7)。
    */
   arcDegree: number;
   /** Container 旋转 + opacity transition 毫秒。默认 500。 */
@@ -59,13 +58,13 @@ export interface FanLayoutParams {
    * 默认 7 (selected + 左右各 3)。偶数会向上凑奇,< 3 钳到 3,都
    * ``console.warn``。
    *
-   * Fan-3.2 默认 (arcDeg=60, vc=7) → stepDeg=10°,卡 160px @ R=600 角宽
-   * ≈ 15°,相邻卡 ~30-50% 重叠。
+   * Fan-3.2 默认 (arcDeg=72, vc=7) → stepDeg=12°,卡 160px @ R=600 角宽
+   * ≈ 15°,相邻卡 ~20% 重叠 — 紧凑但不挤。
    *
-   * sweep 矩阵参考:
-   *   - vc=5, arc=60: stepDeg=15°,3 卡密集 + 2 边缘 (无重叠)
-   *   - vc=7, arc=60 ⭐: stepDeg=10°,5 卡密集 + 2 边缘 (重叠)
-   *   - vc=9, arc=60: stepDeg=7.5°,7 卡密集 + 2 边缘 (重重叠)
+   * sweep 矩阵参考 (固定 arcDeg=72°):
+   *   - vc=5: stepDeg=18°,无重叠,3 卡密集 + 2 边缘
+   *   - vc=7 ⭐: stepDeg=12°,轻微重叠,5 卡密集 + 2 边缘 (默认)
+   *   - vc=9: stepDeg=9°,中度重叠,7 卡密集 + 2 边缘
    */
   visibleCount: number;
 }
@@ -191,7 +190,7 @@ export default function FanLayout({
     return {
       radius:             layoutParams?.radius             ?? 600,
       centerOffsetY:      layoutParams?.centerOffsetY      ?? viewportH + 100,
-      arcDegree:          layoutParams?.arcDegree          ?? 60,
+      arcDegree:          layoutParams?.arcDegree          ?? 72,
       transitionDuration: layoutParams?.transitionDuration ?? 500,
       visibleCount:       normalizeVisibleCount(rawVC),
     };
