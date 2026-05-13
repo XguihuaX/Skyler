@@ -80,6 +80,9 @@ from backend.database.migrations.v3_5_uxr1_mcp_tool_state import (
 from backend.database.migrations.v3_5_chunk10_memory_structured import (
     run_migration as migrate_v3_5_chunk10_memory_structured,
 )
+from backend.database.migrations.v3_5_chunk14_activity_sessions import (
+    run_migration as migrate_v3_5_chunk14_activity_sessions,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -224,6 +227,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 级 toggle。未登记的 tool 视为 enabled=True；server 关时 connect 阶段
     # 根本不 register tools，无需查表。
     await migrate_v3_5_uxr1_mcp_tool_state()
+
+    # ── 1b21. V3.5 chunk 14: activity_sessions 表（idempotent）─────────────
+    # 跟 chat_history 平行的活动 timeline。session boundary 由
+    # backend/services/activity_timeline.py 的 poll-listener 写入。
+    # 跑前自动备份 momoos.db → .backup-before-chunk14（已存在则跳过）。
+    await migrate_v3_5_chunk14_activity_sessions()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
