@@ -71,8 +71,9 @@ async def get_active_app(**_kwargs) -> dict:
     name="screen.get_browser_url",
     display_name="浏览器当前 tab",
     description=(
-        "查 Chrome 或 Safari 当前 active tab 的 URL + 标题。优先 Chrome，再 Safari；"
-        "都没启动 / 用户未授权 AppleEvent → ``{browser: null, available: false}``。"
+        "查用户当前在看的浏览器 tab URL + 标题（Chrome / Safari）。**仅在浏览器是"
+        "macOS frontmost 应用时返回**——浏览器在后台时返 ``{browser: null, "
+        "available: false}``（hotfix-9：不再泄露后台 Chrome 的 active tab）。"
         "用户问「我在看啥网页」「这页是什么」时调。不要主动连续调，先走 ActivityWatcher。"
     ),
     category="screen",
@@ -82,15 +83,11 @@ async def get_active_app(**_kwargs) -> dict:
     parameters_schema={"type": "object", "properties": {}, "required": []},
 )
 async def get_browser_url(**_kwargs) -> dict:
-    chrome = _am.get_chrome_active_tab()
-    if chrome is not None:
-        url, title = chrome
-        return {"browser": "chrome", "url": url, "title": title, "available": True}
-    safari = _am.get_safari_active_tab()
-    if safari is not None:
-        url, title = safari
-        return {"browser": "safari", "url": url, "title": title, "available": True}
-    return {"browser": None, "available": False}
+    info = _am.get_browser_url()
+    if info is None:
+        return {"browser": None, "available": False}
+    browser, url, title = info
+    return {"browser": browser, "url": url, "title": title, "available": True}
 
 
 # ---------------------------------------------------------------------------
@@ -124,17 +121,11 @@ async def get_browser_url(**_kwargs) -> dict:
     },
 )
 async def get_browser_content(max_chars: int = 5000, **_kwargs) -> dict:
-    # 先拿 URL
-    chrome = _am.get_chrome_active_tab()
-    safari = _am.get_safari_active_tab() if chrome is None else None
-    if chrome is not None:
-        url, title = chrome
-        browser = "chrome"
-    elif safari is not None:
-        url, title = safari
-        browser = "safari"
-    else:
+    # 先拿 URL（hotfix-9: frontmost-gated, 浏览器在后台时返 None）
+    info = _am.get_browser_url()
+    if info is None:
         return {"fetched": False, "reason": "no_browser", "browser": None}
+    browser, url, title = info
 
     if not url or not url.lower().startswith(("http://", "https://")):
         return {"fetched": False, "reason": "invalid_url", "browser": browser,

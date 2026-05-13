@@ -108,6 +108,89 @@ def test_get_safari_active_tab() -> None:
 
 
 # ---------------------------------------------------------------------------
+# v3.5 hotfix-9 — get_browser_url (frontmost-gated)
+# ---------------------------------------------------------------------------
+
+
+def test_get_browser_url_chrome_frontmost_returns_tab() -> None:
+    """Chrome 是 frontmost → 路由到 chrome AppleScript,返三元组。"""
+    with patch.object(am, "get_active_app", return_value="Google Chrome"), \
+         patch.object(am, "get_chrome_active_tab",
+                      return_value=("https://bilibili.com/jobs", "招聘")):
+        assert am.get_browser_url() == ("chrome", "https://bilibili.com/jobs", "招聘")
+
+
+def test_get_browser_url_safari_frontmost_returns_tab() -> None:
+    with patch.object(am, "get_active_app", return_value="Safari"), \
+         patch.object(am, "get_safari_active_tab",
+                      return_value=("https://apple.com", "Apple")):
+        assert am.get_browser_url() == ("safari", "https://apple.com", "Apple")
+
+
+def test_get_browser_url_non_browser_frontmost_returns_none() -> None:
+    """**hotfix-9 核心 case**: frontmost 是 IDE / 自家 app → 不报浏览器 URL,
+    即使 Chrome 后台还开着 bilibili tab。chrome AppleScript 都不会被调。"""
+    chrome_mock = MagicMock()
+    with patch.object(am, "get_active_app", return_value="Visual Studio Code"), \
+         patch.object(am, "get_chrome_active_tab", chrome_mock):
+        assert am.get_browser_url() is None
+    chrome_mock.assert_not_called()
+
+
+def test_get_browser_url_momoos_frontmost_returns_none() -> None:
+    """用户切到 Skyler 自家窗口 → 不报后台 Chrome 的 URL。"""
+    with patch.object(am, "get_active_app", return_value="momoos"), \
+         patch.object(am, "get_chrome_active_tab",
+                      return_value=("https://leaked.example", "leaked")), \
+         patch.object(am, "get_safari_active_tab",
+                      return_value=("https://also-leaked.example", "x")):
+        assert am.get_browser_url() is None
+
+
+def test_get_browser_url_chinese_terminal_frontmost_returns_none() -> None:
+    """hotfix-8 i18n 教训:中文 macOS frontmost 可能返"终端"(Apple 原生),
+    确认非浏览器路径 graceful。"""
+    with patch.object(am, "get_active_app", return_value="终端"):
+        assert am.get_browser_url() is None
+
+
+def test_get_browser_url_active_app_none_returns_none() -> None:
+    """get_active_app 自身失败 → 短路 None。"""
+    with patch.object(am, "get_active_app", return_value=None):
+        assert am.get_browser_url() is None
+
+
+def test_get_browser_url_chrome_frontmost_but_no_window_returns_none() -> None:
+    """Chrome 是 frontmost 但 AppleScript 返 None(没 window / 未授权)→ None。"""
+    with patch.object(am, "get_active_app", return_value="Google Chrome"), \
+         patch.object(am, "get_chrome_active_tab", return_value=None):
+        assert am.get_browser_url() is None
+
+
+def test_get_browser_url_recognized_but_unimplemented_browser_returns_none() -> None:
+    """Firefox / Edge / Arc 等在 _BROWSER_APPS 但无 AppleScript impl → None。
+
+    用户在 Firefox 时与 hotfix-9 前行为一致(走 app:Firefox stay,不报 URL)。
+    """
+    chrome_mock = MagicMock()
+    safari_mock = MagicMock()
+    with patch.object(am, "get_active_app", return_value="Firefox"), \
+         patch.object(am, "get_chrome_active_tab", chrome_mock), \
+         patch.object(am, "get_safari_active_tab", safari_mock):
+        assert am.get_browser_url() is None
+    chrome_mock.assert_not_called()
+    safari_mock.assert_not_called()
+
+
+def test_get_browser_url_case_insensitive_match() -> None:
+    """frontmost localizedName 大小写 / 前后空格 → 正则化命中。"""
+    with patch.object(am, "get_active_app", return_value="  google chrome  "), \
+         patch.object(am, "get_chrome_active_tab",
+                      return_value=("https://x.com", "X")):
+        assert am.get_browser_url() == ("chrome", "https://x.com", "X")
+
+
+# ---------------------------------------------------------------------------
 # _run_osascript (mock subprocess)
 # ---------------------------------------------------------------------------
 

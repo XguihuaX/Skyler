@@ -52,13 +52,11 @@ async def test_get_active_app_via_tool_registry() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_get_browser_url_chrome_preferred() -> None:
-    with patch.object(scr_mod._am, "get_chrome_active_tab",
-                      return_value=("https://github.com", "GitHub")), \
-         patch.object(scr_mod._am, "get_safari_active_tab",
-                      return_value=("https://apple.com", "Apple")):
+async def test_get_browser_url_chrome_frontmost() -> None:
+    """hotfix-9: 浏览器 frontmost 才返 URL — 高层 wrapper gate。"""
+    with patch.object(scr_mod._am, "get_browser_url",
+                      return_value=("chrome", "https://github.com", "GitHub")):
         r = await scr_mod.get_browser_url()
-    # Chrome 优先（Safari 不应被调）
     assert r == {
         "browser": "chrome",
         "url": "https://github.com",
@@ -67,26 +65,24 @@ async def test_get_browser_url_chrome_preferred() -> None:
     }
 
 
-async def test_get_browser_url_safari_fallback() -> None:
-    with patch.object(scr_mod._am, "get_chrome_active_tab", return_value=None), \
-         patch.object(scr_mod._am, "get_safari_active_tab",
-                      return_value=("https://apple.com", "Apple")):
+async def test_get_browser_url_safari_frontmost() -> None:
+    with patch.object(scr_mod._am, "get_browser_url",
+                      return_value=("safari", "https://apple.com", "Apple")):
         r = await scr_mod.get_browser_url()
     assert r["browser"] == "safari"
     assert r["url"] == "https://apple.com"
 
 
-async def test_get_browser_url_none_available() -> None:
-    with patch.object(scr_mod._am, "get_chrome_active_tab", return_value=None), \
-         patch.object(scr_mod._am, "get_safari_active_tab", return_value=None):
+async def test_get_browser_url_non_browser_frontmost_returns_unavailable() -> None:
+    """hotfix-9 核心:frontmost 不是 browser → 不报后台 tab。"""
+    with patch.object(scr_mod._am, "get_browser_url", return_value=None):
         r = await scr_mod.get_browser_url()
     assert r == {"browser": None, "available": False}
 
 
 async def test_get_browser_url_via_tool_registry() -> None:
-    with patch.object(scr_mod._am, "get_chrome_active_tab",
-                      return_value=("https://x.com", "X")), \
-         patch.object(scr_mod._am, "get_safari_active_tab", return_value=None):
+    with patch.object(scr_mod._am, "get_browser_url",
+                      return_value=("chrome", "https://x.com", "X")):
         r = await ToolRegistry.call("screen.get_browser_url")
     assert r["browser"] == "chrome"
 
@@ -97,8 +93,8 @@ async def test_get_browser_url_via_tool_registry() -> None:
 
 
 async def test_get_browser_content_no_browser() -> None:
-    with patch.object(scr_mod._am, "get_chrome_active_tab", return_value=None), \
-         patch.object(scr_mod._am, "get_safari_active_tab", return_value=None):
+    """hotfix-9: 上层 wrapper 返 None → reason=no_browser。"""
+    with patch.object(scr_mod._am, "get_browser_url", return_value=None):
         r = await scr_mod.get_browser_content()
     assert r == {"fetched": False, "reason": "no_browser", "browser": None}
 
@@ -111,8 +107,8 @@ async def test_get_browser_content_fetches_chrome_url() -> None:
         "content": "Welcome to the Python 3 documentation",
         "status": "ok",
     })
-    with patch.object(scr_mod._am, "get_chrome_active_tab",
-                      return_value=("https://docs.python.org/3/", "Python Docs")), \
+    with patch.object(scr_mod._am, "get_browser_url",
+                      return_value=("chrome", "https://docs.python.org/3/", "Python Docs")), \
          patch.object(scr_mod._uf, "fetch_article_content", mocked):
         r = await scr_mod.get_browser_content(max_chars=2000)
     assert r["fetched"] is True
@@ -129,8 +125,8 @@ async def test_get_browser_content_blocked_returns_reason() -> None:
         "fetched": False, "url": "https://mail.google.com",
         "reason": "blocked",
     })
-    with patch.object(scr_mod._am, "get_chrome_active_tab",
-                      return_value=("https://mail.google.com", "Gmail")), \
+    with patch.object(scr_mod._am, "get_browser_url",
+                      return_value=("chrome", "https://mail.google.com", "Gmail")), \
          patch.object(scr_mod._uf, "fetch_article_content", mocked):
         r = await scr_mod.get_browser_content()
     assert r["fetched"] is False
@@ -144,8 +140,8 @@ async def test_get_browser_content_title_fallback() -> None:
         "fetched": True, "url": "https://e.com", "title": "", "content": "body",
         "status": "ok",
     })
-    with patch.object(scr_mod._am, "get_chrome_active_tab",
-                      return_value=("https://e.com", "Tab Title")), \
+    with patch.object(scr_mod._am, "get_browser_url",
+                      return_value=("chrome", "https://e.com", "Tab Title")), \
          patch.object(scr_mod._uf, "fetch_article_content", mocked):
         r = await scr_mod.get_browser_content()
     assert r["title"] == "Tab Title"
@@ -156,8 +152,8 @@ async def test_get_browser_content_via_tool_registry() -> None:
         "fetched": True, "url": "https://e.com", "title": "T", "content": "B",
         "status": "ok",
     })
-    with patch.object(scr_mod._am, "get_chrome_active_tab",
-                      return_value=("https://e.com", "T")), \
+    with patch.object(scr_mod._am, "get_browser_url",
+                      return_value=("chrome", "https://e.com", "T")), \
          patch.object(scr_mod._uf, "fetch_article_content", mocked):
         r = await ToolRegistry.call("screen.get_browser_content")
     assert r["fetched"] is True

@@ -23,6 +23,10 @@ Public API
 * ``get_active_app() -> Optional[str]``
 * ``get_chrome_active_tab() -> Optional[tuple[str, str]]`` (url, title)
 * ``get_safari_active_tab() -> Optional[tuple[str, str]]``
+* ``get_browser_url() -> Optional[tuple[str, str, str]]`` (browser, url, title)
+  — **frontmost-gated**(hotfix-9):browser 必须是 frontmost macOS app 才返
+  非 None;否则后台 Chrome/Safari 仍打开 bilibili 时 stay_timer 会把不在
+  视野内的 URL 算作当前活动 → 误触发 chunk 8a-ext judge
 * ``get_active_document_path() -> Optional[tuple[str, str]]`` (path, app_kind)
 * ``IS_MACOS`` 平台 flag
 """
@@ -208,6 +212,97 @@ def get_safari_active_tab() -> Optional[Tuple[str, str]]:
     """
     raw = _run_osascript(_SAFARI_SCRIPT)
     return _parse_url_title(raw)
+
+
+# ---------------------------------------------------------------------------
+# v3.5 hotfix-9 — frontmost-gated browser URL
+#
+# 问题:``get_chrome_active_tab`` / ``get_safari_active_tab`` 的 AppleScript
+# 只要 Chrome/Safari 在跑且有窗口就返 active tab,不查"那个浏览器是不是
+# frontmost macOS app"。结果:
+#   * 用户早上看 bilibili,中午切到 VSCode 写代码
+#   * Chrome 窗口在后台,active tab 仍是 bilibili
+#   * ``get_chrome_active_tab`` 返 bilibili URL → ``snapshot.browser`` 把
+#     不在视野内的 URL 塞进 state → stay_timer 累积 → 5 min 后 8a-ext
+#     judge 看到"停 bilibili 5 min" → Momo 主动聊招聘 → 用户体验崩塌
+#
+# 修法:在 activity_monitor 层包一层 ``get_browser_url``,先 call
+# ``get_active_app()`` 拿 frontmost localizedName,在 ``_BROWSER_APPS``
+# 集合命中才路由到对应 AppleScript;否则返 None,上层 watcher/capability
+# 自然 fallback 到 app stay。
+#
+# 选 activity_monitor 层包,而不是 AppleScript 内嵌"frontmost of system
+# events" check:后者需要 Accessibility 权限(NSApplications 权限之外,
+# 又是一道弹窗),不够干净。NSWorkspace.frontmostApplication 不要任何
+# 额外权限,与 chunk 8a ``get_active_app`` 同源。
+# ---------------------------------------------------------------------------
+
+
+# 常见浏览器 localizedName(小写、含中英文 alias)。hotfix-8 教训:Apple 原生
+# bundle 有 zh-Hans lproj → Safari 中文 macOS 仍返 "Safari"(Safari 是品牌
+# 不被本地化,跟 Spotify 一样);第三方浏览器 bundle 不带 zh lproj 中文系统
+# 仍返英文名。所以中文 alias 对几乎所有浏览器都是冗余,但保留作 defensive
+# 防御未来某个 fork 真的本地化(成本极低)。
+_BROWSER_APPS: frozenset = frozenset({
+    # Chromium 系列
+    "google chrome", "chrome", "google chrome 浏览器",
+    "google chrome canary", "chromium",
+    "microsoft edge", "edge", "microsoft edge 浏览器",
+    "brave browser", "brave",
+    "arc",
+    "vivaldi",
+    "opera", "opera gx",
+    # WebKit
+    "safari", "safari 浏览器",
+    "safari technology preview",
+    # Gecko
+    "firefox", "firefox 浏览器",
+    "firefox developer edition", "firefox nightly",
+})
+
+
+def get_browser_url() -> Optional[Tuple[str, str, str]]:
+    """**frontmost-gated** browser tab info。
+
+    返:
+      * ``(browser, url, title)`` —— frontmost 是已支持的浏览器且 URL 可拿
+        ``browser ∈ {"chrome", "safari"}``(当前只有这两个有 AppleScript impl)
+      * ``None`` —— frontmost 不是浏览器 / 浏览器无 active window / AppleScript
+        失败 / 非 macOS
+
+    hotfix-9: 解决 chunk 8a"backgrounded Chrome URL 仍被 watcher 当成 active
+    stay"问题。其他浏览器(Firefox/Edge/Arc/Brave 等)目前无 AppleScript 实现,
+    即便 frontmost 也返 None(用户在 Firefox 时 stay tracking 走 app:Firefox,
+    与 hotfix-9 前行为一致 — 真正变化的只有 Chrome/Safari 后台时的误报路径)。
+
+    与 ``get_chrome_active_tab`` / ``get_safari_active_tab`` 的关系:
+      * 它们仍是 raw primitives(无 frontmost check)— 保留作内部工具 + 既有
+        测试不破
+      * ``get_browser_url`` 是高层语义(策略 = 浏览器必须是 frontmost)— 所有
+        "用户当前在看什么 URL"的调用点都该走这个
+    """
+    active = get_active_app()
+    if active is None:
+        return None
+    if active.strip().lower() not in _BROWSER_APPS:
+        return None
+    active_lower = active.lower()
+    # 路由到 AppleScript:目前只 Chrome 系 + Safari 系有实现
+    if "chrome" in active_lower or "chromium" in active_lower:
+        tab = get_chrome_active_tab()
+        if tab is None:
+            return None
+        url, title = tab
+        return ("chrome", url, title)
+    if "safari" in active_lower:
+        tab = get_safari_active_tab()
+        if tab is None:
+            return None
+        url, title = tab
+        return ("safari", url, title)
+    # Firefox / Edge / Arc / Brave / Vivaldi / Opera: 识别但无 AppleScript
+    # impl —— 返 None(上层走 app stay),与 hotfix-9 前用户体验一致
+    return None
 
 
 # ---------------------------------------------------------------------------
