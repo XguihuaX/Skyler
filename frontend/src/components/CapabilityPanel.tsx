@@ -79,11 +79,12 @@ function CapabilityIcon({ name }: { name: string }) {
 // provider key 拼回 ``ext.<server>``(brave-search 含 ``-`` 不会被 ``.`` 切
 // 错)。其他单段或两段名取首段。
 //
-// audit 实测 67 cap 覆盖完整:
+// audit 实测覆盖完整(UX-005 后):
 //   * 多 provider category(3 个): calendar(apple_calendar/google_calendar/calendar)
 //                                  / mcp_external(ext.filesystem/ext.brave-search)
-//                                  / media(bilibili/netease/media/xhs)
-//   * 单 provider category(6 个): system/character/clipboard/files/music/screen
+//                                  / media(bilibili/media_control) — UX-005 移除 netease/xhs
+//   * 单 provider category(8 个): system / character / clipboard / files / music(netease 13 caps)
+//                                  / screen / activity / social(xhs)
 // 单 provider 时跳过二层(直接 category → capability,与 UX-002 行为一致)
 export function _extractProvider(capName: string): string {
   if (!capName) return '';

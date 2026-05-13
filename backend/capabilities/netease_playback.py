@@ -69,7 +69,7 @@ async def _combined_health() -> dict:
         "参数：\n- song_id: NCM 歌曲 ID（必填）\n\n"
         "返回 ``{status, url, is_trial, song_id}``；URL 失效 → ``{error: 'url_unavailable'}``。"
     ),
-    category="media",
+    category="music",
     consumers=[Consumer.CHAT_AGENT],
     trigger_modes=[TriggerMode.ON_DEMAND],
     icon="play",
@@ -138,7 +138,7 @@ async def play_song(song_id: int = 0, **_kwargs: Any) -> dict:
         "参数：\n- playlist_id: 歌单 ID\n- limit: 最多入队曲数（缺省 50）\n\n"
         "返回 ``{status, playlist_id, queued, first_song_id}``。"
     ),
-    category="media",
+    category="music",
     consumers=[Consumer.CHAT_AGENT],
     trigger_modes=[TriggerMode.ON_DEMAND],
     icon="list-music",
@@ -246,7 +246,7 @@ async def play_playlist(
         " / 等等」时调用。仅作用于 mpv（chunk 6b）。NCM 客户端 / Apple "
         "Music / Spotify 走 chunk 1 ``media.play_pause``（跨来源系统媒体键）。"
     ),
-    category="media",
+    category="music",
     consumers=[Consumer.CHAT_AGENT],
     trigger_modes=[TriggerMode.ON_DEMAND],
     icon="pause",
@@ -266,7 +266,7 @@ async def pause(**_kwargs: Any) -> dict:
     description=(
         "恢复暂停的 mpv 播放。用户说「继续 / 接着放 / 恢复播放」时调用。"
     ),
-    category="media",
+    category="music",
     consumers=[Consumer.CHAT_AGENT],
     trigger_modes=[TriggerMode.ON_DEMAND],
     icon="play",
@@ -288,7 +288,7 @@ async def resume(**_kwargs: Any) -> dict:
         "区别于 ``pause``：stop 清队列，不可 resume；后续重新 play_song / "
         "play_playlist。"
     ),
-    category="media",
+    category="music",
     consumers=[Consumer.CHAT_AGENT],
     trigger_modes=[TriggerMode.ON_DEMAND],
     icon="square",
@@ -313,7 +313,7 @@ async def stop(**_kwargs: Any) -> dict:
         "走系统媒体键转发给 NCM/Apple Music 等前端 app；本 capability 只"
         "在 mpv 自解码模式下用。\n\n队列空时返 ``{status: 'queue_empty'}``。"
     ),
-    category="media",
+    category="music",
     consumers=[Consumer.CHAT_AGENT],
     trigger_modes=[TriggerMode.ON_DEMAND],
     icon="skip-forward",

@@ -42,7 +42,7 @@ from backend.integrations import xiaohongshu as _xhs
         "``invalid_url`` / ``blocked_by_antibot``（反爬限流） / ``parse_failed``"
         " / ``timeout`` / ``http_error``。"
     ),
-    category="media",
+    category="social",
     consumers=[Consumer.CHAT_AGENT],
     trigger_modes=[TriggerMode.ON_DEMAND],
     icon="link",
