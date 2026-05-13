@@ -254,3 +254,19 @@ activity_judge:
   throttle_minutes: 10
   prompt_max_chars: 2000      # 喂 judge 的 URL 正文摘要上限
   idle_threshold_seconds: 300 # chunk 8a-ext V2: 键鼠静止超 300s 视为离开
+
+
+# v3.5 chunk 14 — 活动 timeline(activity_sessions 表)
+# 跟 chat_history 平行的第二条 timeline,session-writer poll listener 在
+# (app, url) 元组变化时把上一段 stay 写一行。chime in 决策路径(8a-ext judge)
+# 与本 timeline 完全独立 — 关掉 enabled 只影响 timeline 持久化,judge 继续跑。
+#
+#   * enabled               总开关(默 ON);关掉后 watcher 仍跑但不写 DB
+#   * min_session_seconds   短 session 过滤(默 30,与 poll_interval 同步)
+#   * cleanup_days          保留天数,> N 天的 session 行被每日 cron 清除(默 30)
+#   * cleanup_cron          清理 cron(默 23:59 每日,timezone 走 scheduler.timezone)
+activity_timeline:
+  enabled: true
+  min_session_seconds: 30
+  cleanup_days: 30
+  cleanup_cron: "59 23 * * *"

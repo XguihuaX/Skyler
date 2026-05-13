@@ -405,6 +405,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # maybe_judge — 实际 LLM 调用受 min_stay (5 min) + judge_throttle
         # (10 min) + fire_throttle (30 min) 三重门挡,默频率很低。
         activity_watcher.register_poll_listener(judge_poll_handler)
+        # chunk 14: timeline session writer — 同样的 poll listener,但与 judge
+        # 完全独立(maintain 自己的 (app, url) 边界游标),每段 stay 结束写
+        # activity_sessions 一行。受 activity_timeline.enabled 总开关 + 30s
+        # min_session_seconds + chunk 8a 黑名单 + chunk 8a-ext V2 idle 标记。
+        from backend.services.activity_timeline import (
+            session_writer_poll_handler,
+        )
+        activity_watcher.register_poll_listener(session_writer_poll_handler)
         activity_watcher.start_polling()
         # 权限自检（异步、不阻塞 startup）
         async def _permission_check() -> None:
