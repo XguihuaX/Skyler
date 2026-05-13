@@ -2,7 +2,7 @@
 
 > Living document. 每完成一个里程碑同步更新 + commit + push。
 >
-> 当前状态(2026-05-13):v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 8a-ext / 8a-ext V2 / 9 / 10 / 11 + UX-001/UX-002/UX-003 + hotfix-3 ~ 8 全部完成**。Memory 三层(chunk 9 / chunk 10 worker / chunk 11 profile_data)落地;chunk 8a 简化屏幕感知 + **chunk 8a-ext 智能陪伴 judge 慢路径**(qwen-turbo 判断停留 5+ min app/URL 是否值得 chime in,快慢路径并存共享 daily_cap)+ **chunk 8a-ext V2 idle 闸**(macOS ``ioreg HIDIdleTime`` 检测键鼠静止 > 300s → skip judge 避免"人不在电脑前自言自语",零新 pip 依赖);UX-001/UX-002/UX-003 SettingsPanel 三层 accordion 全栈完成;hotfix-3..hotfix-8 共 5 个修复。剩 chunk 8b 完整屏幕感知 + v5-D/T1/T2 远期 + v6+ 多设备。
+> 当前状态(2026-05-13):v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 8a-ext / 8a-ext V2 / 9 / 10 / 11 + UX-001/UX-002/UX-003 + hotfix-3 ~ 9 全部完成**。Memory 三层(chunk 9 / chunk 10 worker / chunk 11 profile_data)落地;chunk 8a 简化屏幕感知 + **chunk 8a-ext 智能陪伴 judge 慢路径**(qwen-turbo 判断停留 5+ min app/URL 是否值得 chime in,快慢路径并存共享 daily_cap)+ **chunk 8a-ext V2 idle 闸**(macOS ``ioreg HIDIdleTime`` 检测键鼠静止 > 300s → skip judge 避免"人不在电脑前自言自语",零新 pip 依赖)+ **hotfix-9 get_browser_url frontmost gate**(修 chunk 8a spec 漏洞:Chrome 后台时 AppleScript 仍返 active tab,导致 watcher 把后台 bilibili URL 当成 active stay 误触发 judge);UX-001/UX-002/UX-003 SettingsPanel 三层 accordion 全栈完成;hotfix-3..hotfix-9 共 6 个修复。剩 chunk 8b 完整屏幕感知 + v5-D/T1/T2 远期 + v6+ 多设备。
 
 ---
 
@@ -43,6 +43,7 @@
 | **UX-002：CapabilityPanel 67 cap 全面 accordion + 删冗余 MCP banner + calendar header 归位** | ✅ 完成（4 commit，2026-05-12） | 100% |
 | **hotfix-7：proactive trigger state_update strip 漏防 + WS send 5 道兜底契约 + TTS toggle "undefined" 真因修** | ✅ 完成（5 commit，2026-05-13） | 100% |
 | **hotfix-8：config.yaml duplicate block 合并 + _IDE_APPS 中文 macOS i18n + commit Info.plist + .gitignore 备份保护** | ✅ 完成（4 commit，2026-05-13） | 100% |
+| **hotfix-9：get_browser_url frontmost gate(chunk 8a spec 漏洞,后台 Chrome bilibili URL 不再泄露给 stay_timer/judge)** | ✅ 完成（3 commit，2026-05-13） | 100% |
 | **UX-003：CapabilityPanel 三层 accordion(category → provider → capability)+ 情绪 UI 左上角(避开历史按钮)** | ✅ 完成（5 commit，2026-05-13） | 100% |
 | **v3.5 chunk 8a：简化屏幕感知（active app + browser URL + smart trigger）** | ✅ 完成（9 commit，2026-05-12） | 100% |
 | **v3.5 chunk 8a-ext：智能陪伴 judge 慢路径(qwen-turbo + stay 5+ min + 共享 daily_cap)** | ✅ 完成（6 commit，2026-05-13） | 100% |

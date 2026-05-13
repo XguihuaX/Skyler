@@ -2699,6 +2699,127 @@ ActivityWatcher 的 listener fn ``activity_smart_handler``：
 * per-tool toggle 不细到"对某类 activity 仅在 weekday 触发"等高级节流；只
   按 label 节流 + daily cap
 
+### hotfix-9 修复:get_browser_url frontmost gate(2026-05-13)
+
+chunk 8a spec 漏洞:``get_chrome_active_tab`` / ``get_safari_active_tab``
+的 AppleScript 形如 ``tell application "Google Chrome" to get URL of
+active tab of front window`` — 只查"Chrome 进程有没有 window",**不**查
+"Chrome 是不是 frontmost macOS app"。
+
+#### 用户报告场景
+
+> 早上看 bilibili 招聘页 → 切到 VSCode 写代码,Chrome 还在后台
+> → 5 min 后 Momo 主动开口:"看到你在看招聘信息,要不要聊聊?"
+> → 我根本不在看招聘啊!
+
+backend log:``app='momoos' url=https://jobs.bilibili.com/social/positions/26333``
+—— frontmost ≠ Chrome,但 URL 仍报 Chrome 的 active tab。
+
+#### Root cause
+
+``ActivityWatcher.snapshot()`` 在 chunk 8a commit 4 直接调两个 raw primitive
+拼 ``state.browser``,**不**与 ``get_active_app()`` 交叉验证:
+
+```python
+chrome = _am.get_chrome_active_tab()  # 即使 Chrome 在后台也返 active tab
+safari = _am.get_safari_active_tab() if chrome is None else None
+if chrome is not None: browser_dict = {browser: "chrome", url, title}
+```
+
+下游链式 cascading:
+1. ``state.browser.url`` 有值 → ``_detect_changes`` 觉得 URL 没变(还是 bilibili)
+2. ``_url_dwell_start`` 不重置,继续累积
+3. ``get_current_stay_info`` URL 优先 → 返 ``key=url:bilibili, duration=300s+``
+4. chunk 8a-ext judge 看到"用户在 bilibili 停 5+ min"调 qwen-turbo → speak=true
+5. Momo fire ``activity_judge_chime_in`` 主动聊招聘 → 用户错愕
+
+#### 修法选型(audit)
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| AppleScript 内嵌 ``frontmost of (process X of system events)`` | 一次 osascript 调用 | 需要 Accessibility 权限(NSAppleEvents 之外又一道弹窗),UX 不友好 |
+| activity_monitor 层 wrapper + ``NSWorkspace.frontmostApplication`` | 零额外权限,与 chunk 8a get_active_app 同源 | 多一次 NSWorkspace 调用(~微秒级) |
+
+**选方案 2** — frontmost 判断在 activity_monitor 层包一个 ``get_browser_url()``
+wrapper,内部先 call ``get_active_app()`` 拿 localizedName,在
+``_BROWSER_APPS`` frozenset 命中才路由到对应 AppleScript;否则返 None。
+
+#### 实现
+
+``backend/integrations/activity_monitor.py``:
+
+```python
+_BROWSER_APPS = frozenset({
+    # Chromium 系 + WebKit + Gecko,中英文 alias 覆盖(hotfix-8 i18n 教训)
+    "google chrome", "chrome", "google chrome 浏览器",
+    "chromium", "microsoft edge", "edge", "brave browser", "brave",
+    "arc", "vivaldi", "opera", "opera gx",
+    "safari", "safari 浏览器", "safari technology preview",
+    "firefox", "firefox 浏览器", "firefox developer edition", ...
+})
+
+def get_browser_url() -> Optional[Tuple[str, str, str]]:
+    active = get_active_app()
+    if active is None: return None
+    if active.strip().lower() not in _BROWSER_APPS: return None
+    al = active.lower()
+    if "chrome" in al or "chromium" in al: ... → ("chrome", url, title)
+    if "safari" in al: ...                  → ("safari", url, title)
+    return None   # 识别但无 AppleScript impl(Firefox/Edge/Arc 等)
+```
+
+raw primitives ``get_chrome_active_tab`` / ``get_safari_active_tab`` **保留**
+不变 —— 让既有 9 个单元测试 + 内部调用点不破。``get_browser_url`` 是高层
+语义("用户当前在看什么 URL")的唯一入口。
+
+#### 上游调用点统一接入(commit 1+2)
+
+* ``backend.integrations.activity_watcher.snapshot()`` — 切到 ``get_browser_url()``
+* ``backend.capabilities.screen.get_browser_url`` (LLM capability) — 切到 wrapper
+* ``backend.capabilities.screen.get_browser_content`` — 同切;LLM 通过这两个
+  capability 问"用户看什么 URL"时获得 frontmost 语义,与 ActivityWatcher 一致
+
+#### stay_key 逻辑**不变**
+
+``get_current_stay_info`` 既有 "URL 优先,无 URL fallback app" 是对的。
+hotfix-9 修的是"什么时候有 URL"的上游 gate。一旦 ``snapshot.browser=None``
+(非浏览器 frontmost),``_detect_changes`` 看 ``new_url=None vs old_url=
+bilibili`` → ``_url_dwell_start = 0``(重置),``get_current_stay_info``
+自然 fallback 到 ``app:VSCode``。切回 Chrome 时 ``_url_dwell_start = now``
+(重新打点),不带过来旧累积 — 行为与"用户视觉感受"一致。
+
+#### 跨平台 + 多浏览器
+
+| 平台 / 浏览器 | get_browser_url 行为 |
+|--------------|---------------------|
+| macOS Chrome frontmost | ``("chrome", url, title)`` |
+| macOS Safari frontmost | ``("safari", url, title)`` |
+| macOS Chrome 后台(VSCode frontmost) | ``None`` — hotfix-9 修复主案 |
+| macOS Firefox/Edge/Arc/Brave frontmost | ``None`` — 识别但无 AppleScript impl,与 hotfix-9 前用户体验一致(走 app:Firefox stay) |
+| 非 macOS | ``None`` — get_active_app 短路 |
+| 中文 macOS 终端 frontmost | ``None`` — "终端"不在 _BROWSER_APPS |
+
+#### 测试
+
+* ``tests/test_activity_monitor.py`` +9 case — Chrome/Safari frontmost / VSCode
+  frontmost / momoos frontmost / 终端 frontmost / get_active_app=None /
+  Chrome frontmost 无 window / Firefox(识别但无 impl)/ 大小写空格归一化
+* ``tests/test_screen_capabilities.py`` 8 case 改 mock ``get_browser_url`` wrapper
+  (旧的 chrome/safari 双 mock 简化为单 mock)
+* ``tests/test_activity_watcher.py`` +3 case — snapshot 非浏览器 frontmost →
+  browser=None / _detect_changes 重置 url_dwell / 端到端三步走(Chrome→VSCode
+  →Chrome)stay_key 切换正确
+
+137 PASS 跨 7 个 chunk 8a / 8a-ext 相关文件 / 0 regression。
+
+#### 验收 5 条对照
+
+1. Chrome 在 bilibili tab → log ``app='Google Chrome' url=...bilibili`` ✓
+2. 切到 Skyler/IDE → log ``app='momoos' url=—``(URL 空)✓ — hotfix-9 核心
+3. 切回 Chrome → URL 重新出现 ✓ —(``_url_dwell_start = now`` 重新打点)
+4. stay_timer 在切 frontmost 时正确重置(browser→non-browser:url→app key)✓
+5. 0 regression on chunk 8a + 8a-ext V1+V2 + UX + hotfix-3-8 ✓ — 137 PASS
+
 ---
 
 ## 十五之M、CapabilityPanel accordion + category 计数（UX-002 起）
