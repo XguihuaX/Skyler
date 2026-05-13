@@ -19,16 +19,22 @@ import {
   XCircle,
   AlertCircle,
   Key,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 import {
+  deleteMCPServer,
   fetchMCPClients,
   fetchMCPCredentials,
   setMCPClientEnabled,
   setMCPCredentials,
   setMCPToolEnabled,
+  type MCPClientCreatePayload,
+  type MCPClientCreateResponse,
   type MCPClientStatus,
   type MCPToolStatus,
 } from '../lib/mcp_clients';
+import AddMCPServerForm from './extensions/AddMCPServerForm';
 
 interface ExtensionsSectionProps {
   showToast: (text: string) => void;
@@ -43,6 +49,10 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
   // UX-001：accordion expand state per server name + per-tool toggle 进行中标记
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [toolToggling, setToolToggling] = useState<string | null>(null);
+  // Stage 2.1.2: add server modal 显示控制 + delete 确认对话框 + delete 进行中
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [deleteConfirmFor, setDeleteConfirmFor] = useState<MCPClientStatus | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const toggleExpand = (name: string) => {
     setExpanded((prev) => {
@@ -114,6 +124,68 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
     }
   };
 
+  // Stage 2.1.2: POST 成功后回调
+  //
+  // 流程:
+  //   1. refresh 列表(新 server 应出现)
+  //   2. 提取 env 里的 ${VAR_NAME} → envPlaceholders;非空 → 合成
+  //      synthetic MCPClientStatus 打开 CredentialsModal 让用户填 token
+  //   3. 否则只 toast + close form
+  //
+  // connect 失败时(response.error 非空)backend 仍返 201,server 已写入 yaml
+  // + in-memory;用户在 toast 看到失败原因后可点 toggle 重试或 Delete 删掉。
+  const onAddSuccess = (
+    response: MCPClientCreateResponse,
+    envPlaceholders: string[],
+    payload: MCPClientCreatePayload,
+  ) => {
+    setShowAddForm(false);
+    void refresh();
+
+    if (response.error) {
+      showToast(`${response.name} 已添加但连接失败:${response.error}`);
+    } else if (response.connected) {
+      showToast(`${response.name} 已添加并连接(${response.tool_count} 个 tools)`);
+    } else {
+      showToast(`${response.name} 已添加(未启用)`);
+    }
+
+    if (envPlaceholders.length > 0) {
+      // 合成 minimal MCPClientStatus:CredentialsModal 只读 ``server.name`` +
+      // ``server.env_required``。其他字段给合理默认避免类型抱怨。
+      const synthetic: MCPClientStatus = {
+        name: response.name,
+        description: payload.description ?? '',
+        enabled: response.enabled,
+        connected: response.connected,
+        transport: response.transport,
+        tool_count: response.tool_count,
+        expose_via_server: payload.expose_via_skyler_server ?? true,
+        last_error: response.error,
+        env_required: envPlaceholders,
+        missing_credentials: envPlaceholders,
+        tools: [],
+      };
+      setCredModalFor(synthetic);
+    }
+  };
+
+  const onDeleteConfirm = async (server: MCPClientStatus) => {
+    setDeleting(server.name);
+    setDeleteConfirmFor(null);
+    try {
+      await deleteMCPServer(server.name);
+      showToast(`${server.name} 已删除`);
+      await refresh();
+    } catch (e) {
+      // 500 yaml-prune 失败 → backend detail 含"retry DELETE";其他错误也透传
+      showToast(`删除失败:${(e as Error).message}`);
+      await refresh();
+    } finally {
+      setDeleting(null);
+    }
+  };
+
   return (
     <>
       <Section title="扩展能力 (MCP)">
@@ -152,9 +224,24 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
             onConfigure={() => setCredModalFor(c)}
             onToolToggle={onToolToggle}
             toolToggling={toolToggling}
+            onDelete={() => setDeleteConfirmFor(c)}
+            deleteDisabled={deleting === c.name}
           />
         ))}
-        <div className="flex justify-end pt-1">
+        <div className="flex justify-between items-center pt-1">
+          <button
+            type="button"
+            onClick={() => setShowAddForm(true)}
+            className="text-[11px] inline-flex items-center gap-1 px-2 py-1 rounded hover:opacity-80"
+            style={{
+              background: 'var(--color-accent)',
+              color: 'var(--color-bubble-user-text)',
+            }}
+            title="新增一个 MCP server entry"
+          >
+            <Plus size={11} />
+            新增 server
+          </button>
           <button
             type="button"
             onClick={() => void refresh()}
@@ -168,6 +255,12 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
           </button>
         </div>
       </Section>
+      {showAddForm && (
+        <AddMCPServerForm
+          onClose={() => setShowAddForm(false)}
+          onSuccess={onAddSuccess}
+        />
+      )}
       {credModalFor && (
         <CredentialsModal
           server={credModalFor}
@@ -178,6 +271,13 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
             showToast(`${credModalFor.name} 凭证已保存`);
           }}
           showToast={showToast}
+        />
+      )}
+      {deleteConfirmFor && (
+        <DeleteConfirmDialog
+          server={deleteConfirmFor}
+          onCancel={() => setDeleteConfirmFor(null)}
+          onConfirm={() => void onDeleteConfirm(deleteConfirmFor)}
         />
       )}
     </>
@@ -225,6 +325,9 @@ interface ClientRowProps {
   onConfigure: () => void;
   onToolToggle: (server: MCPClientStatus, tool: MCPToolStatus, next: boolean) => void;
   toolToggling: string | null;
+  // Stage 2.1.2:
+  onDelete: () => void;
+  deleteDisabled: boolean;
 }
 
 function ClientRow({
@@ -236,6 +339,8 @@ function ClientRow({
   onConfigure,
   onToolToggle,
   toolToggling,
+  onDelete,
+  deleteDisabled,
 }: ClientRowProps) {
   const missing = client.missing_credentials.length > 0;
   const status = badgeFor(client);
@@ -337,6 +442,23 @@ function ClientRow({
               配置凭证
             </button>
           )}
+          {/* Stage 2.1.2: 删除按钮(in-flight tool call 由 backend disable 路径
+              先 disconnect 再 prune yaml,无 race) */}
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={deleteDisabled}
+            className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              color: 'rgb(244, 63, 94)',
+              border: '1px solid var(--color-border)',
+            }}
+            title="删除该 server entry"
+          >
+            <Trash2 size={10} />
+            删除
+          </button>
         </div>
       </div>
       {/*
@@ -685,6 +807,91 @@ function CredentialsModal({ server, onClose, onSaved, showToast }: CredentialsMo
             }}
           >
             {submitting ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Stage 2.1.2: DeleteConfirmDialog
+//
+// 与 native ``confirm()`` 区分:阻塞式 confirm 在 Tauri WebView 体验不佳
+// 而且无法贴主题色。styled modal 复用 CredentialsModal 的 fixed-overlay
+// 形态,保持视觉一致。
+// ---------------------------------------------------------------------------
+
+interface DeleteConfirmDialogProps {
+  server: MCPClientStatus;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+function DeleteConfirmDialog({
+  server,
+  onCancel,
+  onConfirm,
+}: DeleteConfirmDialogProps) {
+  return (
+    <div
+      className="fixed inset-0 z-[55] flex items-center justify-center"
+      style={{
+        background: 'color-mix(in srgb, var(--color-bg-base) 60%, transparent)',
+      }}
+      onClick={onCancel}
+    >
+      <div
+        className="rounded-lg p-5 w-96 shadow-2xl"
+        style={{
+          background: 'var(--color-bg-surface)',
+          border: '1px solid var(--color-border)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h4
+          className="text-sm font-semibold mb-3"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          删除 {server.name}?
+        </h4>
+        <p
+          className="text-xs mb-1"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          该 server 的所有 in-flight tool call 会断,所有已注册 capability 将从
+          LLM 工具列表中移除。
+        </p>
+        <p
+          className="text-xs mb-4"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          config.yaml entry + mcp_credentials / mcp_tool_state DB 痕迹都会清除。
+          后续可以重新添加同名 server(不会复用旧凭证)。
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-1.5 text-xs rounded-md transition"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              color: 'var(--color-text-primary)',
+            }}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="px-3 py-1.5 text-xs rounded-md transition"
+            style={{
+              background: 'rgb(244, 63, 94)',
+              color: 'white',
+            }}
+          >
+            确认删除
           </button>
         </div>
       </div>

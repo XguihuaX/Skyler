@@ -152,3 +152,124 @@ export async function setMCPCredentials(
   }
   return (await res.json()) as MCPCredentialsListResponse;
 }
+
+// ---------------------------------------------------------------------------
+// Stage 2.1.2 — POST / DELETE 新建 / 删除 MCP client entry
+//
+// 与 backend/routes/mcp_api.py CreateClientBody / CreateClientResponse 对齐。
+// schema drift 时 tsc 立即报错。
+// ---------------------------------------------------------------------------
+
+export interface MCPClientCreatePayload {
+  name: string;
+  description?: string;
+  transport: 'stdio' | 'http';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  enabled?: boolean;                    // 默认 true(backend)
+  expose_via_skyler_server?: boolean;   // 默认 true(backend)
+}
+
+export interface MCPClientCreateResponse {
+  name: string;
+  transport: string;
+  enabled: boolean;
+  connected: boolean;
+  tool_count: number;
+  // connect 失败时 backend 返 200 +error;HTTP 错误统一走 throw new Error
+  error: string | null;
+}
+
+export interface MCPClientDeleteResponse {
+  status: string;
+  name: string;
+}
+
+/** POST /api/mcp/clients — 新建 MCP server entry。
+ *
+ * 错误码:
+ *  - 409 name 重复
+ *  - 422 字段验证失败(stdio 缺 command / http 缺 url)
+ *  - 500 yaml 写失败
+ * connect 失败:返 201 + ``error`` 字段,**不算 throw**(用户能看到原因决定 retry/delete)
+ */
+export async function addMCPServer(
+  payload: MCPClientCreatePayload,
+): Promise<MCPClientCreateResponse> {
+  const res = await fetch(`${BACKEND_BASE}/api/mcp/clients`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let msg = `add mcp server failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) msg = String(j.detail);
+    } catch { /* ignore */ }
+    const err = new Error(msg) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+  return (await res.json()) as MCPClientCreateResponse;
+}
+
+/** DELETE /api/mcp/clients/{name} — 删除 MCP server entry。
+ *
+ * 错误码:
+ *  - 404 name 不存在
+ *  - 500 yaml prune 失败(server 已 in-memory 删除,但下次启动可能复活)
+ */
+export async function deleteMCPServer(
+  name: string,
+): Promise<MCPClientDeleteResponse> {
+  const res = await fetch(
+    `${BACKEND_BASE}/api/mcp/clients/${encodeURIComponent(name)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok) {
+    let msg = `delete mcp server failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) msg = String(j.detail);
+    } catch { /* ignore */ }
+    const err = new Error(msg) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+  return (await res.json()) as MCPClientDeleteResponse;
+}
+
+/** 提取 env 字符串值里 ``${VAR_NAME}`` 占位符的变量名列表(去重 + 顺序保留)。
+ *
+ * 用法:AddMCPServerForm 提交后调,把返回的 list 当作 ``env_required`` 注入
+ * 一个 synthetic MCPClientStatus,driver CredentialsModal 让用户填真实 token。
+ *
+ * - ``${BRAVE_API_KEY}`` → ["BRAVE_API_KEY"]
+ * - ``foo${A}bar${B}`` → ["A", "B"]
+ * - ``literal value`` → []
+ */
+export function extractEnvPlaceholders(
+  env: Record<string, string> | undefined,
+): string[] {
+  if (!env) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  // 与 backend ``os.path.expandvars`` 接受的模式对齐:``${NAME}`` 形式
+  // (大小写字母 / 数字 / 下划线;以非数字开头较稳)
+  const re = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+  for (const value of Object.values(env)) {
+    if (typeof value !== 'string') continue;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(value)) !== null) {
+      const name = m[1];
+      if (!seen.has(name)) {
+        seen.add(name);
+        out.push(name);
+      }
+    }
+  }
+  return out;
+}
