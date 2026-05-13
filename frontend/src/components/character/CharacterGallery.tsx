@@ -25,8 +25,12 @@
  * cards 在 ``<motion.div layoutId={`fan-card-${id}`}>`` 里;Gallery 的
  * ``hideHeroForId`` prop 控制该卡 browse wrapper 在 hero 期间隐藏。
  *
- * Backdrop:radial-gradient + 顶层 backdrop-blur(由 detail modal 自己加)。
- * Fan-2 spike 已验证 ≥55fps。
+ * v4-fan chunk 4.2 — 动态背景:跟随 selected 角色的 splash_art 模糊放大版
+ * 铺满全屏。无 splash 用 ``/splash-art/_placeholder.png``。切角色时用
+ * AnimatePresence + key=src 做交叉淡化(0.6s),兼顾"软切角色"质感和"
+ * 跟 detail modal 的 backdrop-blur(8px) 叠乘"的视觉合成。性能:Fan-2
+ * spike 验证 backdrop-blur(8) ≥55fps;本层是 ``filter: blur(40px)`` 不是
+ * backdrop,在 WKWebView 上更便宜(单层 raster cache),不退化。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -36,6 +40,15 @@ import FanLayout from './FanLayout';
 import CharacterDetailModal from './CharacterDetailModal';
 
 type GalleryMode = 'browse' | 'detail';
+
+// 兜底立绘(splash_art_url 为 null / 空 / 加载失败时用)。Fan-1 backend
+// 写死路径,Fan-2 PIL 生成 1024×1536 灰图。CharacterCard 同 pattern。
+const PLACEHOLDER_BG = '/splash-art/_placeholder.png';
+
+function getBgSrc(c: { splash_art_url: string | null } | null): string {
+  if (c?.splash_art_url && c.splash_art_url.trim()) return c.splash_art_url;
+  return PLACEHOLDER_BG;
+}
 
 export default function CharacterGallery() {
   const open  = useAppStore((s) => s.galleryOpen);
@@ -91,6 +104,17 @@ export default function CharacterGallery() {
     [detailForId, characters],
   );
 
+  // v4-fan chunk 4.2: 动态背景源 = selected 角色的 splash art。
+  // currentCharacterId 变 → bgSrc 变 → AnimatePresence key 变 → 老 img
+  // exit (opacity 1→0) + 新 img enter (opacity 0→1) = 交叉淡化 0.6s。
+  // detail mode 时也跟 selected 走 (用户在 fan 上点不同卡再进 detail 的
+  // 罕见路径会让背景同步变,符合"detail 是 selected 的详情"语义)。
+  const selectedCharacter = useMemo(
+    () => characters.find((c) => c.id === currentCharacterId) ?? null,
+    [characters, currentCharacterId],
+  );
+  const bgSrc = getBgSrc(selectedCharacter);
+
   const handleDetailClose = useCallback(() => {
     setMode('browse');
     setDetailForId(null);
@@ -107,24 +131,67 @@ export default function CharacterGallery() {
   return (
     <div
       className="fixed inset-0 z-[990] overflow-hidden"
-      style={{
-        background:
-          'radial-gradient(circle at 50% 60%, '
-          + 'var(--color-bg-elevated) 0%, '
-          + 'var(--color-bg-surface) 50%, '
-          + 'var(--color-bg-base) 100%)',
-      }}
+      // 兜底 base 色:bg img 加载失败极端 case 下不漏 OS 透明窗口
+      style={{ background: 'var(--color-bg-base)' }}
     >
-      {/* Fan layout(永远渲染,即使 detail open;hero 共享 layoutId 需要
-          source 元素仍在树里) */}
-      <FanLayout
-        characters={characters}
-        selectedCharId={currentCharacterId}
-        onSelectCharacter={handleSelect}
-        hideHeroForId={mode === 'detail' ? detailForId : null}
-      />
+      {/* z=0:动态背景层 — splash art 模糊放大版 + 交叉淡化。
+          - filter: blur(40px) brightness(0.4) saturate(1.2)
+            blur 强烈让画面变成色块氛围;brightness 0.4 压暗给前景卡留对比度;
+            saturate 1.2 微提色彩饱和(blur 后总会偏灰,补一点)。
+          - object-fit: cover + scale(1.1) — cover 铺满 viewport,scale 1.1
+            防 blur 边缘 (~40px halo) 露出 viewport 边沿。
+          - AnimatePresence + motion.img key={src} → 切角色时老 img exit
+            opacity 1→0 / 新 img enter 0→1, 同时存在 0.6s = 交叉淡化。
+            framer-motion 自动 mount/unmount + cleanup。
+          - onError: 单图加载失败 → 兜底 _placeholder.png(继承 CharacterCard
+            pattern,bg src 已 placeholder 时也不会进死循环 src ===)
+          - loading=eager:首屏立即加载,不等 lazy 触发(背景需要立即可见) */}
+      <AnimatePresence>
+        <motion.img
+          key={bgSrc}
+          src={bgSrc}
+          alt=""
+          loading="eager"
+          decoding="async"
+          draggable={false}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.6, ease: 'easeInOut' }}
+          onError={(e) => {
+            const el = e.currentTarget;
+            if (!el.src.endsWith(PLACEHOLDER_BG)) el.src = PLACEHOLDER_BG;
+          }}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width:  '100%',
+            height: '100%',
+            objectFit: 'cover',
+            objectPosition: 'center center',
+            transform: 'scale(1.1)',
+            filter:       'blur(40px) brightness(0.4) saturate(1.2)',
+            WebkitFilter: 'blur(40px) brightness(0.4) saturate(1.2)',
+            zIndex: 0,
+            pointerEvents: 'none',
+            userSelect: 'none',
+            willChange: 'opacity',
+          }}
+        />
+      </AnimatePresence>
 
-      {/* Top label */}
+      {/* z=1:Fan layout(永远渲染,即使 detail open;hero 共享 layoutId
+          需要 source 元素仍在树里) */}
+      <div className="absolute inset-0" style={{ zIndex: 1 }}>
+        <FanLayout
+          characters={characters}
+          selectedCharId={currentCharacterId}
+          onSelectCharacter={handleSelect}
+          hideHeroForId={mode === 'detail' ? detailForId : null}
+        />
+      </div>
+
+      {/* z=2:top label */}
       <div
         className="fixed top-3 left-1/2 -translate-x-1/2 px-4 py-1.5 text-xs rounded-full font-medium pointer-events-none"
         style={{
@@ -134,12 +201,13 @@ export default function CharacterGallery() {
           backdropFilter:       'blur(6px)',
           WebkitBackdropFilter: 'blur(6px)',
           letterSpacing: '0.05em',
+          zIndex: 2,
         }}
       >
         角色图鉴 · Character Gallery
       </div>
 
-      {/* Close button(右上)— browse 态退出 gallery;detail 态由 modal
+      {/* z=2:close button(右上)— browse 态退出 gallery;detail 态由 modal
           自己的 close 按钮处理(本按钮在 detail 时被 backdrop-blur 模糊压住) */}
       <button
         type="button"
@@ -149,14 +217,14 @@ export default function CharacterGallery() {
           background: 'color-mix(in srgb, var(--color-bg-elevated) 85%, transparent)',
           color:      'var(--color-text-primary)',
           border:     '1px solid var(--color-border)',
-          zIndex:     995,
+          zIndex:     2,
         }}
         title="关闭(Esc)"
       >
         <X size={16} />
       </button>
 
-      {/* Hint(只 browse 态显示) */}
+      {/* z=2:hint(只 browse 态显示) */}
       {mode === 'browse' && (
         <motion.div
           initial={{ opacity: 0, y: 8 }}
@@ -169,13 +237,14 @@ export default function CharacterGallery() {
             border:      '1px solid var(--color-border-subtle)',
             backdropFilter:       'blur(6px)',
             WebkitBackdropFilter: 'blur(6px)',
+            zIndex: 2,
           }}
         >
           点边卡切换 · 点中心卡查看详情
         </motion.div>
       )}
 
-      {/* Detail modal(AnimatePresence 让 exit 反向动画) */}
+      {/* z=1000+:Detail modal(modal 内部已设 z=1000/1001;不冲突 Gallery 内 z 栈) */}
       <AnimatePresence>
         {mode === 'detail' && detailChar && (
           <CharacterDetailModal
