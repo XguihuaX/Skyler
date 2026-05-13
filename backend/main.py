@@ -131,6 +131,7 @@ import backend.capabilities.bilibili          # noqa: F401, E402  v3.5 chunk 6a 
 import backend.capabilities.netease_playback  # noqa: F401, E402  v3.5 chunk 6b (mpv 自解码)
 import backend.capabilities.xiaohongshu       # noqa: F401, E402  v3.5 chunk 6c (被动 URL 解析)
 import backend.capabilities.screen            # noqa: F401, E402  v3.5 chunk 8a (活动感知 4 cap)
+import backend.capabilities.activity          # noqa: F401, E402  v3.5 chunk 14 (timeline 3 cap)
 # v3-G chunk 4 Part C — proactive trigger pack（导入触发 register_stage2 副作用）
 import backend.proactive.triggers.lunch_call    # noqa: F401, E402
 import backend.proactive.triggers.dinner_call   # noqa: F401, E402
