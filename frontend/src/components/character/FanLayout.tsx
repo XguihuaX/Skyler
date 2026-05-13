@@ -1,28 +1,41 @@
 /**
- * v4-fan chunk 3.1 — Pseudo-circle 可见窗口。
+ * v4-fan chunk 3.2 — 紧凑 fan + 统一 stepDeg。
  *
- * Fan-3 改动点(用户实测后反馈"间距太大,角色少时弧太疏"):
- *   - stepDeg 不再用 ``360 / N``。改为按可见 fan 平均分配 ``arcDeg/(W-1)``,
- *     其中 W = ``visibleCount``(默认 7,selected + 左右各 3)。
- *   - **N > visibleCount**:仅渲染窗口内 visibleCount 张卡(以 selected
- *     为中心,左右各 floor(W/2));窗口外不存在 DOM 节点。
- *   - **N ≤ visibleCount**:渲染所有 N 张,stepDeg = ``arcDeg/(N-1)``;
- *     N=1 时单卡居中。
+ * Fan-3.1 用户实测后反馈"5 角色 / arc=120 / vc=7 间距仍大"。本 iter:
+ *
+ * **统一 stepDeg 公式**:不分大小 N,一律 ``stepDeg = arcDeg / (W - 1)``。
+ * 删 Fan-3.1 的 N ≤ visibleCount 用 ``arcDeg/(N-1)`` 撑满弧的特殊路径。
+ *
+ * 后果(也是用户拍板的视觉目标):
+ *   - **N < W**:fan 撑开 ``(N-1) × stepDeg`` 度,**不强制占满 arcDeg**。
+ *     视觉上少卡时 fan 紧凑居中,不会摊开成"几个孤立卡漂浮"。
+ *   - **N ≥ W**:窗口 fan 撑开 arcDeg,与 Fan-3.1 一致。
+ *   - **任意 N 卡间距相同**(都 = stepDeg),不会"少卡时大、多卡时小"——
+ *     这是 Fan-3.1 跟 Fan-3.2 用户体感上最重要的差别。
+ *
+ * **默认 arcDegree**:120 → 60(stepDeg 默认 10°)。卡 160px @ R=600
+ * 角宽 ≈ 15°,stepDeg=10° 让相邻卡 ~30-50% 重叠,扇面紧凑。要更松调
+ * ``?arc=90``;要更紧 ``?arc=40``。
+ *
+ * 渲染分支(只决定渲染哪几张卡,跟 stepDeg 无关):
+ *   - **N > W**:仅窗口内 W 张(selected ± floor(W/2)),DOM 上不存在窗
+ *     外卡;React key=character.id,持续在窗口的卡 base 不变 → 容器 rotate
+ *     平滑无 jump。
+ *   - **N ≤ W**:渲染所有 N 张;N=1 单卡居中。
  *
  * 360° 圆周语义保留(currentIndex unbounded + 最短路径 click + 容器
- * rotate(-currentIndex × stepDeg))。窗口化只影响"渲染哪几张卡"和
- * "stepDeg 怎么算",其它一切不变。
+ * rotate(-currentIndex × stepDeg))。
  *
  * 已知视觉折衷:
- *   1. 窗口边缘卡 (offset = ±W/2) displayed = ±arcDeg/2,落在 fade
- *      boundary,opacity 是 1。click 时 leading/trailing 卡 mount/unmount
- *      会有 "pop"。当前 spec 不加 buffer,接受这个 pop。要更平滑的 fade
- *      提示"还有更多",见 Fan-3.2 backlog 里 buffer 路径。
- *   2. 小 N (N ≤ visibleCount) case 的 "back card":currentIndex 改变时,
- *      处于"绕远端"的卡 offset 会从 -N/2 wrap 到 +N/2,该卡 base 角度
- *      跳变。容器 rotation 平滑,但该卡的位置 (left/top) 瞬间 snap 到
- *      新位置。实际可见性低 (跳变发生在 arc 远端 fade 区),容忍度高,
- *      用户可见后再决定是否值得修。
+ *   1. 窗口边缘卡 (offset = ±W/2) displayed = ±arcDeg/2 = fade boundary,
+ *      opacity=1。click 时 leading/trailing 卡 mount/unmount 有"pop"。
+ *      当前 spec 不加 buffer,接受。要更平滑的 fade 提示"还有更多",
+ *      未来 Fan-3.3 加 1-2 buffer cards each side。
+ *   2. 小 N (N ≤ W) case 的 "back card":currentIndex 改变时,处于"绕远端"
+ *      的卡 offset 会从 -N/2 wrap 到 +N/2,该卡 base 跳变,wrapper left/top
+ *      snap。Fan-3.2 stepDeg 变小后,跳变绝对值也变小(N=5 wrap 跳 4*10°=
+ *      40° vs Fan-3.1 60°),且发生在 ±20° 视野内(Fan-3.1 是 ±30°),
+ *      可见性反而稍提升 — 但仍在 spec 容忍范围。
  */
 import { useEffect, useMemo, useState } from 'react';
 import CharacterCard from './CharacterCard';
@@ -33,21 +46,26 @@ export interface FanLayoutParams {
   radius: number;
   /** 圆心 Y(从视口顶起算)。默认 ``window.innerHeight + 100``。 */
   centerOffsetY: number;
-  /** 可见弧度数 (中心 ±arcDeg/2 内 opacity=1,外侧 fade)。默认 120 (±60°)。 */
+  /**
+   * 可见弧度数 (中心 ±arcDeg/2 内 opacity=1,外侧 fade)。
+   * **默认 60** (Fan-3.2:120 → 60,紧凑 fan)。stepDeg 派生:
+   * ``arcDeg / (visibleCount - 1)`` = 60/6 = 10° (默认 W=7)。
+   */
   arcDegree: number;
   /** Container 旋转 + opacity transition 毫秒。默认 500。 */
   transitionDuration: number;
   /**
-   * v3.1: 可见窗口大小。**必须奇数 ≥ 3** (selected + 对称左右各
-   * (W-1)/2)。默认 7 (selected + 左右各 3)。偶数会向上凑奇,< 3 钳到 3,
-   * 都 ``console.warn``。
+   * 可见窗口大小。**必须奇数 ≥ 3** (selected + 对称左右各 (W-1)/2)。
+   * 默认 7 (selected + 左右各 3)。偶数会向上凑奇,< 3 钳到 3,都
+   * ``console.warn``。
    *
-   * 为什么默认 7:
-   *   - 5 张:edge stepDeg = arcDeg/4 = 30°,边缘卡在 ±60° 弧 boundary。
-   *     视觉密度低,但中心几张卡间距大 (感觉"卡漂浮")。
-   *   - 7 张:stepDeg = 20°,中心 5 张密集 + 边缘 2 张可见提示"还有"。
-   *     是密度 / 信息量平衡点。
-   *   - 9 张:stepDeg = 15°,中心拥挤,边缘卡几乎贴在一起。
+   * Fan-3.2 默认 (arcDeg=60, vc=7) → stepDeg=10°,卡 160px @ R=600 角宽
+   * ≈ 15°,相邻卡 ~30-50% 重叠。
+   *
+   * sweep 矩阵参考:
+   *   - vc=5, arc=60: stepDeg=15°,3 卡密集 + 2 边缘 (无重叠)
+   *   - vc=7, arc=60 ⭐: stepDeg=10°,5 卡密集 + 2 边缘 (重叠)
+   *   - vc=9, arc=60: stepDeg=7.5°,7 卡密集 + 2 边缘 (重重叠)
    */
   visibleCount: number;
 }
@@ -111,10 +129,15 @@ interface CardSpot {
 }
 
 /**
- * 决定渲染哪些卡 + stepDeg。两条分支:
- *   - N ≤ W:渲染所有 N 卡,stepDeg = arcDeg/(N-1),offset 由 shortestDelta
- *     算 (允许小 N case 的 wrap)
- *   - N > W:渲染窗口 W 卡,stepDeg = arcDeg/(W-1),offset = [-half..+half]
+ * Fan-3.2:**stepDeg 统一**(去掉 N ≤ W 的撑满弧特殊路径)。
+ *
+ * stepDeg = arcDeg / (visibleCount - 1) 永远成立,跟 N 无关。
+ * 渲染分支只决定**哪几张卡**进 DOM:
+ *   - N ≤ W:全部 N 卡,offset 由 shortestDelta 算 (允许 wrap)
+ *   - N > W:窗口 W 卡,offset = [-half..+half]
+ *
+ * 后果:N < W 时 fan 撑开 (N-1) × stepDeg 度,**不强制占满 arcDeg** —
+ * 视觉上少卡时紧凑居中而非"几个孤立卡撑开"。
  */
 function computeSpots(
   n: number,
@@ -123,10 +146,15 @@ function computeSpots(
   arcDegree: number,
 ): { stepDeg: number; spots: CardSpot[]; mode: 'all' | 'windowed' } {
   if (n === 0) return { stepDeg: 0, spots: [], mode: 'all' };
-  if (n === 1) return { stepDeg: 0, spots: [{ charIdx: 0, offset: 0 }], mode: 'all' };
+
+  // 统一 stepDeg(N=1 时算出来无意义,反正只一卡也不用)
+  const stepDeg = arcDegree / (visibleCount - 1);
+
+  if (n === 1) {
+    return { stepDeg, spots: [{ charIdx: 0, offset: 0 }], mode: 'all' };
+  }
 
   if (n <= visibleCount) {
-    const stepDeg = arcDegree / (n - 1);
     const spots: CardSpot[] = [];
     for (let i = 0; i < n; i++) {
       spots.push({ charIdx: i, offset: shortestDelta(i, currentMod, n) });
@@ -134,7 +162,6 @@ function computeSpots(
     return { stepDeg, spots, mode: 'all' };
   }
 
-  const stepDeg = arcDegree / (visibleCount - 1);
   const half = Math.floor(visibleCount / 2);
   const spots: CardSpot[] = [];
   for (let o = -half; o <= half; o++) {
@@ -164,7 +191,7 @@ export default function FanLayout({
     return {
       radius:             layoutParams?.radius             ?? 600,
       centerOffsetY:      layoutParams?.centerOffsetY      ?? viewportH + 100,
-      arcDegree:          layoutParams?.arcDegree          ?? 120,
+      arcDegree:          layoutParams?.arcDegree          ?? 60,
       transitionDuration: layoutParams?.transitionDuration ?? 500,
       visibleCount:       normalizeVisibleCount(rawVC),
     };

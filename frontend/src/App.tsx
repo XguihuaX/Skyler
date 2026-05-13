@@ -319,10 +319,10 @@ function MainApp() {
               lineHeight: 1.5,
             }}
           >
-            Fan-3.1 demo · ?fan=1<br />
+            Fan-3.2 demo · ?fan=1<br />
             <span style={{ opacity: 0.75 }}>
               N={characters.length} · selected:{characters.find((c) => c.id === currentCharacterId)?.name ?? '—'}<br />
-              query: vc={_FAN_QUERY?.visibleCount ?? 7} r={_FAN_QUERY?.radius ?? 600} arc={_FAN_QUERY?.arcDegree ?? 120} dur={_FAN_QUERY?.transitionDuration ?? 500}<br />
+              query: vc={_FAN_QUERY?.visibleCount ?? 7} r={_FAN_QUERY?.radius ?? 600} arc={_FAN_QUERY?.arcDegree ?? 60} dur={_FAN_QUERY?.transitionDuration ?? 500}<br />
               点非中心卡 → 最短路径转到 top
             </span>
           </div>
