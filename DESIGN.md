@@ -3895,6 +3895,185 @@ clipboard/ux002 共 12 测试文件 / 0 regression。
 
 ---
 
+## 十五之V、tool 调用过渡语 + frontend loading state(UX-004 起)
+
+### 设计目标
+
+audit 报告核心 finding:tool 调用链 (``chat.py`` LiteLLM stream 累积
+``tool_calls_acc`` → ``_execute_tool`` → 二次 LLM call) 对前端**完全静默**。
+用户问"今天日历有什么",从问完到最终回复中间 5-30 秒**没有任何反馈** —
+体感"app 卡死"。
+
+UX-004 两层叠加给"问完不沉默"反馈:
+
+1. **Prompt 引导**: 在 system prompt 加 ``【工具调用行为】`` 块,要求 LLM
+   在 tool_call 前先输出 6-15 字过渡语("嗯,让我看看" / "等我查一下")。
+   预期 70-95% 跟随率(LLM 偶尔仍 silent)。
+2. **Frontend loading state**: backend 新 emit ``tool_use_start`` /
+   ``tool_use_done`` WS event,frontend 据此点亮 ``ChatInput`` 内 loading
+   pill(``Loader2 animate-spin`` + ``animate-pulse``),tool_name 走前缀
+   mapping 显示具体文案(``查日历…`` / ``查歌单…`` / etc)。
+
+A 与 B 互补:LLM 遵守 prompt 时形成"语言 + 视觉"双重反馈,LLM 不遵守时
+B 兜底保证视觉始终有反馈。
+
+### audit-first 4 决策点(用户已确认)
+
+| Q | Choice | 理由 |
+|---|--------|------|
+| 过渡语 TTS? | **A 只文字不 TTS** | TTS 当前 full-utterance queued,Choice B(过渡语单独 TTS interleave)需 sentence-by-sentence streaming 架构改,留 chunk 15 / UX-006 |
+| Character-specific 过渡语? | **v1 统一默认** | 八重 / 未来角色靠 persona 自然变体;``tool_transition_examples`` 字段留给 chunk 12 persona 加厚 |
+| Label mapping 来源? | **frontend 前缀 map** | 与 backend ``_extractProvider`` 对齐;新加 capability 只加 1 行 entry |
+| WS event 几个? | **2 个** | tool_use_start(带 tool_name)+ tool_use_done(带 tool_name + duration_ms)。duration_ms 留给未来 "Momo 这个工具好慢哦" feedback |
+
+### Backend 实现
+
+#### chat.py — yield 协议扩展
+
+``ChatAgent.stream()`` 之前 yield ``str``(句子),改为 yield
+``Union[str, dict]``。dict 是 typed WS event,ws.py 直接 ``send_json``
+透传,不经文本处理(emotion/thinking parse / TTS)。
+
+Tool exec loop(chat.py:1447-1466)前后:
+
+```python
+yield {"type": "tool_use_start", "tool_name": name}
+tool_t0 = time.perf_counter()
+result = await _execute_tool(...)
+duration_ms = int((time.perf_counter() - tool_t0) * 1000)
+yield {"type": "tool_use_done", "tool_name": name, "duration_ms": duration_ms}
+```
+
+audit 4 方案对比后选 **dict-yield**(改动小 / 无 callback 耦合 / 无新依赖);
+其他方案(on_event callback / contextvar / sentinel string)各有缺点详见
+commit 1 message。
+
+#### ws.py — 早路由分支
+
+``async for sentence in _chat_agent.stream(chat_msg):`` loop 顶部加:
+
+```python
+if isinstance(sentence, dict):
+    await ws.send_json(sentence)
+    continue
+```
+
+permanent INFO log ``[ws] forwarding tool event %s user=%s tool=%s`` 标记
+排查友好。
+
+#### chat.py — _TOOL_BEHAVIOR_BLOCK 注入
+
+```python
+_TOOL_BEHAVIOR_BLOCK = "【工具调用行为】\n..."  # 17 行 prompt
+
+# in _build_messages:
+head_parts.append(persona_block)
+head_parts.append(_TOOL_BEHAVIOR_BLOCK)    # ← UX-004 新加
+system_parts: List[str] = ["\n\n".join(head_parts)]
+```
+
+注入位置选 head_parts 末尾(persona 之后):与 emotion/thinking/motion/state/
+BASE_INSTRUCTION/persona 同层级(输出格式约束),**不**混入下方 profile/
+activity/memory recall(语义上下文层)。注入顺序断言由
+``test_tool_behavior_injected_before_profile_section`` 锁定。
+
+### Frontend 实现
+
+#### Store 新字段
+
+```ts
+currentToolName: string | null;        // 当前 LLM 正在调的 tool
+setCurrentToolName: (v: string | null) => void;
+```
+
+紧贴 ``currentThinking`` 旁边(同 turn-scoped transient 语义)。多 tool 并行
+只显示最近 set 的(用户关注当下卡顿点,不需要 list 多个)。
+
+#### useWebSocket.ts — handler
+
+```ts
+case 'tool_use_start': s.setCurrentToolName(msg.tool_name); break;
+case 'tool_use_done':  s.setCurrentToolName(null);          break;
+```
+
+新一轮发送(line 494)``setCurrentToolName(null)`` belt-and-suspenders 清
+残留,防 backend 路径异常未 emit done。
+
+#### lib/tool_labels.ts — 前缀 mapping
+
+```ts
+const TOOL_LABEL_TABLE: ToolLabelEntry[] = [
+  { prefix: 'activity.',        label: '查今天的活动…' },
+  { prefix: 'apple_calendar.',  label: '查日历…' },
+  { prefix: 'netease.',         label: '查歌单…' },
+  { prefix: 'bilibili.',        label: '看视频信息…' },
+  { prefix: 'media.',           label: '控制播放…' },
+  { prefix: 'xhs.',             label: '解析小红书…' },
+  { prefix: 'screen.',          label: '看屏幕…' },
+  { prefix: 'clipboard.',       label: '看剪贴板…' },
+  // ... ext.X 也覆盖
+];
+// fallback: '查询中…'
+```
+
+#### ChatInput.tsx — loading pill
+
+紧贴 thinking pill 之后:
+
+```tsx
+{currentToolName && (
+  <div className="animate-pulse ..." style={{ border: '1px dashed ...' }}>
+    <Loader2 size={12} className="animate-spin" />
+    <span>{toolLoadingLabel(currentToolName)}</span>
+  </div>
+)}
+```
+
+视觉中等(dashed border + secondary text color),不抢 thinking pill
+accent 焦点。``title={``tool: ${currentToolName}``}`` 给开发者调试。
+
+### TTS 决策(Choice A 落实)
+
+过渡语**只走文字流**(``text_chunk``)。最终 TTS 仍是完整回复 full-utterance,
+跟 UX-004 之前架构一致。``audio_chunk`` 路径不改动。
+
+**用户体感**:屏幕上看见过渡语"等我查一下" + loading pill"查日历…" 同时
+出现,然后等几秒,最终回复"今天有 2 个日程,上午 10 点开会" 文字流出 +
+TTS 朗读。不听见 Momo 真说"等我查一下",但视觉上已经知道她在做事。
+
+### Tech debt 记录(用户额外约束)
+
+1. **TTS pre-tool segment 支持**: Choice B 的"过渡语真 TTS 出声" 需要拆
+   audio pipeline,留 **chunk 15 / UX-006**。settings 加 toggle / sentence
+   boundary detector / per-segment TTS task queue 等。
+2. **Character-specific 过渡语**: ``tool_transition_examples`` 字段加 DB
+   Character schema / characters.yaml,prompt build 时拼接角色专属例子。
+   留 **chunk 12 persona 加厚** 同期实施。
+
+### 验收对照(commit 5 完成时)
+
+| 指标 | 状态 |
+|------|------|
+| Backend emit tool_use_start / done | ✅ commit 1 |
+| Prompt 含 ``【工具调用行为】`` 块 | ✅ commit 2 |
+| Frontend loading pill 显示 + 文案 mapping | ✅ commit 3 |
+| LLM 跟随率(预期 70-95%) | ⏳ user GUI 验收测 3-5 句 tool 问题统计 |
+| TTS 不出过渡语(Choice A 落实) | ✅ commit 2(过渡语只走 text_chunk 不喂 TTS pipeline) |
+| 0 regression on chunk 0-14 + UX-001/002/003/005 | ✅ 5 new tests pass |
+
+### 文件清单
+
+* ``backend/agents/chat.py``(+37 行 ``_TOOL_BEHAVIOR_BLOCK`` 常量 +2 个
+  tool event yield,Union 类型签名)
+* ``backend/routes/ws.py``(+10 行 dict 早路由分支)
+* ``frontend/src/store/index.ts``(+11 行 currentToolName 字段)
+* ``frontend/src/hooks/useWebSocket.ts``(+18 行 2 case + 新轮清残)
+* ``frontend/src/lib/tool_labels.ts``(new, 62 行 mapping table)
+* ``frontend/src/components/ChatInput.tsx``(+24 行 loading pill UI)
+* ``tests/test_ux004_tool_call_ux.py``(new, 215 行 / 5 case)
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建
