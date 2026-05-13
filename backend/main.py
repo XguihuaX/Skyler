@@ -53,6 +53,9 @@ from backend.database.migrations.v3_g_chunk2_proactive import (
 from backend.database.migrations.v3_g_chunk2_6_pending_briefing import (
     run_migration as migrate_v3_g_chunk2_6_pending_briefing,
 )
+from backend.database.migrations.v4_fan_chunk1_splash_art import (
+    run_migration as migrate_v4_fan_chunk1_splash_art,
+)
 from backend.database.migrations.v3_g_chunk3_character_states import (
     run_migration as migrate_v3_g_chunk3_character_states,
 )
@@ -198,6 +201,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 1b14. V3.5 chunk 5a: characters.background_path 列（idempotent）──
     await migrate_v3_5_chunk5a_character_background()
+
+    # ── 1b14a. V4-fan chunk 1: characters.splash_art_url 列（idempotent）──
+    # Fan UI 扇面卡牌底图字段。POST /api/characters/{id}/splash-art 写入。
+    await migrate_v4_fan_chunk1_splash_art()
 
     # ── 1b15. V3.5 chunk 7: mcp_credentials + mcp_client_state 表 ────────
     # 必须在 init_clients_from_config 之前（client.py 读 DB enabled override）

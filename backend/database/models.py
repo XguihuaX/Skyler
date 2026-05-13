@@ -58,6 +58,10 @@ class Character(Base):
     # ``/backgrounds/tokyo_rain.mp4``）。NULL → CharacterView 继续走原
     # fallback 链（Live2D → 静态 jpeg）。后缀决定前端用 <img> 还是 <video>。
     background_path = Column(Text, nullable=True)
+    # v4-fan chunk 1: Fan UI 扇面卡牌底图。Vite static URL（如
+    # ``/splash-art/2.jpg``）。NULL → Fan UI fallback 占位。文件名以
+    # character.id 为 key，由 POST /api/characters/{id}/splash-art 写入。
+    splash_art_url = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     conversations = relationship("Conversation", back_populates="character")
