@@ -266,7 +266,9 @@ activity_judge:
 #   * cleanup_days          保留天数,> N 天的 session 行被每日 cron 清除(默 30)
 #   * cleanup_cron          清理 cron(默 23:59 每日,timezone 走 scheduler.timezone)
 activity_timeline:
-  enabled: true
-  min_session_seconds: 30
-  cleanup_days: 30
+  enabled: true              # 总开关:写 activity_sessions(关掉后 watcher 仍跑只是不写表)
+  inject_into_chat: true     # commit 5 ChatAgent system prompt 注入今日摘要;
+                             # 与 enabled 解耦 — 用户可"记录但不在对话里被引用"
+  min_session_seconds: 30    # 短 session 过滤,与 watcher poll_interval 同步
+  cleanup_days: 30           # 保留天数,> N 天的行被每日 cron 清(commit 7)
   cleanup_cron: "59 23 * * *"

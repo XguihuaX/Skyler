@@ -1138,6 +1138,22 @@ async def _build_messages(
             if summary:
                 system_parts.append("【用户画像】\n" + summary)
 
+    # ---- 2b. Today's activity timeline (chunk 14, config-gated) ----
+    # 与 profile 同位置(用户上下文层),早于 memory recall(更老的语义层)。
+    # ``inject_into_chat`` 与 ``activity_timeline.enabled`` 分两个 toggle —
+    # 用户可"记录但不在对话里提及"。format 函数模板化生成(无 LLM 调用),
+    # 总活跃 < 60s / 关闭 / DB 异常 → silent None。
+    try:
+        from backend.services.activity_timeline import (
+            format_today_activity_for_prompt,
+        )
+        activity_block = await format_today_activity_for_prompt(user_id)
+        if activity_block:
+            system_parts.append(activity_block)
+    except Exception as exc:
+        # 决不让 timeline 注入失败阻塞主对话流(对齐 chunk 8a 风格 silent)
+        logger.debug("[chat] activity_timeline inject skipped: %s", exc)
+
     # ---- 3. Long-term memory Top-5 (config-gated) ----
     # v3.5 chunk 9 Part 3：去 character_id 隔离 —— memory 改为 user 级共享，
     # 事实跨角色统一（"我猫叫 Mochi" 跟 Momo 说一次，切八重也能召回）。
