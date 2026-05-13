@@ -26,16 +26,27 @@ export default function ChatHistoryDrawer({ open, onClose }: Props) {
       className={`fixed inset-0 z-40 ${open ? '' : 'pointer-events-none'}`}
       aria-hidden={!open}
     >
-      {/* Click-outside catcher: covers the chat-area space NOT occupied by the drawer */}
+      {/* Click-outside catcher: covers the chat-area space NOT occupied by the drawer.
+          UX-007: 加 40% 黑半透明 + 8px backdrop-blur,让 Live2D 在左侧透着柔化可见
+          (而非彻底被白屏盖)。rgba(0,0,0,0.4) 在所有主题下行为一致(浅色 → 适度变暗,
+          暗色 → 进一步加深 — 跟 system modal scrim 行为对齐)。 */}
       <div
         className={`absolute inset-0 right-[60%] transition-opacity duration-300 ${
           open ? 'opacity-100' : 'opacity-0'
         }`}
+        style={{
+          background: 'rgba(0, 0, 0, 0.4)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',  // Safari prefix
+        }}
         onClick={onClose}
         aria-label="关闭历史抽屉"
       />
 
-      {/* Drawer panel */}
+      {/* Drawer panel
+          UX-007: surface 85% → 95% 让消息卡片更清晰(用户专门来看历史,要求文字
+          稳定可读)。backdrop-blur-lg 仍保留 — 用户拖窗或 Live2D 大幅运动时
+          panel 边缘不显得突兀。 */}
       <div
         className={`absolute top-0 right-0 h-full w-[60%]
                     backdrop-blur-lg shadow-2xl pt-10
@@ -43,7 +54,7 @@ export default function ChatHistoryDrawer({ open, onClose }: Props) {
                     flex flex-col
                     ${open ? 'translate-x-0' : 'translate-x-full'}`}
         style={{
-          background: 'color-mix(in srgb, var(--color-bg-surface) 85%, transparent)',
+          background: 'color-mix(in srgb, var(--color-bg-surface) 95%, transparent)',
           borderLeft: '1px solid var(--color-border-subtle)',
         }}
       >
