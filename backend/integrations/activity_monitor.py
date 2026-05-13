@@ -29,6 +29,7 @@ Public API
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -258,3 +259,72 @@ def get_active_document_path() -> Optional[Tuple[str, str]]:
         if path:
             return path, kind
     return None
+
+
+# ---------------------------------------------------------------------------
+# v3.5 chunk 8a-ext V2: macOS 用户活跃度(键鼠 idle 秒数)
+#
+# 用 ``ioreg -c IOHIDSystem`` 子进程拿 ``HIDIdleTime`` IORegistry 字段(纳秒)
+# / 1e9 转秒。Quartz API (``CGEventSourceSecondsSinceLastEventType``) 是
+# 等价路径但需要 ``pyobjc-framework-Quartz`` 新 pip 包,本 commit 复用 chunk
+# 8a 既有 subprocess 模式零新依赖。
+#
+# 用例: ActivityJudge 慢路径在 LLM call 之前检查 user idle 秒数,长时间静止
+# (默 300s)→ 认为人不在电脑前,skip judge 不打扰。
+# ---------------------------------------------------------------------------
+
+
+_IOREG_TIMEOUT_SECONDS = 2.0
+_HID_IDLE_RE = re.compile(r'"HIDIdleTime"\s*=\s*(\d+)')
+
+
+def get_idle_seconds() -> Optional[float]:
+    """查自上次键鼠活动以来的秒数。
+
+    macOS: 跑 ``ioreg -c IOHIDSystem`` + 正则抽 ``HIDIdleTime`` 纳秒 / 1e9。
+    非 macOS / ioreg 缺失 / 异常 / 解析失败 → 返 None(调用方按 None
+    走 fallback "用户活跃"路径,不破坏 V1 行为)。
+
+    实测真机:
+      ``$ ioreg -c IOHIDSystem | grep HIDIdleTime``
+      ``      "HIDIdleTime" = 146795750``    ← 0.147s
+
+    HIDIdleTime 字段是 macOS 10.4+ IORegistry 标准,稳定不会变。
+    """
+    if not IS_MACOS:
+        return None
+    if shutil.which("ioreg") is None:  # pragma: no cover - macOS 总是有
+        return None
+    try:
+        res = subprocess.run(
+            ["ioreg", "-c", "IOHIDSystem"],
+            capture_output=True,
+            text=True,
+            timeout=_IOREG_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("[activity_monitor] ioreg timed out (>%ss)",
+                       _IOREG_TIMEOUT_SECONDS)
+        return None
+    except Exception as exc:  # pragma: no cover - subprocess 异常极少
+        logger.warning("[activity_monitor] ioreg failed: %s", exc)
+        return None
+    if res.returncode != 0:
+        logger.debug(
+            "[activity_monitor] ioreg rc=%s stderr=%r",
+            res.returncode, (res.stderr or "")[:200],
+        )
+        return None
+    m = _HID_IDLE_RE.search(res.stdout or "")
+    if not m:
+        # 极端情况: 系统不输出 HIDIdleTime(改 macOS 版本 / SIP 限制 / 等)
+        logger.debug(
+            "[activity_monitor] HIDIdleTime regex no match in ioreg output"
+        )
+        return None
+    try:
+        ns = int(m.group(1))
+    except (ValueError, IndexError):  # pragma: no cover - regex 抓到就一定数字
+        return None
+    return ns / 1e9
