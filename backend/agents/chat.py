@@ -36,7 +36,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 from sqlalchemy import select
 
@@ -1283,8 +1283,16 @@ class ChatAgent(IAgent):
                 "payload": {"error": f"Internal error: {exc}"},
             }
 
-    async def stream(self, message: dict) -> AsyncGenerator[str, None]:
+    async def stream(
+        self, message: dict,
+    ) -> AsyncGenerator[Union[str, dict], None]:
         """Streaming with unified tool calling (memory + ToolRegistry built-ins).
+
+        Yield 类型混合(UX-004):
+          * ``str``  — 一句文本,ws.py 包成 ``text_chunk`` event 给前端
+          * ``dict`` — typed WS event(``tool_use_start`` / ``tool_use_done``
+                       带 tool_name / duration_ms),ws.py 直接 send_json 透传
+                       不经文本处理(emotion/thinking parse)
 
         Loops:
           1. Call acompletion(stream=True, tools=_get_all_tools()).
@@ -1451,14 +1459,27 @@ class ChatAgent(IAgent):
                         "ChatAgent tool call: %s args=%s",
                         name, raw_args[:200],
                     )
+                    # UX-004: emit tool_use_start before exec — frontend 据此
+                    # 点亮 loading 指示器(基于 tool_name 前缀做 label mapping)
+                    yield {"type": "tool_use_start", "tool_name": name}
+                    tool_t0 = time.perf_counter()
                     with timed(f"tool {name}"):
                         result = await _execute_tool(
                             user_id, name, raw_args, character_id=character_id,
                         )
+                    duration_ms = int((time.perf_counter() - tool_t0) * 1000)
                     logger.info(
-                        "ChatAgent tool result: %s -> %s",
+                        "ChatAgent tool result: %s -> %s (duration=%dms)",
                         name, json.dumps(result, ensure_ascii=False)[:200],
+                        duration_ms,
                     )
+                    # UX-004: emit tool_use_done with duration_ms — 未来 frontend
+                    # 可基于慢工具(> 5s 之类)在 UI 给 "Momo 这个工具好慢哦" 反馈
+                    yield {
+                        "type": "tool_use_done",
+                        "tool_name": name,
+                        "duration_ms": duration_ms,
+                    }
                     messages.append({
                         "role": "tool",
                         "tool_call_id": v["id"] or f"call_{i}",

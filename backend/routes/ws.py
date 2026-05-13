@@ -904,6 +904,18 @@ async def _handle_message(
                 )
 
                 async for sentence in _chat_agent.stream(chat_msg):
+                    # UX-004: chat.py 现在 yield Union[str, dict] —— dict 是 typed
+                    # WS event(tool_use_start / tool_use_done),直接透传不经文本
+                    # 处理(emotion/thinking parse + TTS 等都不适用)。
+                    if isinstance(sentence, dict):
+                        logger.info(
+                            "[ws] forwarding tool event %s user=%s tool=%s",
+                            sentence.get("type"), user_id,
+                            sentence.get("tool_name"),
+                        )
+                        await ws.send_json(sentence)
+                        continue
+
                     if not first_chunk_logged:
                         timing_logger.info(
                             "[TIME] Chat first chunk: %.0fms",
