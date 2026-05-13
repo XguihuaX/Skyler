@@ -96,6 +96,19 @@ def get_prompt_max_chars() -> int:
         return 2000
 
 
+def get_idle_threshold_seconds() -> int:
+    """chunk 8a-ext V2: 键鼠静止超过 N 秒 → skip judge(认为人不在电脑前)。
+
+    默 300s = 5 min。``maybe_judge`` 在 throttle/min_stay 闸通过后 + LLM call
+    之前查 ``activity_monitor.get_idle_seconds()``,idle > threshold → 返 None。
+    set 0 = 禁用 idle 闸(总是认为活跃,V1 行为)。
+    """
+    try:
+        return max(0, int(_cfg().get("idle_threshold_seconds", 300)))
+    except (TypeError, ValueError):
+        return 300
+
+
 # ---------------------------------------------------------------------------
 # Decision dataclass
 # ---------------------------------------------------------------------------
@@ -309,6 +322,27 @@ async def maybe_judge(
 
     # 进入 LLM 调用 — 先记账(防 LLM 慢 / 失败时下一拍立刻重试)
     _record_judged(stay_key)
+
+    # chunk 8a-ext V2: idle 闸 — 键鼠静止超过 ``idle_threshold_seconds`` (默 300s)
+    # → 认为人不在电脑前,skip judge 不浪费 LLM + 不让 Momo 自言自语。
+    # ``get_idle_seconds()`` 返 None(非 macOS / ioreg 缺 / 异常)→ fallback
+    # "总是活跃" 不挡(保持 V1 行为)。set ``idle_threshold_seconds=0`` 也
+    # 禁用本闸。
+    idle_threshold = get_idle_threshold_seconds()
+    if idle_threshold > 0:
+        try:
+            from backend.integrations.activity_monitor import get_idle_seconds
+            idle_sec = get_idle_seconds()
+        except Exception as exc:
+            logger.debug("[activity_judge] get_idle_seconds error: %s", exc)
+            idle_sec = None
+        if idle_sec is not None and idle_sec > idle_threshold:
+            logger.info(
+                "[activity_judge] skip: user idle %.0fs > threshold %ds "
+                "(probably away from computer) key=%s",
+                idle_sec, idle_threshold, stay_key,
+            )
+            return None
 
     prompt = _build_judge_prompt(
         app=stay_info.get("app"),

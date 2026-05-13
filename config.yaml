@@ -241,9 +241,16 @@ activity_watcher:
 #   * min_stay_minutes  停留 < N 分钟 → 不 judge(默 5)
 #   * throttle_minutes  同 stay_key 节流(默 10)
 #   * fire_throttle     同 label 30 min(由 activity_watcher.trigger_throttle_minutes 共享)
+#
+# v3.5 chunk 8a-ext V2 追加: macOS 键鼠 idle 闸
+#   * idle_threshold_seconds  ioreg HIDIdleTime > N 秒 → 认为人不在电脑前,
+#                             skip judge LLM call。0 = 关闭检测(老 V1 行为)。
+#                             非 macOS get_idle_seconds 返 None,自动按"活跃"走
+#                             不影响 V1 行为。
 activity_judge:
-  enabled: true          # 默认 ON。用户明确要陪伴感,SettingsPanel 二级 toggle 可关
-  model: qwen-turbo      # 便宜模型,与 chunk 10/11 同源
+  enabled: true               # 默认 ON。用户明确要陪伴感,SettingsPanel 二级 toggle 可关
+  model: qwen-turbo           # 便宜模型,与 chunk 10/11 同源
   min_stay_minutes: 5
   throttle_minutes: 10
-  prompt_max_chars: 2000 # 喂 judge 的 URL 正文摘要上限
+  prompt_max_chars: 2000      # 喂 judge 的 URL 正文摘要上限
+  idle_threshold_seconds: 300 # chunk 8a-ext V2: 键鼠静止超 300s 视为离开
