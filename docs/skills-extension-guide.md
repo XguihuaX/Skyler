@@ -1,63 +1,163 @@
-# Skyler Skill Extension Guide (v3.5 chunk 7+)
+# Extending Skyler — 给 Momo 加新能力的 3 条路径
 
-Skyler 是「个人乐高底盘」——加新能力（"skill"）有两条路径，按你的能力来源
-挑一条即可：
+Skyler 是「可塑型 AI 角色容器」——扩展是一等公民,不是补丁。这意味着:**用户
+应该能从 UI 把别的工具 / 视觉资产装进来,不动 yaml 不改 .py**。Stage 2 之后,
+90% 的扩展场景由 UI 完成,只有"深度集成 Skyler 内部状态"还需要写代码。
 
-* **姿态 A**：用 Python 库就能实现 → 写本地 capability（5 分钟模板）
-* **姿态 B**：第三方 SaaS 提供官方 MCP server → config.yaml 加几行 + UI 启用
-
-本指南给两侧的最小可行模板 + 决策树 + 候选 skill 推荐姿态对照。
+本指南给三条路径 + 一棵决策树 + v4.1+ 演进预告。
 
 ---
 
-## 决策树
+## 速览决策树
 
-```
-新 skill 想接入？
-  │
-  ├─ Python 库能跑（docx / openpyxl / pdfplumber / pyperclip / pyautogui...）
-  │      → 姿态 A
-  │
-  ├─ 第三方 SaaS 有官方 MCP server（Notion / Linear / Slack / GitHub / ...）
-  │      → 姿态 B
-  │
-  ├─ 两种都行 → 姿态 A（少一层进程 + 直接 SAFE 沙箱）
-  │
-  └─ HTTP API 但无 MCP server → 姿态 A，handler 内直接 ``httpx`` 调用
-       （不要为了 "MCP 时髦" 而单独写 MCP server）
-```
+| 我的需求 | 选 |
+| --- | --- |
+| 装现成工具(filesystem / git / GitHub / 数据库 / Notion / Slack ...) | **A — MCP** |
+| 加新角色立绘 / 切换 Live2D 模型 | **B — Live2D** |
+| 深度集成 Skyler 内部(memory 操作 / character 切换 / Live2D motion 触发 / 多模态) | **C — Python** |
+| 跨语言写 capability(Node / Rust / Go / Bash ...) | **A — MCP**(用对方语言写 server) |
+| 不懂代码 | **A 或 B** |
+| 高性能 / 低延迟 / in-process / 需要直接读写 SQLAlchemy session | **C — Python** |
 
-### 反模式
-
-* 不要为只 wrap 一个 HTTP endpoint 的简单功能写 MCP server——直接 capability
-  内 `httpx.AsyncClient` 调用更省事
-* 不要为 LLM 不会主动想用的能力做姿态 B——npx 首次启动有 30s 拉包代价
-* SAFE 沙箱不能省——任何接收用户输入的 filename 都必须走 `safe_resolve`
+如果两条路都行:**优先 A**。少一层进程、少一次重启、跨工具复用(同一个 MCP server 也能给 Claude Desktop / Cursor / Cline 用)。
 
 ---
 
-## 姿态 A：本地 capability 模板
+## 路径 A:UI 装 MCP server ⭐ 推荐
 
-### 用户视角
+**状态:✅ Stage 2.1 已 ship**(commit `1ecf9af`)
 
-「加一个能力，比如读 Excel 表格」：
+90% 用户走这条路。MCP(Model Context Protocol)是 Anthropic 主推的工具协议,
+社区已有几百个现成 server,Skyler 把它们当 first-class capability 接入。
 
-1. `pip install openpyxl`，加进 `requirements.txt`
-2. 写 `backend/capabilities/excel_ops.py`（模板见下）
-3. `backend/main.py` 加一行 `import backend.capabilities.excel_ops`
-4. 重启后端，ChatAgent 自动看到新能力（无需改前端、无需改 SettingsPanel）
+### 用户视角(纯 UI,3 分钟)
 
-### 开发者模板
+1. 打开 SettingsPanel → 滑到底部 **[扩展能力 (MCP)]** section
+2. 点 **[+ 新增 server]**
+3. 填:
+   - **name** —— 任意标识(如 `filesystem`)
+   - **transport** —— `stdio`(子进程,最常见) / `http`(远程)
+   - **command** + **args** —— 启动子进程的命令(如 `npx -y @modelcontextprotocol/server-filesystem ~/Documents`)
+   - **env** —— 可选,secrets **用 `${VAR_NAME}` 模板**,提交后弹出凭证 modal 让你填真实值
+4. **提交** —— 后端 `POST /api/mcp/clients` 写 `config.yaml` + 立即尝试连接
+5. 连接成功 → 状态徽章 🟢 `running · N tools`,LLM 立即可用
+
+### 优点
+
+- ❌ 不要懂 Python
+- ❌ 不要重启 backend
+- ✅ 跨语言:server 用什么写都行(npx / uvx / docker / 自编译二进制)
+- ✅ 跨工具复用:同一个 server 也能挂到 Claude Desktop / Cursor / Cline
+- ✅ secrets 不进 git——env 模板只写变量名,真实 token 存 SQLite `mcp_credentials` 表
+
+### 上游来源
+
+| 源 | 内容 |
+| --- | --- |
+| [modelcontextprotocol.io](https://modelcontextprotocol.io) | 协议文档 + Anthropic 官方 servers |
+| [github.com/modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers) | 官方 server 仓库(filesystem / fetch / git / github / postgres / 等) |
+| [mcp.so](https://mcp.so) | 社区索引,按场景分类 |
+| [smithery.ai](https://smithery.ai) | hosted MCP server 市场 |
+
+### 5 个值得装的现成 MCP server
+
+| Server | 用途 | 启动 |
+| --- | --- | --- |
+| `@modelcontextprotocol/server-filesystem` | 读本地文件树 | `npx -y ... ~/Documents` |
+| `@modelcontextprotocol/server-sequential-thinking` | LLM 自助调多步推理 | `npx -y ...` |
+| `@modelcontextprotocol/server-memory` | 简易 KV 持久化记忆 | `npx -y ...` |
+| `@modelcontextprotocol/server-git` | 读 git repo + log + diff | `npx -y ... --repository <path>` |
+| `@modelcontextprotocol/server-fetch` | 抓任意 URL 当 LLM context | `npx -y ...` |
+
+### 失败排查
+
+- **连接失败** → 状态徽章 🔴 `error`,hover 看 `last_error`。常见:命令拼错、依赖未装(npx 第一次拉包 ~30s,稍等)、env 缺凭证
+- **凭证缺失** → 状态徽章「需配置凭证」,点 **[配置凭证]** 输入(明文存 SQLite,与 `.env` 风险等价,ROADMAP 有 OS keyring 加密 backlog)
+- **添加成功但 connect 失败** → backend 返 201 + `error`,yaml **不 rollback**;用户可点 [删除] 重添或先配凭证再重试
+
+---
+
+## 路径 B:UI 装 Live2D 模型
+
+**状态:✅ Stage 2.2 已 ship**(commit `c03ae2e`)
+
+扩展角色视觉(立绘 / 表情 / 动作)。Skyler 的角色驱动定位让 Live2D 是一等公民。
+
+### 用户视角(纯 UI,2 分钟)
+
+1. 打开 **CharacterPanel** → 编辑或新建角色
+2. 找到 **Live2D 模型** label → 点旁边 **[+ 上传模型]**
+3. 拖入 `.zip`(含 `.moc3` + `.model3.json` + 可选 textures / motions)
+4. 后端验证 + 解压 → 弹 toast `已上传 <slug>(N textures / M motions)`
+5. dropdown 自动选中新 slug
+6. 若 zip 内含 `.motion3.json`,弹 **应用默认 motion map?** 对话框
+   - 点 **[应用]** → 写到 `character.motion_map_json`,LLM 输出 `<motion>X</motion>` 标签时该角色会真触发动作
+   - 点 **[跳过]** → 保留前端兜底 motionMap(`frontend/src/config/live2d.ts`),后续可手动编辑
+
+### 限制
+
+- ❌ **仅 Cubism 4 及以下**(SDK 4.2 / `.moc3` version ≤ 4)。Cubism 5 模型 backend 直接 422 拒收——`pixi-live2d-display` 还没支持(GitHub issue #118 跟进中)
+- ❌ 单 zip ≤ 30 MB(每个文件 ≤ 10 MB,防 zip-bomb)
+- ❌ slug 已存在 → 409,UI 提供改名重试 input
+
+### 上游来源
+
+| 源 | 内容 |
+| --- | --- |
+| [live2d.com/en/sample-data/](https://www.live2d.com/en/learn/sample/) | Live2D 官方 free sample(Hiyori / Haru / 等;商用授权看 Live2D 条款) |
+| 商业 commission | Booth.pm / Skeb / Twitter 找画师定制 |
+| 自制 | Cubism Editor(免费版可做);需要美术功底 |
+
+### 资产结构(zip 内层)
+
+```
+mymodel/                          # zip 解压后会放 frontend/public/live2d/<slug>/
+├── mymodel.moc3                  # 必备
+├── mymodel.model3.json           # 必备 — entry,引用 .moc3 + textures + motions
+├── mymodel.4096/
+│   └── texture_00.png            # 可选,textures
+├── motions/
+│   ├── idle_01.motion3.json      # 可选,motion 文件 — backend 扫文件名生成 motion_map 默认值
+│   └── tap_01.motion3.json
+└── mymodel.physics3.json         # 可选,物理(头发 / 衣服摇摆)
+```
+
+backend `_build_motion_map()` 把每个 `.motion3.json` 文件名 stem 作为 motion entry:
+`idle_01.motion3.json` → `{"idle_01": {"group": "idle_01", "index": 0}}`。这是
+**默认值**(模板),Live2D 模型作者一般按 `GroupName_XX.motion3.json` 命名,
+模板基本能直接用;不能用时在 character.motion_map_json 手动改。
+
+---
+
+## 路径 C:写 Python capability(深度集成)
+
+**状态:🔧 需改代码 + 重启 backend**。v4.1+ backlog 计划 UI 化,但 .py
+跨 framework 不兼容,优先级不高(详 ROADMAP "Skill UI" backlog 条目)。
+
+### 何时选 C 而不是 A
+
+| 场景 | 为什么 C |
+| --- | --- |
+| 需要读写 Skyler 内部 state(memory / character_state / activity_timeline 表)| MCP 是隔离子进程,拿不到主进程的 SQLAlchemy session |
+| 需要在 ChatAgent.stream 流程中插钩子(motion 触发 / emotion 解析)| MCP 协议没暴露 stream 中间状态 |
+| 需要 in-process 性能(单次调用 < 10ms) | MCP 子进程 IPC 单次 ~5-20ms 起步 |
+| 已经有 Python 库就能跑(`python-docx` / `openpyxl` / `pdfplumber` / `pyperclip` ...) | A 也行,但 C 少一层进程,沙箱更直接 |
+
+### 用户视角(5 分钟,但需要懂 Python)
+
+1. `pip install <lib>`,加进 `requirements.txt`
+2. 写 `backend/capabilities/<feature>.py`(模板见下)
+3. `backend/main.py` 加一行 `import backend.capabilities.<feature>` 触发
+   `@register_capability` decorator 副作用
+4. 重启 `uvicorn` —— ChatAgent 自动看到新 capability(无需改前端)
+
+### 最简模板
 
 ```python
-"""backend/capabilities/excel_ops.py — v3.5 chunk 7+ 模板"""
-from __future__ import annotations
-
+"""backend/capabilities/excel_ops.py — 读 Excel 表格"""
 from pathlib import Path
 from typing import Any
-
 from openpyxl import load_workbook
-
 from backend.capabilities import Consumer, TriggerMode, register_capability
 from backend.config import config_yaml
 from backend.utils.safe_path import ensure_sandbox_dir, safe_resolve
@@ -74,12 +174,10 @@ def _safe_dir() -> Path:
     name="excel.read_sheet",
     display_name="读取 Excel 表格",
     description=(
-        "读取 .xlsx 表格的指定 sheet 内容（默认第一个 sheet）。"
-        "适用场景：用户说「读一下那个表」「看看 XX.xlsx 里写了啥」。\n\n"
-        "参数：\n"
-        "- filename: 文件名（带或不带 .xlsx 后缀）\n"
-        "- sheet_name: sheet 名称，可选；缺省读第一个\n\n"
-        "返回 ``{sheet, rows: [[cell, ...], ...], row_count}``。"
+        "读取 .xlsx 表格的指定 sheet 内容(默认第一个 sheet)。"
+        "适用场景:用户说「读一下那个表」「看看 XX.xlsx 里写了啥」。\n\n"
+        "参数:\n- filename: 文件名\n- sheet_name: sheet 名称,可选\n\n"
+        "返回 ``{sheet, rows, row_count}``。"
     ),
     category="files",
     consumers=[Consumer.CHAT_AGENT],
@@ -95,13 +193,10 @@ def _safe_dir() -> Path:
     },
 )
 async def excel_read_sheet(
-    filename: str = "",
-    sheet_name: str = "",
-    **_kwargs: Any,
+    filename: str = "", sheet_name: str = "", **_kwargs: Any,
 ) -> dict:
     if not filename.strip():
         return {"error": "missing_filename"}
-    # 自动补后缀
     name = filename.strip()
     if not name.lower().endswith(".xlsx"):
         name += ".xlsx"
@@ -122,122 +217,97 @@ async def excel_read_sheet(
 
 ### Checklist
 
-* [ ] handler 用 `async def`，接 `**_kwargs` 兜 `user_id`
-* [ ] description 走 chunk 1.7 verbatim 引导风格（强引导 + 触发场景 + 参数
-      说明 + 返回 schema）
-* [ ] 所有错误返 `{"error": "<code>", "detail": ...}` dict，**不 raise**——
-      让 LLM 接着说人话
-* [ ] 接用户 filename 的所有路径都走 `safe_resolve`，禁绝对路径 / `..` /
+- [ ] handler 用 `async def`,接 `**_kwargs` 兜 ChatAgent 注入的 `user_id`
+- [ ] description 走强引导风格(触发场景 + 参数说明 + 返回 schema)——
+      这字段被拼进 system prompt,LLM 看 description 决定何时调
+- [ ] 所有错误返 `{"error": "<code>", "detail": ...}` dict,**不 raise**
+      ——让 LLM 接着说人话
+- [ ] 接用户 filename 的所有路径都走 `safe_resolve`,禁绝对路径 / `..` /
       路径分隔符
-* [ ] 沙箱目录用户可见时放 `~/Documents/Skyler/<feature>/`；内部 token /
-      配置放 `~/.skyler/`
-* [ ] `backend/main.py` 加 `import` 触发 `@register_capability` side-effect
-* [ ] 跑 `tests/test_<feature>_capabilities.py` 测 happy path + error 全路径
+- [ ] 沙箱目录:用户可见放 `~/Documents/Skyler/<feature>/`;
+      内部 token / 配置放 `~/.skyler/`
+- [ ] `backend/main.py` 加 `import` 触发 decorator 副作用
+- [ ] 写 `tests/test_<feature>_capabilities.py` 测 happy path + 错误全路径
+
+### 完整例子(链接 capabilities/ 实际代码)
+
+| 文件 | 形态 | 看点 |
+| --- | --- | --- |
+| `backend/capabilities/time_capability.py` | 最简 capability | 1 个 handler / 单文件 |
+| `backend/capabilities/clipboard.py` | 多 capability 同模块 | 3 个 handler 共享 helper |
+| `backend/capabilities/docx_ops.py` | SAFE 沙箱 + path traversal 防御 | 用户 filename 安全模式 |
+| `backend/capabilities/apple_calendar.py` | 系统集成 + Python 调 EventKit | macOS API 包装 |
+| `backend/capabilities/netease_playback.py` | 跨进程协作(mpv IPC) | asyncio.subprocess / Lock |
+| `backend/capabilities/character_state.py` | 深度内部集成 | AsyncSession + WS push |
 
 ---
 
-## 姿态 B：MCP server 一键启用模板
+## 反模式 — 不要做的事
 
-### 用户视角
+- ❌ **为了"MCP 时髦"给只 wrap HTTP endpoint 的简单功能写 MCP server**
+  ——直接 capability 内 `httpx.AsyncClient` 调用更省事(路径 C),或装个 fetch MCP 让 LLM 自己抓(路径 A)
+- ❌ **给 LLM 不会主动想用的能力做 MCP**——npx 首次启动有 ~30s 拉包代价,
+  装来吃灰不如不装
+- ❌ **MCP 模板里 env 字段写明文 token**(`SLACK_BOT_TOKEN: "xoxb-..."`)
+  ——会写进 config.yaml + git 历史。永远只写 `${VAR_NAME}` 模板,真实值
+  走 UI 凭证 modal 存 DB
+- ❌ **路径 C 的 capability 接用户 filename 不过 `safe_resolve`**——经典
+  `../../etc/passwd` 攻击面
+- ❌ **handler 抛异常**(`raise ValueError(...)`)——LLM 看到 500 error 会
+  乱猜或重试,改返 `{"error": "<code>"}` 让它说人话
+- ❌ **description 写裸 API doc**(`"Read xlsx file"`)——LLM 不知道何时该
+  调。改写"用户说 XX 时调用"+ 触发场景列表
 
-「加一个 Slack 集成」：
+---
 
-1. 看 [modelcontextprotocol.io](https://modelcontextprotocol.io) /
-   server 作者 GitHub README，拿到 npm 包名（如 `@some-org/slack-mcp-server`）
-2. 编辑 `config.yaml` `mcp_clients` 段加一项（模板见下）
-3. 重启后端
-4. 打开前端 [Settings → 扩展能力] section → 看到「Slack」行 → 点 [配置凭证] →
-   输入 token → 关 modal → toggle 启用 → 30s 内 ChatAgent 看到新 tools
+## v4.1+ 演进预告
 
-### config.yaml 模板
+| 项目 | 状态 | 备注 |
+| --- | --- | --- |
+| .py capability UI 拖入 + 一键重启 backend | v4.1+ backlog | 消除路径 C 的代码门槛;详 ROADMAP "Skill UI" 行 |
+| Skyler-as-MCP-server | v4.1+ backlog | 反向暴露:让 Claude Code / Cursor / Cline 调 Skyler 的 character_state / memory / Live2D control。详 ROADMAP "Skyler-as-MCP-server" 行 |
+| SKILL.md 加载(Anthropic Layer 1 skill) | v4.2+ research | 让 Momo 用跨工具 skill 知识(类似 Claude Code 的 skill 系统) |
+| MCP 凭证 OS keyring 加密 | v4.x backlog | 替代当前 SQLite 明文存储 |
 
-```yaml
-mcp_clients:
-  # 名字随意（用于 UI 展示 + DB key）
-  slack:
-    description: Slack 消息读写（需要 SLACK_BOT_TOKEN，UI 配置）
-    transport: stdio
-    command: npx
-    args:
-    - -y
-    - '@some-org/slack-mcp-server'
-    env_required:
-    - SLACK_BOT_TOKEN
-    enabled: false              # 默认 false，用户在 UI 翻 ON
-    expose_via_skyler_server: false  # 通常 false（不级联代理给外部 MCP client）
-```
+---
 
-### 字段说明
+## 进阶:让 LLM 知道何时该调
 
-| 字段 | 含义 |
-|---|---|
-| `transport` | `stdio`（绝大多数 npx-based server）或 `http` |
-| `command` / `args` | 子进程命令；`npx` + `-y` + 包名是最常见模式 |
-| `env_required` | 必填凭证 key list，**仅声明**不存值；UI 用这个判 toggle 是否 disabled |
-| `enabled` | config.yaml 默认值；DB `mcp_client_state` override 优先 |
-| `expose_via_skyler_server` | True 时该 server 的 tool 会被 Skyler 自己的 MCP server 再暴露给外部 MCP client（代理模式）。多数场景 False，避免 API quota 泄漏 |
-
-### Checklist
-
-* [ ] config.yaml 写好 entry，重启后端
-* [ ] 在 SettingsPanel [扩展能力] section 看到新行；状态徽章应为「需配置凭证」
-* [ ] 点 [配置凭证] → 输入 `env_required` 列出的 key → 保存
-* [ ] toggle 启用 → 状态徽章变 🟢 running·N tools（30s 内；首次启动 npx 拉包慢）
-* [ ] 让 LLM 调一次某个 tool 验证端到端
-
-### 注意
-
-* 凭证存在 SQLite `mcp_credentials` 表，**明文**。MVP 接受，与 `.env` 风险
-  等价。`ROADMAP Tech Debt` 有「MCP 凭证加密」backlog
-* 不要在 config.yaml 的 `env` 字段里写 `${SLACK_BOT_TOKEN}` 这种 shell 变量
-  插值——chunk 7 之后推荐用 `env_required` + UI 写 DB 的路径，避免凭证泄
-  漏到 git 历史里
-* 启动 server 失败时 SettingsPanel 行的状态徽章变 🔴 error，hover 看
-  `last_error`。常见原因：npm 包名拼错 / 凭证错误 / 网络不通
+- **`description` 字段是 LLM 唯一信源**——被 ChatAgent 拼进 system prompt,
+  LLM 看 description 决定何时调。强引导写法("用户说 X 时调"、"适用场景:")
+  比裸 API doc 更让 LLM 主动用
+- **`parameters_schema` 是 JSON Schema**,LLM 按它生成参数;description
+  里每个字段说明清楚比 schema enum 更靠谱
+- **错误 dict 里 `error` 字段用 enum-like 短字符串**(`file_not_found` /
+  `invalid_path` / `parse_failed`),LLM 会按 code 决定下一步动作
+- **`save_memory` tool 故意写"仅在用户明确要求记住时调"**——日常事实由
+  background MemoryExtractor 自动提取;这种约束直接写进 description LLM 就听话
 
 ---
 
 ## 候选 skill 推荐姿态对照
 
-| Skill | 推荐姿态 | 包 / 库 | 备注 |
-|---|---|---|---|
-| docx 操作 | A ✅ | `python-docx` | 已 ship（chunk 7 demo） |
-| Excel 表格 | A | `openpyxl` | 模板见上 |
-| PDF 文本提取 | A | `pdfplumber` / `PyMuPDF` | 沙箱限制大 PDF |
-| 本地文件操作 | A 或 B | `pathlib` 或 `@modelcontextprotocol/server-filesystem` | 已配（chunk 1.5 demo） |
-| Apple Notes | A | macOS `osascript` | 用 subprocess 调 AppleScript |
-| Apple Reminders | A | macOS EventKit (`pyobjc`) | 与 calendar 同 pyobjc 栈 |
-| Notion | B ✅ | `@notionhq/notion-mcp-server` | 已 ship（chunk 7 demo） |
-| Slack | B | 社区 `@some-org/slack-mcp-server` | 多个社区实现，挑 star/活跃度高的 |
-| Linear | B | `@linear/mcp-server` 等 | 官方 / 社区 server 都有 |
-| GitHub | B | `@modelcontextprotocol/server-github` | 官方 MCP server |
-| Stripe | B | Stripe 官方 MCP server | 商业场景 |
-| Brave 搜索 | B | `@modelcontextprotocol/server-brave-search` | 已配（chunk 1.5 demo） |
-| Web Scraping | A | `httpx` + `beautifulsoup4` | 直接 capability，handler 内调 |
-| Pollinations 表情包 | A | `httpx` + 图床上传 | 单一 HTTP API → 姿态 A |
-| OCR | A | `pytesseract` | 沙箱限输入图片 |
-| 屏幕截图 | (chunk 8) | Tauri Rust 端 | v4 屏幕感知，单独大 chunk |
-
----
-
-## 进阶：让 LLM 知道何时该调
-
-* `description` 字段直接被 ChatAgent 拼进 system prompt 给 LLM 看——**强引导**
-  写法（"用户说 X 时调"、"适用场景: ..."）比裸 API doc 更让 LLM 主动用
-* `parameters_schema` 是 JSON Schema，LLM 按它生成参数；description 里
-  每个字段都说明清楚比 schema enum 更靠谱
-* 错误 dict 里 `error` 字段用 enum-like 短字符串（`file_not_found` /
-  `invalid_path` / `parse_failed`），LLM 会按 code 决定下一步动作
+| Skill | 推荐路径 | 原因 |
+| --- | --- | --- |
+| Notion / Linear / Slack / GitHub / Stripe | **A** | 官方 / 社区 MCP server 完整;装 + 配凭证 5 分钟 |
+| 本地文件树读取 | **A** | `@modelcontextprotocol/server-filesystem` 现成 |
+| Web 搜索 | **A** | `@modelcontextprotocol/server-brave-search` / `tavily-mcp` 现成 |
+| URL 抓取 | **A** | `@modelcontextprotocol/server-fetch` 现成 |
+| Apple Calendar / Reminders / Notes | **C** | macOS EventKit / AppleScript,Python `pyobjc` / `osascript` 直接调 |
+| 网易云 / Bilibili / 小红书 | **C** | 已 ship,内部 DB 状态 + 风控 header 自维护 |
+| docx / xlsx / pdf 读写 | **C** | Python 库直接调,沙箱限制比 MCP 简单 |
+| 屏幕截图 / 浏览器自动化 | **C** | 需要主进程权限(macOS Accessibility / Tauri 主进程) |
+| OCR | **C** | `pytesseract` 直接调 |
+| 角色立绘 / 新动作 | **B** | 不是 capability,是视觉资产 |
+| 跨工具(Claude Code / Cursor / Cline)复用 | **A** | MCP server 本来就是跨工具协议 |
 
 ---
 
 ## 参考
 
-* DESIGN §十五之A、Capability Registry 架构（capability 注册机制）
-* DESIGN §十五之H、Skill 集成姿态（决策树 + V1 限制）
-* `backend/capabilities/time_capability.py`——最简 capability 实例
-* `backend/capabilities/clipboard.py`——多 capability 同模块实例
-* `backend/capabilities/docx_ops.py`——chunk 7 docx demo（SAFE 沙箱
-  + path traversal 防御）
-* `backend/mcp/client.py`——chunk 1.5 MCP client（subprocess + tool 反注册）
-* `backend/mcp/credentials.py`——chunk 7 DB-driven credentials
+- [DESIGN §零 Why these choices](../DESIGN.md) —— 战略层"可塑性"
+- [DESIGN §十五之A Capability Registry](../DESIGN.md) —— 注册机制实现
+- [stage-2-starting-context.md](stage-2-starting-context.md) —— Stage 2 设计 audit(三路径权衡)
+- [ROADMAP.md Tech Debt & Backlog](../ROADMAP.md) —— v4.1+ 演进 backlog 全表
+- [mcp-client-setup.md](mcp-client-setup.md) —— MCP 旧手动 yaml 配置参考(Stage 2.1 UI 之前的路径)
+- [mcp-server-setup.md](mcp-server-setup.md) —— Skyler 作为 MCP server 配置(给未来 Skyler-as-server 用)
