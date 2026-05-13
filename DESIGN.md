@@ -3160,6 +3160,133 @@ return — 快路径完全不受影响。
 
 ---
 
+## 十五之R、用户活跃度 idle 闸(chunk 8a-ext V2)
+
+### 设计目标
+
+chunk 8a-ext V1 上线后真机回归发现两类"自言自语":
+
+1. 用户开 Chrome 看完文档后**离开电脑去开会**,Chrome window 仍 frontmost、URL
+   未变 — V1 stay 计时持续累积,5 min 后 judge 调 qwen-turbo → fire chime_in
+   → Momo 对着空椅子说话(还浪费 cap)
+2. 用户**晚上锁屏睡觉**但 macOS 应用未真切换 — 同样 misfire
+
+V1 三重门 + daily_cap 防得了"骚扰"(短时间多说),防不了"人不在"(长时间静止
+但前台不变)。chunk 8a-ext V2 加第 4 道闸 — **键鼠 idle 检测**。
+
+### macOS 路径选型
+
+| 方案 | 依赖 | 启动开销 | 评估 |
+|------|------|---------|------|
+| ``Quartz.CGEventSourceSecondsSinceLastEventType`` | ``pyobjc-framework-Quartz`` 新 pip | 一次 import | 准但需新依赖 |
+| ``ioreg -c IOHIDSystem`` subprocess + ``HIDIdleTime`` 正则 | 零新依赖(macOS 自带 + ``subprocess`` 已用) | 每次 fork ~30ms | **选这条** |
+
+decided: 选 **B**。chunk 8a 已建立 ``subprocess.run(osascript)`` 范式
+(timeout / capture_output / check=False / silent None fallback);idle 检测
+只在 judge 慢路径每 ``poll_interval`` (默 30s) 跑一次 + 已过 min_stay 5 min
+闸,30ms fork 开销可接受。零新 pip 包尤其重要 — Tauri bundle 体积已经
+顶到 macOS DMG 上传配额。
+
+### 实现
+
+``backend/integrations/activity_monitor.py:get_idle_seconds()``:
+
+```python
+res = subprocess.run(["ioreg", "-c", "IOHIDSystem"],
+                     capture_output=True, text=True, timeout=2.0, check=False)
+m = re.search(r'"HIDIdleTime"\s*=\s*(\d+)', res.stdout)
+return int(m.group(1)) / 1e9  # ns → s
+```
+
+跨平台 graceful:非 macOS / ``shutil.which("ioreg") is None`` / ``TimeoutExpired``
+/ subprocess 异常 / ``returncode != 0`` / 正则 no match → **全部返 None**。
+调用方按 None 视为"无法检测,假定活跃",维持 V1 行为。
+
+### Idle 闸位置 — 闸顺序
+
+``maybe_judge`` 闸列(自上而下):
+
+```
+1. judge_enabled?       → False return None
+2. stay_info valid?     → False return None
+3. duration >= min_stay → 否 return None      ← V1
+4. throttle 闸          → 命中 return None     ← V1
+5. _record_judged(key)  ← 提前记账防 retry storm
+6. ★ idle 闸 (V2 新加)  → idle > threshold return None
+7. _build_judge_prompt + _call_judge_llm + _parse_judge_output
+```
+
+放在 **5 之后、6 之前** 有意:
+
+* LLM 没跑 → 不烧 token / 不调网络
+* 记账已写 → idle skip 也吃 throttle 配额(防 idle 闸打开关闭间反复 retry)
+* 顺序在 throttle/min_stay 之后 → 不增加便宜闸的 subprocess 调用
+
+### 为什么不放更前
+
+idle 是**最贵**的闸(每次 fork ioreg 子进程)。throttle / min_stay 用 dict
+查询和数值比较 → 纳秒级,该先挡的先挡。短停 (< 5 min) 直接不查 idle —
+也几乎不会有"短停 5 min 内人就离开"的真实场景。
+
+### Config + UI
+
+``config.yaml`` ``activity_judge.idle_threshold_seconds: 300``(默 5 min)。
+* 0 = 关闸(老 V1 行为,适合不爱被打扰的用户禁用 idle 检测让 judge 总跑)
+* 负数 ``max(0, ...)`` clamp 到 0
+* 非整数 / 缺失 → fallback 300
+
+``SettingsPanel [活动感知]`` 在智能陪伴 toggle 之下条件渲染一个 ``<input
+type="number" min=0 max=3600 step=30>`` — 仅 ``judge_enabled=true`` 时显示
+(judge 关时 idle 闸无意义,不暴露给用户避 UI 噪音)。blur/Enter 触发
+PATCH ``/api/activity/config``  ``judge_idle_threshold_seconds: int``,
+backend clamp 到 [0, 3600] 防 UI 误输入。
+
+### Audit 决定:阈值默认 300s 而不是 120/180
+
+* < 120s:用户喝水 / 看手机 / 思考时键鼠静止 30-90s 很常见,过短会
+  误判活跃用户为离开
+* 300s:apple iOS auto-lock 默认 30/60/180/300s 链,普通办公屏保
+  也常设 300s
+* > 600s:长时间静止显然离开,但 V1 throttle 闸 (10 min/key) 已经
+  挡住大部分多余调用,不必再卡
+
+### 跨平台行为表
+
+| 平台 | get_idle_seconds | 闸行为 |
+|------|-----------------|--------|
+| macOS ioreg 正常 | float(秒数) | idle > threshold → skip |
+| macOS ioreg 缺失/失败 | None | 不挡(假定活跃,V1 行为) |
+| Linux | None(IS_MACOS=False 短路) | 不挡(V1 行为) |
+| Windows(未来 PR) | None | 不挡;后续可挂 ``GetLastInputInfo`` |
+
+### 测试
+
+``tests/test_chunk8a_ext_v2_idle.py``(新,21 case):
+* Part A get_idle_seconds 8 case — 正常 / 长 idle / 非 macOS / ioreg 缺失 /
+  timeout / 异常 / 非零 returncode / 正则不匹配
+* Part B get_idle_threshold_seconds 5 case — default / custom / 0 / 负数 /
+  非整数
+* Part C maybe_judge 5 case — idle 100<300 / 600>300 / None / 异常 / 0 阈值
+* Part D 闸顺序 3 case — record 之后 / min_stay 之前不查 / disabled 之前不查
+
+V1 30 case + V2 21 case = **51 PASS, 0 regression**(``--asyncio-mode=auto``)。
+
+### 文件清单
+
+* ``backend/integrations/activity_monitor.py``(+70 行)— ``get_idle_seconds``
+  + ``_HID_IDLE_RE`` + ``_IOREG_TIMEOUT_SECONDS``
+* ``backend/proactive/activity_judge.py``(+27 行)— ``get_idle_threshold_seconds``
+  getter + ``maybe_judge`` 内 idle 闸
+* ``backend/routes/activity_api.py``(+19 行)— ``judge_idle_threshold_seconds``
+  字段 GET/PATCH 双向
+* ``frontend/src/lib/activity.ts``(+3 行)— 字段类型
+* ``frontend/src/components/ActivityAwarenessSection.tsx``(+55 行)— idleDraft
+  state + commitIdle handler + conditional number input row
+* ``config.yaml``(+7 行)— ``idle_threshold_seconds: 300`` + 注释
+* ``tests/test_chunk8a_ext_v2_idle.py``(new,291 行,21 case)
+
+---
+
 ## 十六、开发进度
 
 ### ✅ 阶段一：骨架搭建

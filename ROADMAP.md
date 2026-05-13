@@ -2,7 +2,7 @@
 
 > Living document. 每完成一个里程碑同步更新 + commit + push。
 >
-> 当前状态(2026-05-13):v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 8a-ext / 9 / 10 / 11 + UX-001/UX-002/UX-003 + hotfix-3 ~ 8 全部完成**。Memory 三层(chunk 9 / chunk 10 worker / chunk 11 profile_data)落地;chunk 8a 简化屏幕感知 + **chunk 8a-ext 智能陪伴 judge 慢路径**(qwen-turbo 判断停留 5+ min app/URL 是否值得 chime in,快慢路径并存共享 daily_cap);UX-001/UX-002/UX-003 SettingsPanel 三层 accordion 全栈完成;hotfix-3..hotfix-8 共 5 个修复。剩 chunk 8b 完整屏幕感知 + v5-D/T1/T2 远期 + v6+ 多设备。
+> 当前状态(2026-05-13):v3 ✅ + v3-G 全 chunks (0-4) ✅ + v3-H chunk 1 ✅ + **v3.5 chunks 5 / 6abc / 7 / 8a / 8a-ext / 8a-ext V2 / 9 / 10 / 11 + UX-001/UX-002/UX-003 + hotfix-3 ~ 8 全部完成**。Memory 三层(chunk 9 / chunk 10 worker / chunk 11 profile_data)落地;chunk 8a 简化屏幕感知 + **chunk 8a-ext 智能陪伴 judge 慢路径**(qwen-turbo 判断停留 5+ min app/URL 是否值得 chime in,快慢路径并存共享 daily_cap)+ **chunk 8a-ext V2 idle 闸**(macOS ``ioreg HIDIdleTime`` 检测键鼠静止 > 300s → skip judge 避免"人不在电脑前自言自语",零新 pip 依赖);UX-001/UX-002/UX-003 SettingsPanel 三层 accordion 全栈完成;hotfix-3..hotfix-8 共 5 个修复。剩 chunk 8b 完整屏幕感知 + v5-D/T1/T2 远期 + v6+ 多设备。
 
 ---
 
@@ -46,6 +46,7 @@
 | **UX-003：CapabilityPanel 三层 accordion(category → provider → capability)+ 情绪 UI 左上角(避开历史按钮)** | ✅ 完成（5 commit，2026-05-13） | 100% |
 | **v3.5 chunk 8a：简化屏幕感知（active app + browser URL + smart trigger）** | ✅ 完成（9 commit，2026-05-12） | 100% |
 | **v3.5 chunk 8a-ext：智能陪伴 judge 慢路径(qwen-turbo + stay 5+ min + 共享 daily_cap)** | ✅ 完成（6 commit，2026-05-13） | 100% |
+| **v3.5 chunk 8a-ext V2：macOS idle 闸(ioreg HIDIdleTime + judge 第 4 道闸,防"人不在电脑前自言自语")** | ✅ 完成（5 commit，2026-05-13） | 100% |
 | **v3.5 chunk 8b：完整屏幕感知（截屏 + OCR + VLM 抽象 + 浏览器扩展）** | 📋 计划中 | 0% |
 | v6+：多设备访问 + Hermes 风格 skill 累积 | 📋 长期愿景 | 0% |
 
