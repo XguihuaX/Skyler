@@ -169,8 +169,13 @@ async def test_maybe_judge_throttle_same_key() -> None:
 
 
 async def test_maybe_judge_calls_llm_when_eligible() -> None:
+    """[hotfix-10] 显式 mock get_idle_seconds — V2 idle 闸否则会查真机 ioreg
+    导致本测试在 host idle > 300s 时偶发 None (旧 V1 测试遗留 flake,V2 添加
+    idle gate 时漏 mock)。"""
     mocked = AsyncMock(return_value='{"speak": true, "reason": "学习", "topic_hint": "问问"}')
-    with patch.object(judge, "_call_judge_llm", mocked):
+    with patch.object(judge, "_call_judge_llm", mocked), \
+         patch("backend.integrations.activity_monitor.get_idle_seconds",
+               return_value=10.0):
         d = await judge.maybe_judge(
             stay_info={"key": "url:abc", "duration_seconds": 600,
                        "app": "Chrome", "url": "https://docs.x.com",
@@ -187,7 +192,9 @@ async def test_maybe_judge_calls_llm_when_eligible() -> None:
 async def test_maybe_judge_llm_exception_returns_none() -> None:
     """LLM 抛异常 / 返 None → maybe_judge 返 None,但记账了节流(防 retry storm)。"""
     mocked = AsyncMock(return_value=None)
-    with patch.object(judge, "_call_judge_llm", mocked):
+    with patch.object(judge, "_call_judge_llm", mocked), \
+         patch("backend.integrations.activity_monitor.get_idle_seconds",
+               return_value=10.0):
         d = await judge.maybe_judge(
             stay_info={"key": "url:err", "duration_seconds": 600,
                        "app": "C", "url": "u", "title": "t"},

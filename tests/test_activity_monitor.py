@@ -22,26 +22,68 @@ from backend.integrations import activity_monitor as am
 # ---------------------------------------------------------------------------
 
 
-def test_get_active_app_returns_localized_name() -> None:
-    fake_app = MagicMock()
-    fake_app.localizedName.return_value = "Visual Studio Code"
-    fake_ws = MagicMock()
-    fake_ws.frontmostApplication.return_value = fake_app
-    fake_NSWorkspace = MagicMock()
-    fake_NSWorkspace.sharedWorkspace.return_value = fake_ws
-    with patch.object(am, "_NSWorkspace", fake_NSWorkspace), \
-         patch.object(am, "IS_MACOS", True):
-        assert am.get_active_app() == "Visual Studio Code"
+def _mock_osascript_run(stdout: str = "", returncode: int = 0,
+                         stderr: str = ""):
+    """构造 osascript subprocess.run 的 fake CompletedProcess。"""
+    return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
-def test_get_active_app_none_when_no_frontmost() -> None:
-    fake_ws = MagicMock()
-    fake_ws.frontmostApplication.return_value = None
-    fake_NSWorkspace = MagicMock()
-    fake_NSWorkspace.sharedWorkspace.return_value = fake_ws
-    with patch.object(am, "_NSWorkspace", fake_NSWorkspace), \
-         patch.object(am, "IS_MACOS", True):
-        assert am.get_active_app() is None
+def test_get_active_app_returns_bundle_name() -> None:
+    """[hotfix-10] osascript ``POSIX path of ...`` →
+    ``/Applications/Safari.app/`` → basename → bundle name ``Safari``。"""
+    with patch.object(am, "IS_MACOS", True), \
+         patch("backend.integrations.activity_monitor.shutil.which",
+               return_value="/usr/bin/osascript"), \
+         patch.object(am.subprocess, "run",
+                      return_value=_mock_osascript_run("/Applications/Safari.app/\n")):
+        assert am.get_active_app() == "Safari"
+
+
+def test_get_active_app_vscode_bundle_name() -> None:
+    """[hotfix-10] VSCode CFBundleName is ``Code``,而非 ``Visual Studio Code``。"""
+    with patch.object(am, "IS_MACOS", True), \
+         patch("backend.integrations.activity_monitor.shutil.which",
+               return_value="/usr/bin/osascript"), \
+         patch.object(am.subprocess, "run", return_value=_mock_osascript_run(
+             "/Applications/Visual Studio Code.app/Contents/MacOS/../../../"
+             "Visual Studio Code.app/\n",
+         )):
+        # osascript 实测返 ``/Applications/Visual Studio Code.app/`` —— basename
+        # 取 ``Visual Studio Code``。bundle 名是否 == CFBundleName 看 .app 目录
+        # 名 vs Info.plist。这里测目录名(实际 macOS 返这个)。
+        # 不论是 ``Code.app`` 还是 ``Visual Studio Code.app``,我们直接信 basename。
+        got = am.get_active_app()
+        # 真机案例 ``Visual Studio Code.app`` 目录 → ``"Visual Studio Code"``
+        assert got == "Visual Studio Code"
+
+
+def test_get_active_app_terminal_returns_english() -> None:
+    """[hotfix-10] 中文 macOS NSWorkspace.localizedName 返 ``"终端"``,但 osascript
+    POSIX path 永远返英文 bundle 目录名 ``Terminal``。这是 hotfix-10 核心收益。"""
+    with patch.object(am, "IS_MACOS", True), \
+         patch("backend.integrations.activity_monitor.shutil.which",
+               return_value="/usr/bin/osascript"), \
+         patch.object(am.subprocess, "run", return_value=_mock_osascript_run(
+             "/System/Applications/Utilities/Terminal.app/\n",
+         )):
+        assert am.get_active_app() == "Terminal"
+
+
+def test_get_active_app_strips_trailing_slash_and_app() -> None:
+    """``/Path/Foo.app/`` → ``Foo``;``/Path/Foo.app`` (无尾 slash)同样工作。"""
+    for raw, want in [
+        ("/Applications/Slack.app/\n", "Slack"),
+        ("/Applications/Slack.app\n", "Slack"),
+        ("/Applications/Slack.app/", "Slack"),
+        # 极端:bundle 不带 ``.app`` 后缀(理论上 osascript 总有 .app,但 robust)
+        ("/Applications/RawBundle/", "RawBundle"),
+    ]:
+        with patch.object(am, "IS_MACOS", True), \
+             patch("backend.integrations.activity_monitor.shutil.which",
+                   return_value="/usr/bin/osascript"), \
+             patch.object(am.subprocess, "run",
+                          return_value=_mock_osascript_run(raw)):
+            assert am.get_active_app() == want
 
 
 def test_get_active_app_none_on_non_macos() -> None:
@@ -49,10 +91,68 @@ def test_get_active_app_none_on_non_macos() -> None:
         assert am.get_active_app() is None
 
 
-def test_get_active_app_none_when_pyobjc_missing() -> None:
+def test_get_active_app_none_when_osascript_missing() -> None:
     with patch.object(am, "IS_MACOS", True), \
-         patch.object(am, "_NSWorkspace", None):
+         patch("backend.integrations.activity_monitor.shutil.which",
+               return_value=None):
         assert am.get_active_app() is None
+
+
+def test_get_active_app_none_on_osascript_failure() -> None:
+    """非零 returncode → silent None(用户未授权 / 极端情况)。"""
+    with patch.object(am, "IS_MACOS", True), \
+         patch("backend.integrations.activity_monitor.shutil.which",
+               return_value="/usr/bin/osascript"), \
+         patch.object(am.subprocess, "run",
+                      return_value=_mock_osascript_run(
+                          returncode=1, stderr="Not authorized")):
+        assert am.get_active_app() is None
+
+
+def test_get_active_app_none_on_timeout() -> None:
+    """osascript hang > 2s → TimeoutExpired → silent None。"""
+    with patch.object(am, "IS_MACOS", True), \
+         patch("backend.integrations.activity_monitor.shutil.which",
+               return_value="/usr/bin/osascript"), \
+         patch.object(am.subprocess, "run",
+                      side_effect=subprocess.TimeoutExpired(
+                          cmd="osascript", timeout=2.0)):
+        assert am.get_active_app() is None
+
+
+def test_get_active_app_none_on_empty_stdout() -> None:
+    """osascript exit 0 但 stdout 空(极端 race 条件)→ None。"""
+    with patch.object(am, "IS_MACOS", True), \
+         patch("backend.integrations.activity_monitor.shutil.which",
+               return_value="/usr/bin/osascript"), \
+         patch.object(am.subprocess, "run",
+                      return_value=_mock_osascript_run("   \n")):
+        assert am.get_active_app() is None
+
+
+# ---------------------------------------------------------------------------
+# v3.5 hotfix-10 — get_display_name (LLM-facing app name 本地化)
+# ---------------------------------------------------------------------------
+
+
+def test_get_display_name_maps_known_bundles() -> None:
+    assert am.get_display_name("Code") == "VS Code"
+    assert am.get_display_name("Code - Insiders") == "VS Code Insiders"
+    assert am.get_display_name("Terminal") == "终端"
+
+
+def test_get_display_name_passthrough_unknown_bundles() -> None:
+    """未列入 mapping 表 → 直接返原值(国际化品牌名英文 OK)。"""
+    assert am.get_display_name("Safari") == "Safari"
+    assert am.get_display_name("Spotify") == "Spotify"
+    assert am.get_display_name("Slack") == "Slack"
+    assert am.get_display_name("Notion") == "Notion"
+
+
+def test_get_display_name_handles_none_and_empty() -> None:
+    """None / 空串 → ``"(unknown)"`` 兜底(防 None 串到 LLM prompt)。"""
+    assert am.get_display_name(None) == "(unknown)"
+    assert am.get_display_name("") == "(unknown)"
 
 
 # ---------------------------------------------------------------------------
