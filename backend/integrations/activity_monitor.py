@@ -33,6 +33,7 @@ Public API
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -108,29 +109,75 @@ def _run_osascript(script: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def get_active_app() -> Optional[str]:
-    """当前 frontmost app 的 ``localizedName``（如 ``"Google Chrome"`` /
-    ``"Visual Studio Code"`` / ``"Spotify"``）。
+_FRONTMOST_APPLESCRIPT = "POSIX path of (path to frontmost application)"
 
-    走 NSWorkspace 直查；非 macOS / pyobjc 缺失 / 极端 None → 返 None。
-    与 osascript 路径**不混用**——NSWorkspace 在 sandbox 内就能跑，不需要
-    AppleEvent 权限弹窗，比 ``tell application "System Events" to get name
-    of first application process whose frontmost is true`` 体验干净一档。
+
+def get_active_app() -> Optional[str]:
+    """当前 frontmost app 的**英文 bundle 名**(如 ``"Google Chrome"`` /
+    ``"Code"`` / ``"Safari"`` / ``"Terminal"`` / ``"Spotify"``)。
+
+    [hotfix-10] 走 ``osascript`` 子进程,**不**走 NSWorkspace。原因:
+
+    NSWorkspace.sharedWorkspace().frontmostApplication() 通过 distributed
+    notifications 接收"frontmost 变化"事件。headless Python 进程(backend
+    daemon)没有 NSRunLoop dispatch 这些事件,frontmostApplication 会**卡在
+    进程启动那一拍的值**。实测:用户启动 backend 时 Terminal frontmost,
+    之后切 Safari / Chrome / 任何 app 都不变,backend log 30 min 后仍报
+    ``app='终端'``。fresh Python 进程里第一次调用看似正确,但长跑就缓存。
+
+    osascript 每次 fork 子进程,**不依赖** parent 的 RunLoop —— 子 osascript
+    自己起完整 AppleScript 环境查 frontmost,返完即退。延迟 30-80ms,与 chunk
+    8a-ext V2 ioreg / chunk 8a osascript browser tab 同 pattern。
+
+    副作用 — **返英文 bundle name** 而非 localizedName:
+    NSWorkspace.localizedName 在中文 macOS 上 Apple 原生 bundle 会返"终端"/
+    "Safari浏览器"等中文名;osascript ``POSIX path of`` 返
+    ``/Applications/Safari.app/``,basename → ``Safari``(英文 bundle 名)。
+    所有下游 _IDE_APPS / _MUSIC_APPS / _BROWSER_APPS 已涵盖英文 keys
+    (hotfix-6/8 加的中文别名转为 dead code 但不删,backward compat)。
+    LLM-facing 中文 display 由 ``get_display_name()`` 单独 map(commit 2)。
+
+    跨平台 graceful:非 macOS / osascript 缺失 / timeout 2s / 非零 returncode
+    / 解析失败 → 全部返 None。与 chunk 8a/8a-ext V2 silent fallback 一致。
     """
-    if not IS_MACOS or _NSWorkspace is None:
+    if not IS_MACOS:
+        return None
+    if shutil.which("osascript") is None:  # pragma: no cover - macOS 总是有
         return None
     try:
-        ws = _NSWorkspace.sharedWorkspace()
-        app = ws.frontmostApplication()
-        if app is None:
-            return None
-        name = app.localizedName()
-        if not name:
-            return None
-        return str(name)
-    except Exception as exc:  # pragma: no cover - pyobjc 内部异常少见
-        logger.warning("[activity_monitor] get_active_app failed: %s", exc)
+        res = subprocess.run(
+            ["osascript", "-e", _FRONTMOST_APPLESCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=_OSASCRIPT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "[activity_monitor] get_active_app osascript timed out (>%ss)",
+            _OSASCRIPT_TIMEOUT_SECONDS,
+        )
         return None
+    except Exception as exc:  # pragma: no cover - subprocess 异常极少见
+        logger.warning(
+            "[activity_monitor] get_active_app osascript failed: %s", exc,
+        )
+        return None
+    if res.returncode != 0:
+        stderr = (res.stderr or "").strip()
+        if stderr:
+            logger.debug(
+                "[activity_monitor] get_active_app rc=%s: %s",
+                res.returncode, stderr[:200],
+            )
+        return None
+    path = (res.stdout or "").strip().rstrip("/")
+    if not path:
+        return None
+    name = os.path.basename(path)
+    if name.endswith(".app"):
+        name = name[:-4]
+    return name or None
 
 
 # ---------------------------------------------------------------------------
