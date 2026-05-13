@@ -31,10 +31,35 @@ export { useAppApi } from './contexts/appApi';
 //
 // 用 location 而非 hook,因为路由判定一次锁定生命周期(URL 变化要
 // 整个 App reload 才生效,符合 dev 切换 UX)。
-const _FAN_DEMO: boolean = (() => {
-  if (typeof window === 'undefined') return false;
-  return new URLSearchParams(window.location.search).get('fan') === '1';
+//
+// v4-fan chunk 3.1:支持 query 调参,用户不改源码就能 sweep。
+//   ?fan=1&vc=5         visibleCount = 5
+//   ?fan=1&r=750        radius = 750
+//   ?fan=1&arc=140      arcDegree = 140
+//   ?fan=1&dur=300      transitionDuration = 300
+//   ?fan=1&cy=900       centerOffsetY = 900 (绕 viewportH+100 默认)
+//   ?fan=1&debug=1      启用 FanLayout 内部 debug overlay
+const _FAN_QUERY = (() => {
+  if (typeof window === 'undefined') return null;
+  const sp = new URLSearchParams(window.location.search);
+  if (sp.get('fan') !== '1') return null;
+  const numOrUndef = (key: string): number | undefined => {
+    const v = sp.get(key);
+    if (v == null) return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  return {
+    enabled:            true,
+    debug:              sp.get('debug') === '1',
+    visibleCount:       numOrUndef('vc'),
+    radius:             numOrUndef('r'),
+    arcDegree:          numOrUndef('arc'),
+    transitionDuration: numOrUndef('dur'),
+    centerOffsetY:      numOrUndef('cy'),
+  };
 })();
+const _FAN_DEMO: boolean = _FAN_QUERY?.enabled ?? false;
 
 function App() {
   return <MainApp />;
@@ -274,6 +299,15 @@ function MainApp() {
             characters={characters}
             selectedCharId={currentCharacterId}
             onSelectCharacter={setCurrentCharacterId}
+            debug={_FAN_QUERY?.debug ?? false}
+            // 只透传非 undefined 的 override,defaults 由 FanLayout 兜底
+            layoutParams={{
+              ...(_FAN_QUERY?.visibleCount       != null && { visibleCount:       _FAN_QUERY.visibleCount }),
+              ...(_FAN_QUERY?.radius             != null && { radius:             _FAN_QUERY.radius }),
+              ...(_FAN_QUERY?.arcDegree          != null && { arcDegree:          _FAN_QUERY.arcDegree }),
+              ...(_FAN_QUERY?.transitionDuration != null && { transitionDuration: _FAN_QUERY.transitionDuration }),
+              ...(_FAN_QUERY?.centerOffsetY      != null && { centerOffsetY:      _FAN_QUERY.centerOffsetY }),
+            }}
           />
           <div
             className="fixed top-3 left-3 font-mono text-xs rounded-md px-3 py-2 pointer-events-none"
@@ -281,15 +315,15 @@ function MainApp() {
               color: 'var(--color-text-primary)',
               background: 'rgba(0, 0, 0, 0.55)',
               border: '1px solid var(--color-border-subtle)',
-              maxWidth: 320,
+              maxWidth: 360,
               lineHeight: 1.5,
             }}
           >
-            Fan-3 demo · ?fan=1<br />
+            Fan-3.1 demo · ?fan=1<br />
             <span style={{ opacity: 0.75 }}>
-              {characters.length} 卡 · 360° / N = {(360 / characters.length).toFixed(1)}°/卡<br />
-              点非中心卡 → 最短路径转到 top<br />
-              当前 selected:{characters.find((c) => c.id === currentCharacterId)?.name ?? '—'}
+              N={characters.length} · selected:{characters.find((c) => c.id === currentCharacterId)?.name ?? '—'}<br />
+              query: vc={_FAN_QUERY?.visibleCount ?? 7} r={_FAN_QUERY?.radius ?? 600} arc={_FAN_QUERY?.arcDegree ?? 120} dur={_FAN_QUERY?.transitionDuration ?? 500}<br />
+              点非中心卡 → 最短路径转到 top
             </span>
           </div>
         </div>
