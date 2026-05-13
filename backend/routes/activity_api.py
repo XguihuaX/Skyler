@@ -183,3 +183,224 @@ async def patch_activity_config(body: ActivityConfigPatch) -> ActivityConfigResp
         _cfg.setdefault("activity_judge", {})["idle_threshold_seconds"] = v
 
     return await activity_config()
+
+
+# ---------------------------------------------------------------------------
+# v3.5 chunk 14 — Timeline endpoints
+#
+# /api/activity/timeline           GET   按日(默 today)/ 日数返完整 timeline +
+#                                        summary_by_app + summary_by_category
+# /api/activity/timeline/{id}      DELETE 删单条 session
+# /api/activity/timeline?date=...  DELETE 清某日
+# ---------------------------------------------------------------------------
+
+
+from datetime import datetime, timedelta, timezone   # noqa: E402
+
+from sqlalchemy import text                          # noqa: E402
+
+from backend.database import engine                  # noqa: E402
+
+
+class ActivitySessionRow(BaseModel):
+    id: int
+    start_at: str
+    end_at: str
+    duration_seconds: int
+    app_name: str
+    browser_url: Optional[str] = None
+    browser_title: Optional[str] = None
+    category: Optional[str] = None
+    is_idle_filtered: bool = False
+
+
+class ActivityAppSummary(BaseModel):
+    app_name: str
+    total_seconds: int
+    session_count: int
+    category: Optional[str] = None
+    top_urls: list[dict]  # [{url, title, seconds}], 截 top 5
+
+
+class TimelineResponse(BaseModel):
+    date: str                          # YYYY-MM-DD,start of window
+    days: int                          # 窗口天数(1 = 单日)
+    total_active_seconds: int
+    sessions: list[ActivitySessionRow]
+    summary_by_app: list[ActivityAppSummary]
+    summary_by_category: dict[str, int]  # category → total seconds
+
+
+def _parse_date_arg(date_str: Optional[str]) -> datetime:
+    """``YYYY-MM-DD`` → naive UTC midnight。``None`` → today UTC midnight。
+
+    SQLite 里 ``start_at`` 用 ``datetime.utcnow()`` 写,因此查询窗口也用 UTC。
+    """
+    if not date_str:
+        now = datetime.utcnow()
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="date 必须是 YYYY-MM-DD 格式",
+        )
+    return d
+
+
+def _default_user_id() -> str:
+    from backend.config import config_yaml as _cfg
+    return str(_cfg.get("default_user_id") or "default")
+
+
+@router.get("/activity/timeline", response_model=TimelineResponse)
+async def get_timeline(
+    date: Optional[str] = None,
+    days: int = 1,
+    include_idle: bool = True,
+) -> TimelineResponse:
+    """返指定日期(或 N 天滚动窗口)的 timeline。
+
+    Args:
+      date:         ``YYYY-MM-DD``,默 today
+      days:         窗口天数(default 1 = 单日,7 = 最近一周)。clamp [1, 90]
+      include_idle: 默 True;false 时 ``is_idle_filtered=1`` 的 session 不入
+                    sessions list,且 summary 计算时 exclude
+    """
+    if days < 1:
+        days = 1
+    if days > 90:
+        days = 90
+
+    start = _parse_date_arg(date)
+    end = start + timedelta(days=days)
+    user_id = _default_user_id()
+
+    sql = """
+        SELECT id, start_at, end_at, duration_seconds, app_name,
+               browser_url, browser_title, category, is_idle_filtered
+        FROM activity_sessions
+        WHERE user_id = :uid
+          AND start_at >= :start
+          AND start_at < :end
+    """
+    params = {"uid": user_id, "start": start, "end": end}
+    if not include_idle:
+        sql += " AND is_idle_filtered = 0"
+    sql += " ORDER BY start_at ASC"
+
+    async with engine.begin() as conn:
+        rows = (await conn.execute(text(sql), params)).fetchall()
+
+    sessions: list[ActivitySessionRow] = []
+    app_agg: dict[str, dict] = {}
+    cat_agg: dict[str, int] = {}
+    total_secs = 0
+
+    for r in rows:
+        (
+            sid, sat, eat, dur, app, url, title, cat, idle_flag,
+        ) = r
+        sessions.append(ActivitySessionRow(
+            id=int(sid),
+            start_at=str(sat),
+            end_at=str(eat),
+            duration_seconds=int(dur),
+            app_name=app,
+            browser_url=url,
+            browser_title=title,
+            category=cat,
+            is_idle_filtered=bool(idle_flag),
+        ))
+        total_secs += int(dur)
+        a = app_agg.setdefault(app, {
+            "total_seconds": 0, "session_count": 0,
+            "category": cat, "urls": {},
+        })
+        a["total_seconds"] += int(dur)
+        a["session_count"] += 1
+        # category 取该 app 第一次出现的;如果不同 session 标了不同 category,
+        # 后到的覆盖最近一次(实际同 app session 应同 category,这里保守)
+        if cat:
+            a["category"] = cat
+        if url:
+            u = a["urls"].setdefault(url, {"title": title or "", "seconds": 0})
+            u["seconds"] += int(dur)
+        if cat:
+            cat_agg[cat] = cat_agg.get(cat, 0) + int(dur)
+
+    summary_by_app: list[ActivityAppSummary] = []
+    for app_name, info in sorted(
+        app_agg.items(), key=lambda kv: -kv[1]["total_seconds"],
+    ):
+        top_urls = sorted(
+            (
+                {"url": u, "title": meta["title"], "seconds": meta["seconds"]}
+                for u, meta in info["urls"].items()
+            ),
+            key=lambda x: -x["seconds"],
+        )[:5]
+        summary_by_app.append(ActivityAppSummary(
+            app_name=app_name,
+            total_seconds=info["total_seconds"],
+            session_count=info["session_count"],
+            category=info.get("category"),
+            top_urls=top_urls,
+        ))
+
+    return TimelineResponse(
+        date=start.strftime("%Y-%m-%d"),
+        days=days,
+        total_active_seconds=total_secs,
+        sessions=sessions,
+        summary_by_app=summary_by_app,
+        summary_by_category=cat_agg,
+    )
+
+
+@router.delete("/activity/timeline/{session_id}")
+async def delete_timeline_session(session_id: int) -> dict:
+    """删单条 session。返 ``{deleted: bool}``。"""
+    user_id = _default_user_id()
+    async with engine.begin() as conn:
+        res = await conn.execute(text(
+            "DELETE FROM activity_sessions "
+            "WHERE id = :id AND user_id = :uid"
+        ), {"id": session_id, "uid": user_id})
+    deleted = bool(getattr(res, "rowcount", 0))
+    logger.info(
+        "[activity_timeline] delete session id=%d user=%s -> %s",
+        session_id, user_id, deleted,
+    )
+    return {"deleted": deleted}
+
+
+@router.delete("/activity/timeline")
+async def delete_timeline_by_date(date: Optional[str] = None) -> dict:
+    """清某日所有 session(date=YYYY-MM-DD)或所有 timeline(date=None 谨慎)。"""
+    user_id = _default_user_id()
+    if date is None:
+        # 清整张表(仅当前 user) — 高风险,要求显式 ``date=all``
+        raise HTTPException(
+            status_code=400,
+            detail="必须传 date=YYYY-MM-DD 或 date=all 才能清空",
+        )
+    if date == "all":
+        async with engine.begin() as conn:
+            res = await conn.execute(text(
+                "DELETE FROM activity_sessions WHERE user_id = :uid"
+            ), {"uid": user_id})
+    else:
+        start = _parse_date_arg(date)
+        end = start + timedelta(days=1)
+        async with engine.begin() as conn:
+            res = await conn.execute(text(
+                "DELETE FROM activity_sessions "
+                "WHERE user_id = :uid AND start_at >= :s AND start_at < :e"
+            ), {"uid": user_id, "s": start, "e": end})
+    n = int(getattr(res, "rowcount", 0))
+    logger.info(
+        "[activity_timeline] delete by date=%s user=%s -> %d row(s)",
+        date, user_id, n,
+    )
+    return {"deleted_count": n, "date": date}
