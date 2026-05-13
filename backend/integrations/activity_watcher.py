@@ -233,17 +233,16 @@ class ActivityWatcher:
         if app is not None and app in blocked_apps:
             app = None  # 黑名单 app → 上层看到 None 不触发
 
-        chrome = _am.get_chrome_active_tab()
-        safari = _am.get_safari_active_tab() if chrome is None else None
+        # hotfix-9: 走 frontmost-gated get_browser_url 而不是直接 chrome/safari
+        # raw primitives — Chrome/Safari 在后台时它们 AppleScript 仍返 active tab
+        # (e.g. 早上看的 bilibili)导致 stay_timer 累积错误的 URL。get_browser_url
+        # 在 activity_monitor 层先 check frontmost,非浏览器 frontmost → None。
         browser_dict: Optional[dict] = None
-        if chrome is not None:
-            url, title = chrome
+        binfo = _am.get_browser_url()
+        if binfo is not None:
+            browser_name, url, title = binfo
             if not _uf.is_url_blocked(url, blocked_urls):
-                browser_dict = {"browser": "chrome", "url": url, "title": title}
-        elif safari is not None:
-            url, title = safari
-            if not _uf.is_url_blocked(url, blocked_urls):
-                browser_dict = {"browser": "safari", "url": url, "title": title}
+                browser_dict = {"browser": browser_name, "url": url, "title": title}
 
         doc_info = _am.get_active_document_path()
         doc_dict: Optional[dict] = None
