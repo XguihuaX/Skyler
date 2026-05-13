@@ -10,13 +10,21 @@ from __future__ import annotations
 
 import hmac
 import logging
+from pathlib import Path
+from typing import Literal, Optional
 
+import yaml
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.types import Receive, Scope, Send
 
-from backend.config import config_yaml
+from backend.config import config_yaml, reload_config_yaml
 from backend.mcp import server as mcp_server
+from backend.utils.yaml_atomic import write_config_atomic
+
+# Stage 2.1.1: 与 backend/config/__init__.py / backend/routes/config_api.py
+# 一致的 config.yaml 路径锚定。
+_CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -92,6 +100,236 @@ async def reconnect_client(name: str) -> ReconnectResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"reconnect failed: {exc}")
     return ReconnectResponse(status="ok", detail=f"reconnected {name}")
+
+
+# ---------------------------------------------------------------------------
+# Stage 2.1.1：POST / DELETE 新增 / 删除 MCP client entry
+#
+# 设计要点
+#   - 写 yaml 走 ``write_config_atomic``(per-path lock + tmp + os.rename),
+#     2.1.0 已落地,顺手为 2.1.2 前端 form 备好后端
+#   - secrets **不写明文** 进 yaml:env dict 推荐 ``${VAR_NAME}`` 模板;
+#     真实 token 仍走 ``mcp_credentials`` DB 表(``PUT /credentials``)
+#   - POST 在 connect 失败时**不 rollback yaml** —— 让用户在 UI 看到失败
+#     原因决定是否 DELETE 重试;比起静默清掉用户输入更友好
+#   - DELETE 先 ``disable(name)``(同 PUT/enabled,防 in-flight tool call),
+#     再 pop ``_clients`` + 删 yaml + 清 DB 凭证 / per-tool override
+#   - DELETE 时 yaml 写失败 → 已 in-memory pop 但下次启动可能"幽灵恢复"
+#     (config.yaml 还有 entry),返 500 + log warning,用户重试 DELETE 即可
+# ---------------------------------------------------------------------------
+
+
+class CreateClientBody(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: Optional[str] = None
+    transport: Literal["stdio", "http"]
+    command: Optional[str] = None
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: Optional[str] = None
+    enabled: bool = True
+    expose_via_skyler_server: bool = True
+
+
+class CreateClientResponse(BaseModel):
+    name: str
+    transport: str
+    enabled: bool
+    connected: bool
+    tool_count: int
+    error: Optional[str] = None
+
+
+def _build_conf_dict(body: CreateClientBody) -> dict:
+    """Body → yaml 写入用的 dict。与 config.yaml 现有 entry shape 对齐。"""
+    conf: dict = {
+        "description": body.description or "",
+        "transport": body.transport,
+        "enabled": body.enabled,
+        "expose_via_skyler_server": body.expose_via_skyler_server,
+    }
+    if body.transport == "stdio":
+        conf["command"] = body.command
+        if body.args:
+            conf["args"] = list(body.args)
+        if body.env:
+            conf["env"] = dict(body.env)
+    else:  # http
+        conf["url"] = body.url
+    return conf
+
+
+@router.post(
+    "/mcp/clients",
+    response_model=CreateClientResponse,
+    status_code=201,
+)
+async def create_client(body: CreateClientBody) -> CreateClientResponse:
+    """新增一个 MCP client entry:写 config.yaml + 注册到 ``_clients`` + 视
+    ``enabled`` 决定是否立即 connect。
+
+    Errors:
+      * 409 — name 已存在(in ``_clients``)
+      * 422 — stdio 缺 ``command`` / http 缺 ``url``
+      * 500 — yaml 写失败(connect 失败**不**返 500,改返 200 +
+        ``error`` 字段,让 UI 看到原因)
+    """
+    from backend.mcp import client as mcp_client
+    from backend.mcp import credentials as _creds
+
+    # 跨字段校验(Pydantic Literal 已挡 transport 取值,这里补 transport-
+    # specific 必填)
+    if body.transport == "stdio" and not (body.command and body.command.strip()):
+        raise HTTPException(
+            status_code=422, detail="stdio transport requires 'command'",
+        )
+    if body.transport == "http" and not (body.url and body.url.strip()):
+        raise HTTPException(
+            status_code=422, detail="http transport requires 'url'",
+        )
+
+    conf = _build_conf_dict(body)
+
+    # 整个新增动作持 ``_lock`` —— 避免和并发 POST / DELETE / enable/disable
+    # 抢 ``_clients`` 字典。``write_config_atomic`` 自己另有 per-path lock,
+    # 不与 ``_lock`` 死锁。
+    async with mcp_client._lock:
+        if body.name in mcp_client._clients:
+            raise HTTPException(
+                status_code=409, detail=f"client {body.name!r} already exists",
+            )
+
+        def _add_entry(cfg: dict) -> None:
+            clients = cfg.get("mcp_clients")
+            if not isinstance(clients, dict):
+                clients = {}
+                cfg["mcp_clients"] = clients
+            clients[body.name] = conf
+
+        try:
+            await write_config_atomic(_CONFIG_PATH, _add_entry)
+        except (yaml.YAMLError, OSError) as exc:
+            raise HTTPException(
+                status_code=500, detail=f"config.yaml write failed: {exc}",
+            )
+        # 让 backend.config.config_yaml 立即对所有读侧可见(后续 init / list
+        # 走的都是同一个 module-level dict)
+        reload_config_yaml()
+
+        # In-memory 注册
+        handle = mcp_client._ClientHandle(body.name, conf)
+        mcp_client._clients[body.name] = handle
+
+        # enabled=True → 立即尝试连接;失败不 rollback yaml
+        connect_error: Optional[str] = None
+        if body.enabled:
+            try:
+                await _creds.set_enabled(body.name, True)
+            except Exception as exc:
+                logger.warning(
+                    "[mcp] create %s set_enabled persist failed: %s",
+                    body.name, exc,
+                )
+            try:
+                await mcp_client._connect_one(handle)
+            except Exception as exc:
+                handle.last_error = str(exc)
+                connect_error = str(exc)
+                logger.warning(
+                    "[mcp] create %s connect failed (yaml saved, user can "
+                    "retry / DELETE): %s",
+                    body.name, exc,
+                )
+
+    return CreateClientResponse(
+        name=body.name,
+        transport=body.transport,
+        enabled=body.enabled,
+        connected=handle.connected,
+        tool_count=handle.tool_count,
+        error=connect_error,
+    )
+
+
+class DeleteClientResponse(BaseModel):
+    status: str
+    name: str
+
+
+@router.delete("/mcp/clients/{name}", response_model=DeleteClientResponse)
+async def delete_client(name: str) -> DeleteClientResponse:
+    """删一个 MCP client entry。
+
+    流程:
+      1. ``disable(name)`` —— DB enabled override 置 False + 已连接则
+         ``_disconnect_one``(unregister capabilities + close transport)
+      2. 从 ``_clients`` pop
+      3. ``write_config_atomic`` 删 yaml entry
+      4. Best-effort 清 ``mcp_tool_state`` + ``mcp_credentials`` DB 痕迹
+
+    Errors:
+      * 404 — name 不在 ``_clients``
+      * 500 — yaml prune 失败(in-memory 已删,下次启动可能从 yaml 残留
+        中恢复;告知用户重试 DELETE)
+    """
+    from backend.mcp import client as mcp_client
+    from backend.mcp import credentials as _creds
+    from backend.mcp import tool_state as _tool_state
+
+    # 1. disable —— 内部用 _lock,完成后 handle.connected=False
+    try:
+        await mcp_client.disable(name)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"client {name!r} not configured",
+        )
+
+    # 2. pop _clients(in_memory)+ 3. 删 yaml + 4. DB 清理。全在 _lock
+    #    内,与并发 POST 互斥(同一时刻不会有 name 复活)
+    yaml_error: Optional[str] = None
+    async with mcp_client._lock:
+        mcp_client._clients.pop(name, None)
+
+        def _remove_entry(cfg: dict) -> None:
+            clients = cfg.get("mcp_clients")
+            if isinstance(clients, dict):
+                clients.pop(name, None)
+
+        try:
+            await write_config_atomic(_CONFIG_PATH, _remove_entry)
+            reload_config_yaml()
+        except (yaml.YAMLError, OSError) as exc:
+            yaml_error = str(exc)
+            logger.warning(
+                "[mcp] delete %s yaml prune failed: %s — ghost may "
+                "reappear on restart (user should retry DELETE)",
+                name, exc,
+            )
+
+        # Best-effort DB cleanup;失败不阻塞(留 row 也只是无害 stale data)
+        try:
+            await _tool_state.delete_for_server(name)
+        except Exception as exc:
+            logger.warning(
+                "[mcp] delete %s tool_state cleanup failed: %s", name, exc,
+            )
+        try:
+            await _creds.delete_all(name)
+        except Exception as exc:
+            logger.warning(
+                "[mcp] delete %s credentials cleanup failed: %s", name, exc,
+            )
+
+    if yaml_error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"client removed from memory but config.yaml prune failed: "
+                f"{yaml_error}. Retry DELETE."
+            ),
+        )
+
+    return DeleteClientResponse(status="ok", name=name)
 
 
 # ---------------------------------------------------------------------------
