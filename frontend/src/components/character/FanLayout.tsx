@@ -44,7 +44,10 @@ import type { CharacterRow } from '../../lib/config';
 export interface FanLayoutParams {
   /** 圆周半径 px。默认 600。 */
   radius: number;
-  /** 圆心 Y(从视口顶起算)。默认 ``window.innerHeight + 100``。 */
+  /**
+   * 圆心 Y(从视口顶起算)px。**默认 ``viewportH * 0.5 + radius * 0.7``**
+   * (Fan-4.3 重推公式;旧默认 ``viewportH + 100`` 让 fan 偏上)。
+   */
   centerOffsetY: number;
   /**
    * 可见弧度数 (中心 ±arcDeg/2 内 opacity=1,外侧 fade)。
@@ -196,9 +199,30 @@ export default function FanLayout({
 
   const params: FanLayoutParams = useMemo(() => {
     const rawVC = layoutParams?.visibleCount ?? 7;
+    const radius = layoutParams?.radius ?? 600;
+    // v4-fan chunk 4.3:centerOffsetY 公式重新推导。
+    //
+    // 老公式 ``viewportH + 100`` (≈ 1.1×H) 把圆心放屏幕外底下,fan 弧上半
+    // 圈占据屏幕上半 → 视觉重心 ~30%,下半屏空荡。
+    //
+    // 新公式 ``viewportH * 0.5 + radius * 0.7``:
+    //   - viewportH * 0.5 — 把基准从底部对齐改成中线对齐
+    //   - radius * 0.7   — 圆心在中线下方 70% 半径距离
+    //
+    // 等价于:fan 顶点 (cy - R) 落在屏幕 (0.5 - 0.3) = 20% 高度,fan
+    // 边缘 (cy - R*cos(arcDeg/2)) 落在 ~45-55% 高度(arcDeg 72° 时
+    // ~44%, 90° 时 ~50%)→ 视觉重心 ~32-38%,直觉对齐"中部"。
+    //
+    // 实测 viewport 矩阵(默认 R=600):
+    //   720p:  cy=780  fan top y=180 (25%) edge bottom y=295 (41%)
+    //   1080p: cy=960  fan top y=360 (33%) edge bottom y=475 (44%)
+    //   1440p: cy=1140 fan top y=540 (38%) edge bottom y=655 (45%)
+    //
+    // 注:720p 时 selected card 顶端可能略出视口顶 (-60px),取舍可接受;
+    // 用户若仍觉位置偏可 ?cy=... 微调。
     return {
-      radius:             layoutParams?.radius             ?? 600,
-      centerOffsetY:      layoutParams?.centerOffsetY      ?? viewportH + 100,
+      radius,
+      centerOffsetY:      layoutParams?.centerOffsetY      ?? viewportH * 0.5 + radius * 0.7,
       arcDegree:          layoutParams?.arcDegree          ?? 72,
       transitionDuration: layoutParams?.transitionDuration ?? 500,
       visibleCount:       normalizeVisibleCount(rawVC),
