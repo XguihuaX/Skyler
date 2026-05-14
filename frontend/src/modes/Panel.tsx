@@ -9,7 +9,6 @@ import CharacterView from '../components/CharacterView';
 import ChatHistoryDrawer from '../components/ChatHistoryDrawer';
 import ChatInput from '../components/ChatInput';
 import ConversationList from '../components/ConversationList';
-import SettingsPanel from '../components/SettingsPanel';
 import SettingsPanelV2 from '../components/settings/SettingsPanelV2';
 import Sidebar from '../components/Sidebar';
 import TopBar from '../components/TopBar';
@@ -112,12 +111,11 @@ export default function Panel() {
           </div>
         ) : panelView === 'capabilities' ? (
           <CapabilitiesPanel showToast={showToast} />
-        ) : panelView === 'settings_v2' ? (
-          <SettingsPanelV2 showToast={showToast} />
         ) : (
-          <div className="flex flex-1 flex-col overflow-hidden">
-            <SettingsPanel />
-          </div>
+          // bugfix-2.2: 'settings_v2' 是新规范唯一 settings view。任何遗留
+          // 'settings' 字符串(老 localStorage / state 残留)也兜底到 V2 而非
+          // legacy panel —— 老 panel 不再出现在 UI。
+          <SettingsPanelV2 showToast={showToast} />
         )}
       </div>
 

@@ -3,27 +3,22 @@ import {
   MessageCircle,
   Settings,
   Users,
-  Wrench,
   type LucideIcon,
 } from 'lucide-react';
 import { useAppStore } from '../store';
 import ConnectionDot from './ConnectionDot';
 
-type PanelView =
-  | 'chat'
-  | 'characters'
-  | 'capabilities'
-  | 'settings_v2'
-  | 'settings';
+type PanelView = 'chat' | 'characters' | 'capabilities' | 'settings_v2';
 
-// bugfix-2: 拆 Setting 为 能力 + 设置 顶级双项。老 'settings' 保留作 "高级"
-// 入口(降回归风险, Bugfix-4 后再决定是否删)。
+// bugfix-2.2: 真正全挪 SettingsPanel + 删老入口。sidebar 仅 4 项:
+//   💬 聊天 / 🎴 角色 / 📂 能力 / ⚙ 设置
+// 老 'settings' panelView 与 SettingsPanelLegacy 仅作 emergency rollback
+// 入口 —— 不出现在 sidebar。v4.1 计划删 legacy 文件。
 const navItems: { view: PanelView; Icon: LucideIcon; label: string }[] = [
   { view: 'chat',         Icon: MessageCircle, label: '聊天' },
   { view: 'characters',   Icon: Users,         label: '角色' },
   { view: 'capabilities', Icon: Boxes,         label: '能力' },
   { view: 'settings_v2',  Icon: Settings,      label: '设置' },
-  { view: 'settings',     Icon: Wrench,        label: '高级（旧设置）' },
 ];
 
 export default function Sidebar() {

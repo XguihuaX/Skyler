@@ -564,7 +564,8 @@ interface ClipboardSectionProps {
   showToast: (text: string) => void;
 }
 
-function ClipboardSection({ showToast }: ClipboardSectionProps) {
+// bugfix-2.2: 导出供 SettingsPanelV2 复用。
+export function ClipboardSection({ showToast }: ClipboardSectionProps) {
   const [enabled, setEnabled] = useState(true);
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -768,7 +769,8 @@ interface CharacterStateSectionProps {
   showToast: (text: string) => void;
 }
 
-function CharacterStateSection({ showToast }: CharacterStateSectionProps) {
+// bugfix-2.2: 导出供 SettingsPanelV2 复用。
+export function CharacterStateSection({ showToast }: CharacterStateSectionProps) {
   const showPanel        = useAppStore((s) => s.showCharacterStatePanel);
   const setShowPanel     = useAppStore((s) => s.setShowCharacterStatePanel);
   const characterId      = useAppStore((s) => s.currentCharacterId);
@@ -911,7 +913,8 @@ interface ActivityTimelineSectionProps {
 }
 
 
-function ActivityTimelineSection({ onOpenTimeline }: ActivityTimelineSectionProps) {
+// bugfix-2.2: 导出供 SettingsPanelV2 复用。
+export function ActivityTimelineSection({ onOpenTimeline }: ActivityTimelineSectionProps) {
   return (
     <section
       className="mb-4 rounded-lg p-4"
@@ -956,7 +959,8 @@ function ActivityTimelineSection({ onOpenTimeline }: ActivityTimelineSectionProp
 }
 
 
-function MemorySection({
+// bugfix-2.2: 导出供 SettingsPanelV2 复用。
+export function MemorySection({
   userId,
   characterId,
   showToast,
@@ -1173,7 +1177,8 @@ interface ModelSectionProps {
   showToast: (text: string) => void;
 }
 
-function ModelSection({ showToast }: ModelSectionProps) {
+// bugfix-2.2: 导出供 CapabilitiesPanel (AI Providers tab) 复用。
+export function ModelSection({ showToast }: ModelSectionProps) {
   const [current, setCurrent] = useState<string>('');
   const [available, setAvailable] = useState<ModelInfo[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -1336,7 +1341,8 @@ interface ProfileSectionProps {
   showToast: (text: string) => void;
 }
 
-function ProfileSection({ userId, showToast }: ProfileSectionProps) {
+// bugfix-2.2: 导出供 SettingsPanelV2 复用(基础信息部分)。
+export function ProfileSection({ userId, showToast }: ProfileSectionProps) {
   const [nickname, setNickname] = useState('');
   const [language, setLanguage] = useState('zh-CN');
   const [loaded, setLoaded] = useState(false);
@@ -1435,9 +1441,214 @@ function ProfileSection({ userId, showToast }: ProfileSectionProps) {
 }
 
 // ---------------------------------------------------------------------------
-// SettingsPanel
+// bugfix-2.2: 把原 SettingsPanel render 里的内联 JSX 块抽出来作独立 export,
+// 供 SettingsPanelV2 复用。每个 wrapper 自带 state hook / localStorage 兜底,
+// 与原内联版本同语义,不动业务逻辑。
 // ---------------------------------------------------------------------------
 
+interface ShowToastProps {
+  showToast: (text: string) => void;
+}
+
+/** 记忆 / 用户画像 / 联网搜索 三 toggle —— 写后端 config.yaml。*/
+export function MemoryTogglesSection({ showToast }: ShowToastProps) {
+  const longTermEnabled = useAppStore((s) => s.longTermEnabled);
+  const profileEnabled  = useAppStore((s) => s.profileEnabled);
+  const enableSearch    = useAppStore((s) => s.enableSearch);
+
+  const remoteToggle = (
+    field: 'longTermEnabled' | 'profileEnabled' | 'enableSearch',
+    keyPath: string,
+    next: boolean,
+    label: string,
+  ) => {
+    const setterMap = {
+      longTermEnabled: useAppStore.getState().setLongTermEnabled,
+      profileEnabled:  useAppStore.getState().setProfileEnabled,
+      enableSearch:    useAppStore.getState().setEnableSearch,
+    } as const;
+    const setter = setterMap[field];
+    setter(next);
+    setConfigField(keyPath, next).catch((e: unknown) => {
+      console.error(`[MemoryToggles] ${keyPath} sync failed:`, e);
+      setter(!next);
+      showToast(`${label} 写入失败：${extractErrorMessage(e)}`);
+    });
+  };
+
+  return (
+    <Section title="记忆开关">
+      <Toggle
+        label="长期记忆"
+        value={longTermEnabled}
+        onChange={(next) => remoteToggle('longTermEnabled', 'memory.long_term_enabled', next, '长期记忆')}
+      />
+      <Toggle
+        label="用户画像"
+        value={profileEnabled}
+        onChange={(next) => remoteToggle('profileEnabled', 'memory.profile_enabled', next, '用户画像')}
+      />
+      <Toggle
+        label="联网搜索"
+        value={enableSearch}
+        onChange={(next) => remoteToggle('enableSearch', 'search.enable_search', next, '联网搜索')}
+      />
+    </Section>
+  );
+}
+
+/** ASR / VAD section —— 录音模式 / 阈值 / 静音超时 / 静音麦克风。
+ * localStorage 持久化(沿用原 SettingsPanel hydrate 逻辑)。 */
+export function AsrVadSection() {
+  const recordingMode      = useAppStore((s) => s.recordingMode);
+  const setRecordingMode   = useAppStore((s) => s.setRecordingMode);
+  const vadThreshold       = useAppStore((s) => s.vadThreshold);
+  const setVadThreshold    = useAppStore((s) => s.setVadThreshold);
+  const silenceTimeoutMs   = useAppStore((s) => s.silenceTimeoutMs);
+  const setSilenceTimeoutMs = useAppStore((s) => s.setSilenceTimeoutMs);
+  const muteWhileSpeaking  = useAppStore((s) => s.muteWhileSpeaking);
+  const setMuteWhileSpeaking = useAppStore((s) => s.setMuteWhileSpeaking);
+
+  // Hydrate from localStorage(与原 SettingsPanel 同样的 try/parse 逻辑)
+  useEffect(() => {
+    try {
+      const rm = localStorage.getItem(LS_RECORDING_MODE);
+      if (rm === 'manual' || rm === 'vad') useAppStore.getState().setRecordingMode(rm);
+      const vt = localStorage.getItem(LS_VAD_THRESHOLD);
+      if (vt !== null) {
+        const n = parseFloat(vt);
+        if (!isNaN(n) && n >= 1 && n <= 100) useAppStore.getState().setVadThreshold(n);
+      }
+      const st = localStorage.getItem(LS_SILENCE_TIMEOUT);
+      if (st !== null) {
+        const sec = parseFloat(st);
+        if (!isNaN(sec) && sec >= 0.5 && sec <= 3.0) {
+          useAppStore.getState().setSilenceTimeoutMs(Math.round(sec * 1000));
+        }
+      }
+      const ms = localStorage.getItem(LS_MUTE_SPEAKING);
+      if (ms === 'true' || ms === 'false') {
+        useAppStore.getState().setMuteWhileSpeaking(ms === 'true');
+      }
+    } catch (e) {
+      console.warn('[AsrVadSection] localStorage hydrate failed:', e);
+    }
+  }, []);
+
+  const onRecordingMode = (v: 'manual' | 'vad') => {
+    setRecordingMode(v);
+    try { localStorage.setItem(LS_RECORDING_MODE, v); } catch {/* ignore */}
+  };
+  const onVadThreshold = (v: number) => {
+    const n = Math.round(v);
+    setVadThreshold(n);
+    try { localStorage.setItem(LS_VAD_THRESHOLD, String(n)); } catch {/* ignore */}
+  };
+  const onSilenceSeconds = (sec: number) => {
+    const ms = Math.round(sec * 1000);
+    setSilenceTimeoutMs(ms);
+    try { localStorage.setItem(LS_SILENCE_TIMEOUT, sec.toFixed(1)); } catch {/* ignore */}
+  };
+  const onMuteWhileSpeaking = (v: boolean) => {
+    setMuteWhileSpeaking(v);
+    try { localStorage.setItem(LS_MUTE_SPEAKING, String(v)); } catch {/* ignore */}
+  };
+
+  return (
+    <Section title="ASR / VAD">
+      <Segmented<'manual' | 'vad'>
+        label="录音模式"
+        value={recordingMode}
+        options={[
+          { value: 'manual', label: '手动' },
+          { value: 'vad', label: 'VAD' },
+        ]}
+        onChange={onRecordingMode}
+      />
+      <Slider
+        label="语音检测阈值"
+        value={vadThreshold}
+        min={1} max={100} step={1}
+        display={String(vadThreshold)}
+        onChange={onVadThreshold}
+      />
+      <Slider
+        label="静音超时"
+        value={silenceTimeoutMs / 1000}
+        min={0.5} max={3.0} step={0.1}
+        display={`${(silenceTimeoutMs / 1000).toFixed(1)} s`}
+        onChange={onSilenceSeconds}
+      />
+      <Toggle
+        label="Momo 说话时静音麦克风"
+        value={muteWhileSpeaking}
+        onChange={onMuteWhileSpeaking}
+      />
+    </Section>
+  );
+}
+
+/** TTS 启用开关。*/
+export function TtsSection({ showToast }: ShowToastProps) {
+  const ttsEnabled = useAppStore((s) => s.ttsEnabled);
+  const setTtsEnabled = useAppStore((s) => s.setTtsEnabled);
+
+  const onToggle = (next: boolean) => {
+    const prev = ttsEnabled;
+    setTtsEnabled(next);
+    setConfigField('tts.enabled', next).catch((e: unknown) => {
+      console.error('[TtsSection] tts.enabled sync failed:', e);
+      setTtsEnabled(prev);
+      showToast(`启用 TTS 写入失败：${extractErrorMessage(e)}`);
+    });
+  };
+
+  return (
+    <Section title="TTS">
+      <Toggle label="启用 TTS" value={ttsEnabled} onChange={onToggle} />
+    </Section>
+  );
+}
+
+/** 启动入场视频开关 —— 纯 localStorage(不走后端 config),重启生效。*/
+export function SplashSection() {
+  const [splashEnabled, setSplashEnabled] = useState<boolean>(true);
+
+  useEffect(() => {
+    try {
+      const se = localStorage.getItem(LS_SPLASH_ENABLED);
+      if (se === 'true' || se === 'false') setSplashEnabled(se === 'true');
+    } catch {/* ignore */}
+  }, []);
+
+  const onChange = (v: boolean) => {
+    setSplashEnabled(v);
+    try { localStorage.setItem(LS_SPLASH_ENABLED, String(v)); } catch {/* ignore */}
+  };
+
+  return (
+    <Section title="启动">
+      <Toggle label="启动播放入场视频" value={splashEnabled} onChange={onChange} />
+      <div
+        className="text-xs py-1.5"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        把 intro.mp4 放进 frontend/public/splash/ 目录，启动时自动播放（点击 / 按键跳过）。
+        文件不存在则 silent skip。
+      </div>
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SettingsPanel (legacy / @deprecated)
+// ---------------------------------------------------------------------------
+
+/**
+ * @deprecated bugfix-2.2:已被 SettingsPanelV2 + CapabilitiesPanel 完全替代。
+ * 本组件保留只为保 v3.5 path coverage / 紧急 rollback,不再挂 sidebar。
+ * v4.1 计划删除文件。新 section 写到 SettingsPanelV2 或 CapabilitiesPanel。
+ */
 export default function SettingsPanel() {
   const longTermEnabled    = useAppStore((s) => s.longTermEnabled);
   const profileEnabled     = useAppStore((s) => s.profileEnabled);

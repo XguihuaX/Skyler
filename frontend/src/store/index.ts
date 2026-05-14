@@ -166,10 +166,10 @@ interface AppState {
 
   // Panel 子视图
   //
-  // bugfix-2：新增 'capabilities' + 'settings_v2'。'settings' 保留指向老
-  // SettingsPanel(降回归风险),新顶级 ⚙ 设置走 'settings_v2'。
-  panelView: 'chat' | 'settings' | 'characters' | 'capabilities' | 'settings_v2';
-  setPanelView: (v: 'chat' | 'settings' | 'characters' | 'capabilities' | 'settings_v2') => void;
+  // bugfix-2.2：老 'settings'/SettingsPanel 完全弃用,sidebar 也不再有入口。
+  // 4 个 view: chat / characters / capabilities / settings_v2(新 ⚙ 设置)。
+  panelView: 'chat' | 'characters' | 'capabilities' | 'settings_v2';
+  setPanelView: (v: 'chat' | 'characters' | 'capabilities' | 'settings_v2') => void;
 
   // ConversationList 折叠状态（持久化到 localStorage）
   conversationListCollapsed: boolean;

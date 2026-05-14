@@ -1,32 +1,53 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Bell,
+  Brain,
+  Clipboard,
+  Database,
+  Eye,
   Info,
-  Keyboard,
   Palette,
-  Shield,
+  Rocket,
+  UserCog,
   Users,
 } from 'lucide-react';
+import { useAppStore } from '../../store';
 import { fetchModels } from '../../lib/models';
+import ActivityAwarenessSection from '../ActivityAwarenessSection';
+import ActivityTimelineDrawer from '../ActivityTimelineDrawer';
 import CharacterPanel from '../CharacterPanel';
-import { ProactiveSection, ThemeSection } from '../SettingsPanel';
-import TwoPaneShell, {
-  SectionPlaceholder,
-  type PaneSection,
-} from '../TwoPaneShell';
+import MemoryManagerDrawer from '../MemoryManagerDrawer';
+import {
+  ActivityTimelineSection,
+  CharacterStateSection,
+  ClipboardSection,
+  MemorySection,
+  MemoryTogglesSection,
+  ProactiveSection,
+  ProfileSection,
+  SplashSection,
+  ThemeSection,
+} from '../SettingsPanelLegacy';
+import UserProfileSection from '../UserProfileSection';
+import TwoPaneShell, { type PaneSection } from '../TwoPaneShell';
 
 /**
- * bugfix-2: ⚙ 设置 V2 (Settings V2) — "Skyler 自身行为偏好"
+ * bugfix-2.2: ⚙ 设置 V2 (Settings V2) — "Skyler 自身行为偏好"
  *
- * 6 个 section:
- *   - 👥 角色管理   —— mount 现有 <CharacterPanel/>
- *   - ✨ 主动陪伴   —— 复用 ProactiveSection
- *   - 🎨 外观       —— 复用 ThemeSection
- *   - ⌨ 系统       —— 占位(ASR/VAD / TTS / 启动 暂留老 SettingsPanel)
- *   - 🔒 隐私 / 数据 —— 占位(Memory / Activity / Clipboard 暂留老 SettingsPanel)
- *   - ℹ 关于       —— app name + 当前 model + GitHub
+ * 10 个 section(对照 bugfix-2.2 spec 顺序):
+ *   1. 👥 角色管理     —— CharacterPanel
+ *   2. ✨ 主动陪伴     —— ProactiveSection
+ *   3. 👁 活动感知     —— ActivityAwarenessSection + ActivityTimelineSection
+ *   4. 📋 剪贴板       —— ClipboardSection
+ *   5. 🎭 角色状态     —— CharacterStateSection
+ *   6. 🧠 记忆         —— MemorySection + MemoryTogglesSection(长期/画像/搜索)
+ *   7. 👤 用户档案     —— ProfileSection(称呼/语言) + UserProfileSection(profile_data)
+ *   8. 🚀 启动         —— SplashSection
+ *   9. 🎨 外观         —— ThemeSection
+ *  10. ℹ 关于         —— app + LLM model + GitHub
  *
- * 老 SettingsPanel 不删,sidebar 上 "高级" 入口仍可访问。
+ * 老 SettingsPanel 完全废弃,sidebar 没有入口。本面板共享 toast(Panel.tsx
+ * 顶层提供)、内含 MemoryManagerDrawer / ActivityTimelineDrawer mount。
  */
 
 interface SettingsPanelV2Props {
@@ -35,6 +56,15 @@ interface SettingsPanelV2Props {
 
 export default function SettingsPanelV2({ showToast }: SettingsPanelV2Props) {
   const [activeId, setActiveId] = useState<string>('characters');
+
+  const defaultUserId      = useAppStore((s) => s.defaultUserId);
+  const currentCharacterId = useAppStore((s) => s.currentCharacterId);
+
+  // bugfix-2.2: 把 Memory drawer 与 Activity timeline drawer mount 提到面板
+  // 顶层(原 SettingsPanel 也是这样做的),让任一子 section 都能打开。
+  const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
+  const [timelineDrawerOpen, setTimelineDrawerOpen] = useState(false);
+  const [memoryCount, setMemoryCount] = useState<number | null>(null);
 
   const sections: PaneSection[] = [
     {
@@ -58,6 +88,79 @@ export default function SettingsPanelV2({ showToast }: SettingsPanelV2Props) {
       ),
     },
     {
+      id: 'activity',
+      label: '活动感知',
+      Icon: Eye,
+      render: () => (
+        <div className="p-6">
+          <ActivityAwarenessSection showToast={showToast} />
+          <ActivityTimelineSection
+            onOpenTimeline={() => setTimelineDrawerOpen(true)}
+          />
+        </div>
+      ),
+    },
+    {
+      id: 'clipboard',
+      label: '剪贴板',
+      Icon: Clipboard,
+      render: () => (
+        <div className="p-6">
+          <ClipboardSection showToast={showToast} />
+        </div>
+      ),
+    },
+    {
+      id: 'character_state',
+      label: '角色状态',
+      Icon: Brain,
+      render: () => (
+        <div className="p-6">
+          <CharacterStateSection showToast={showToast} />
+        </div>
+      ),
+    },
+    {
+      id: 'memory',
+      label: '记忆',
+      Icon: Database,
+      render: () => (
+        <div className="p-6">
+          <MemorySection
+            userId={defaultUserId}
+            characterId={currentCharacterId}
+            showToast={showToast}
+            managerOpen={memoryManagerOpen}
+            onOpenManager={() => setMemoryManagerOpen(true)}
+            onCountChange={setMemoryCount}
+            count={memoryCount}
+          />
+          <MemoryTogglesSection showToast={showToast} />
+        </div>
+      ),
+    },
+    {
+      id: 'profile',
+      label: '用户档案',
+      Icon: UserCog,
+      render: () => (
+        <div className="p-6">
+          <ProfileSection userId={defaultUserId} showToast={showToast} />
+          <UserProfileSection userId={defaultUserId} showToast={showToast} />
+        </div>
+      ),
+    },
+    {
+      id: 'startup',
+      label: '启动',
+      Icon: Rocket,
+      render: () => (
+        <div className="p-6">
+          <SplashSection />
+        </div>
+      ),
+    },
+    {
       id: 'appearance',
       label: '外观',
       Icon: Palette,
@@ -65,34 +168,6 @@ export default function SettingsPanelV2({ showToast }: SettingsPanelV2Props) {
         <div className="p-6">
           <ThemeSection />
         </div>
-      ),
-    },
-    {
-      id: 'system',
-      label: '系统',
-      Icon: Keyboard,
-      disabled: true,
-      disabledHint: '暂留在"高级"面板(ASR/VAD / TTS / 启动)',
-      render: () => (
-        <SectionPlaceholder
-          emoji="⌨"
-          title="系统"
-          hint="快捷键 / 启动项 / 录音模式 / TTS 启用等。暂留在 sidebar 的 「高级」 面板,后续 Bugfix-4 + 挪过来。"
-        />
-      ),
-    },
-    {
-      id: 'privacy',
-      label: '隐私 / 数据',
-      Icon: Shield,
-      disabled: true,
-      disabledHint: '暂留在"高级"面板(Memory / Activity / Clipboard)',
-      render: () => (
-        <SectionPlaceholder
-          emoji="🔒"
-          title="隐私 / 数据"
-          hint="记忆管理 / 活动感知 / 剪贴板捕获 / 用户画像。暂留在 sidebar 的 「高级」 面板。"
-        />
       ),
     },
     {
@@ -104,17 +179,33 @@ export default function SettingsPanelV2({ showToast }: SettingsPanelV2Props) {
   ];
 
   return (
-    <TwoPaneShell
-      title="设置"
-      sections={sections}
-      activeId={activeId}
-      onActiveChange={setActiveId}
-    />
+    <>
+      <TwoPaneShell
+        title="设置"
+        sections={sections}
+        activeId={activeId}
+        onActiveChange={setActiveId}
+      />
+
+      {/* Drawers mounted at panel root —— 任一 section 都能触发打开 */}
+      <MemoryManagerDrawer
+        open={memoryManagerOpen}
+        userId={defaultUserId}
+        characterId={currentCharacterId}
+        onClose={() => setMemoryManagerOpen(false)}
+        onCountChange={setMemoryCount}
+      />
+      <ActivityTimelineDrawer
+        open={timelineDrawerOpen}
+        onClose={() => setTimelineDrawerOpen(false)}
+        showToast={showToast}
+      />
+    </>
   );
 }
 
 // ---------------------------------------------------------------------------
-// 关于 section —— app 信息 + 当前 LLM model
+// 关于 section
 // ---------------------------------------------------------------------------
 
 function AboutSection() {
@@ -143,7 +234,7 @@ function AboutSection() {
         ℹ 关于
       </h2>
       <div
-        className="rounded-lg p-4 space-y-3"
+        className="rounded-lg p-4 space-y-3 mb-4"
         style={{
           background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
           border: '1px solid var(--color-border-subtle)',
@@ -151,17 +242,13 @@ function AboutSection() {
       >
         <AboutRow label="应用" value="MomoOS" />
         <AboutRow label="当前 LLM" value={model} />
-        <AboutRow
-          label="项目"
-          value="github.com/MomoOS"
-          mono
-        />
+        <AboutRow label="项目" value="github.com/MomoOS" mono />
       </div>
       <p
-        className="text-xs mt-4"
+        className="text-xs"
         style={{ color: 'var(--color-text-secondary)' }}
       >
-        用户体验问题 / 漏掉的设置项 → 通过 sidebar 的「高级」面板回退访问完整设置。
+        体验问题 / Bug 反馈通过项目 GitHub Issues 提交。
       </p>
     </div>
   );

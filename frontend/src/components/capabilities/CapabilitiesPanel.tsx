@@ -1,25 +1,39 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Brain, Plug, Sparkles, Theater, Upload } from 'lucide-react';
+import {
+  Activity,
+  Brain,
+  Plug,
+  Sparkles,
+  Theater,
+  Upload,
+} from 'lucide-react';
 import {
   fetchLive2DModels,
   type Live2DModel,
   type Live2DUploadResult,
 } from '../../lib/live2d';
+import CapabilityPanel from '../CapabilityPanel';
 import ExtensionsSection from '../ExtensionsSection';
 import Live2DDropzone from '../live2d/Live2DDropzone';
+import {
+  AsrVadSection,
+  ModelSection,
+  TtsSection,
+} from '../SettingsPanelLegacy';
 import TwoPaneShell, {
   SectionPlaceholder,
   type PaneSection,
 } from '../TwoPaneShell';
 
 /**
- * bugfix-2: 📂 能力 (Capabilities) — "给 Skyler 装资源 / 接外部世界"
+ * bugfix-2.2: 📂 能力 (Capabilities) — "给 Skyler 装资源 / 接外部世界"
  *
- * 4 个 section:
- *   - 🔌 MCP Servers     —— 复用 ExtensionsSection
- *   - 🎭 Live2D Models   —— app 级模型库 list + dropzone(独立于 CharacterPanel)
- *   - 🧠 AI Providers    —— 占位(Bugfix-3 填)
- *   - 🧩 Skills .py      —— 占位(v4.1+)
+ * 5 个 section(对照 bugfix-2.2 spec):
+ *   - 🔌 MCP Servers       —— ExtensionsSection
+ *   - 🎭 Live2D Models     —— app 级模型库 list + dropzone
+ *   - 🧠 AI Providers      —— 3 个子 tab: LLM(ModelSection) / ASR-VAD / TTS
+ *   - 📊 能力监控          —— CapabilityPanel (11 段 cap 卡片 + health badge)
+ *   - 🧩 Skills .py        —— 占位 (v4.1+)
  */
 
 interface CapabilitiesPanelProps {
@@ -50,14 +64,16 @@ export default function CapabilitiesPanel({ showToast }: CapabilitiesPanelProps)
       id: 'ai',
       label: 'AI Providers',
       Icon: Brain,
-      disabled: true,
-      disabledHint: '即将推出 (Bugfix-3)',
+      render: () => <AiProvidersSection showToast={showToast} />,
+    },
+    {
+      id: 'monitor',
+      label: '能力监控',
+      Icon: Activity,
       render: () => (
-        <SectionPlaceholder
-          emoji="🧠"
-          title="AI Providers"
-          hint="多 LLM provider 管理 (添加 OpenAI / Anthropic / DeepSeek 等 key、切换默认模型)。Bugfix-3 推出。"
-        />
+        <div className="p-6">
+          <CapabilityPanel />
+        </div>
       ),
     },
     {
@@ -87,8 +103,73 @@ export default function CapabilitiesPanel({ showToast }: CapabilitiesPanelProps)
 }
 
 // ---------------------------------------------------------------------------
-// Live2D Models 子 section —— app 级模型库(与 CharacterPanel 内 dropdown 数据
-// 共享后端,独立 UI 视角)
+// AI Providers —— 3 个子 tab: LLM / ASR-VAD / TTS
+// ---------------------------------------------------------------------------
+
+type AiTab = 'llm' | 'asr' | 'tts';
+
+function AiProvidersSection({ showToast }: { showToast: (text: string) => void }) {
+  const [tab, setTab] = useState<AiTab>('llm');
+  const tabs: { id: AiTab; label: string }[] = [
+    { id: 'llm', label: 'LLM 模型' },
+    { id: 'asr', label: 'ASR / VAD' },
+    { id: 'tts', label: 'TTS' },
+  ];
+
+  return (
+    <div className="p-6">
+      <h2
+        className="text-lg font-medium mb-1"
+        style={{ color: 'var(--color-text-primary)' }}
+      >
+        🧠 AI Providers
+      </h2>
+      <p
+        className="text-xs mb-4"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        语言模型 / 语音识别 / 语音合成的 provider 与参数。
+      </p>
+
+      <div
+        className="inline-flex rounded-md p-0.5 mb-4"
+        style={{
+          background: 'var(--color-bg-input)',
+          border: '1px solid var(--color-border)',
+        }}
+      >
+        {tabs.map((t) => {
+          const active = t.id === tab;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className="px-3 py-1 text-xs rounded-md transition-colors"
+              style={
+                active
+                  ? {
+                      background: 'var(--color-accent)',
+                      color: 'var(--color-bubble-user-text)',
+                    }
+                  : { color: 'var(--color-text-primary)' }
+              }
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === 'llm' && <ModelSection showToast={showToast} />}
+      {tab === 'asr' && <AsrVadSection />}
+      {tab === 'tts' && <TtsSection showToast={showToast} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Live2D Models 子 section
 // ---------------------------------------------------------------------------
 
 interface Live2DModelLibraryProps {
