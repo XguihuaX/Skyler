@@ -36,6 +36,7 @@ import {
   fetchTtsVoices,
   parseVoiceModelJson,
 } from '../lib/tts';
+import VoicePickerModal from './VoicePickerModal';
 
 const DEFAULT_CHARACTER_NAME = 'Momo';
 const PERSONA_PREVIEW_LEN = 30;
@@ -315,6 +316,8 @@ export default function CharacterPanel() {
 
   // Stage 2.2.1: Live2D dropzone modal + 上传成功后的 motion_map 确认弹窗
   const [showLive2DUpload, setShowLive2DUpload] = useState(false);
+  // bugfix-3.3.1: VoicePickerModal 开关
+  const [voicePickerOpen, setVoicePickerOpen] = useState(false);
   const [pendingMotionMap, setPendingMotionMap] = useState<{
     targetCharacterId: number;
     targetCharacterName: string;
@@ -1026,6 +1029,22 @@ export default function CharacterPanel() {
                     引导（happy / sad / angry / surprised）。留"未配置"则用
                     全局默认音色。
                   </p>
+
+                  {/* bugfix-3.3.1: VoicePickerModal 入口 — 含系统 + 用户在
+                      DashScope 复刻的 voice + 试听 + 反向显示已用于角色。 */}
+                  <button
+                    type="button"
+                    onClick={() => setVoicePickerOpen(true)}
+                    className="mt-2 text-[11px] inline-flex items-center gap-1 px-2 py-1 rounded hover:opacity-80"
+                    style={{
+                      background: 'var(--color-bg-input)',
+                      border: '1px solid var(--color-border)',
+                      color: 'var(--color-text-primary)',
+                    }}
+                    title="打开 voice 选择器: 系统音色 + 你的 DashScope 复刻 voice + 试听"
+                  >
+                    🎙 试听并选 voice (含复刻)
+                  </button>
                 </div>
               );
             })()}
@@ -1420,6 +1439,28 @@ export default function CharacterPanel() {
           applying={applyingMotionMap}
           onApply={() => void onApplyMotionMap()}
           onSkip={onSkipMotionMap}
+        />
+      )}
+
+      {/* bugfix-3.3.1: VoicePickerModal — 系统 voice + 复刻 voice + 试听。
+          form 可能为 null (用户尚未点编辑某 char), 但本按钮只在 form 里
+          render, 所以打开时 form 一定非 null。 */}
+      {voicePickerOpen && form && (
+        <VoicePickerModal
+          currentVoice={parseVoiceModelJson(form.voice_model)?.voice ?? null}
+          characterName={form.name || undefined}
+          onClose={() => setVoicePickerOpen(false)}
+          onSave={({ voiceId, instructSupported }) => {
+            // 选定 voice 写回 form.voice_model;provider 固定 cosyvoice
+            // (本 stage 不支持给 character 切 Edge/SoVITS provider)。
+            setForm((f) => f ? ({
+              ...f,
+              voice_model: buildVoiceModelJson('cosyvoice', voiceId, instructSupported),
+            }) : f);
+            setVoicePickerOpen(false);
+            showToast(`已选 voice ${voiceId.slice(0, 40)}…; 记得点 [保存]`);
+          }}
+          showToast={showToast}
         />
       )}
 

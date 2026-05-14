@@ -102,6 +102,10 @@ from backend.database.migrations.bugfix_3_2_7_model_prefix_repair import (
 from backend.database.migrations.bugfix_3_2_8_dedup_and_trim_seed import (
     run_migration as migrate_bugfix_3_2_8_dedup_and_trim_seed,
 )
+# bugfix-3.3.1: 灌入用户复刻的 3 个 CosyVoice voice_id 到 characters 表
+from backend.database.migrations.bugfix_3_3_1_seed_cloned_voices import (
+    run_migration as migrate_bugfix_3_3_1_seed_cloned_voices,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -283,6 +287,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ROW_NUMBER 去重 + 只保留 Qwen 2 个 builtin(其他 vendor seed 行 trim,
     # 用户自填)+ CREATE UNIQUE INDEX 防未来重复。必须在 3.1 seed 后跑。
     await migrate_bugfix_3_2_8_dedup_and_trim_seed()
+
+    # ── 1b25. Bugfix-3.3.1: 灌入用户复刻的 CosyVoice voice_id ──────────────
+    # 用户在 DashScope 控制台复刻了 3 个 voice, 这里写入对应 character.voice_model
+    # JSON。幂等:已是 cloned voice 不动; 其他 (NULL / 系统 longxxx) 才覆盖。
+    await migrate_bugfix_3_3_1_seed_cloned_voices()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

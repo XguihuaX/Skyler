@@ -237,6 +237,21 @@ def _build_engine(voice_model: Optional[str] = None) -> TTSBase:
     default = VoiceConfig(**get_default_voice_config())
     cfg = parse_voice_config(voice_model, default)
 
+    # bugfix-3.3.1: 真机走查 hint —— 一行明确 resolved voice 来源,免去
+    # 再去翻 voice_model JSON。``source`` 不严格区分 "用户故意写了一致的
+    # voice_model" 与 "走 default" (二者 cfg.voice 都等于 default.voice),
+    # 但 99% 场景这正是用户想看的"per-character 有没生效"。
+    source = (
+        "yaml_default"
+        if (not voice_model or not voice_model.strip()
+            or cfg.voice == default.voice and cfg.provider == default.provider)
+        else "character_db"
+    )
+    logger.info(
+        "[TTS] synthesize voice=%s provider=%s source=%s instruct=%s",
+        cfg.voice, cfg.provider, source, cfg.instruct_supported,
+    )
+
     if cfg.provider == "cosyvoice":
         # 延迟导入：dashscope 体积大且只在用到时才需要加载
         from backend.tts.cosyvoice import CosyVoiceTTS

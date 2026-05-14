@@ -859,16 +859,21 @@ function FasterWhisperCard({ showToast }: FasterWhisperCardProps) {
 // Bugfix-3.3 — CosyVoiceTTSCard (TTS tab)
 // ---------------------------------------------------------------------------
 
-interface CosyVoiceVoiceCfg {
+interface SystemVoiceRow {
   id: string;
-  label?: string;
-  traits?: string;
-  instruct?: boolean;
+  label: string;
+  traits: string;
+  instruct: boolean | null;
 }
 
-interface ConfigTtsExtract {
-  default_voice: string;
-  available_voices: CosyVoiceVoiceCfg[];
+interface ClonedVoiceRow {
+  voice_id: string;
+  status?: string | null;
+  update_time?: string | null;
+}
+
+interface UsageMap {
+  [voiceId: string]: Array<{ id: number; name: string }>;
 }
 
 interface CosyVoiceTTSCardProps {
@@ -878,9 +883,51 @@ interface CosyVoiceTTSCardProps {
 
 function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardProps) {
   const [qwenVendor, setQwenVendor] = useState<AIVendor | null>(null);
-  const [voiceId, setVoiceId] = useState<string>('');
-  const [voicesAvail, setVoicesAvail] = useState<CosyVoiceVoiceCfg[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [defaultVoice, setDefaultVoice] = useState<string>('');
+  const [systemVoices, setSystemVoices] = useState<SystemVoiceRow[]>([]);
+  const [clonedVoices, setClonedVoices] = useState<ClonedVoiceRow[]>([]);
+  const [usage, setUsage] = useState<UsageMap>({});
+  const [loadingCloned, setLoadingCloned] = useState(false);
+  const [busyVoice, setBusyVoice] = useState<string | null>(null);
+  // 试听播放状态:正在播的 voice id;null = 无播放
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  // ref to current Audio so toggling 暂停 / 切歌 都能停老的
+  const audioRef = (typeof window !== 'undefined')
+    ? (window as unknown as { _ttsAudio?: HTMLAudioElement | null })
+    : ({} as { _ttsAudio?: HTMLAudioElement | null });
+
+  const refreshUsage = useCallback(async () => {
+    try {
+      const r = await fetch(`${_BACKEND_BASE}/api/tts/voices/usage`);
+      if (!r.ok) return;
+      const j = await r.json() as { by_voice: Array<{ voice: string; characters: Array<{ id: number; name: string }> }> };
+      const m: UsageMap = {};
+      for (const e of j.by_voice) m[e.voice] = e.characters;
+      setUsage(m);
+    } catch {/* ignore */}
+  }, []);
+
+  const refreshCloned = useCallback(async (force: boolean) => {
+    setLoadingCloned(true);
+    try {
+      const url = `${_BACKEND_BASE}/api/tts/voices/cloned${force ? '?force=1' : ''}`;
+      const r = await fetch(url);
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try {
+          const j = await r.json();
+          if (j?.detail) detail = String(j.detail);
+        } catch {/* ignore */}
+        throw new Error(detail);
+      }
+      const j = await r.json() as { voices: ClonedVoiceRow[] };
+      setClonedVoices(j.voices);
+    } catch (e) {
+      showToast(`复刻 voice 加载失败:${(e as Error).message}`);
+    } finally {
+      setLoadingCloned(false);
+    }
+  }, [showToast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -894,56 +941,93 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
             setQwenVendor(vList.find((v) => v.id === 'qwen') ?? null);
           }
         }
-        // 2. 当前 voice + 可选 voices (从 yaml::tts.cosyvoice.default_voice +
-        //    yaml::tts.available_voices.cosyvoice 读)
-        const r2 = await fetch(`${_BACKEND_BASE}/api/config`);
+        // 2. 系统 voice 列表 (yaml::tts.available_voices.cosyvoice)
+        const r2 = await fetch(`${_BACKEND_BASE}/api/tts/voices`);
         if (r2.ok) {
-          const cfg = await r2.json();
+          const j = await r2.json() as { providers: Array<{ id: string; voices: SystemVoiceRow[] }> };
           if (!cancelled) {
-            // /api/config 不暴露 tts 内部字段; 退而读 .tts 不够 → 直接读 yaml
-            // 没接口,只显示 default_voice 的 id (用户暂只看可读名)。
-            // 这里 voicesAvail 通过 hard-coded fallback list (yaml seed) — 真正
-            // 切 voice 走 setConfigField('tts.cosyvoice.default_voice', id)。
-            void cfg;  // /api/config 当前不返 cosyvoice 子节, 等下个 stage 加
+            const cosy = j.providers.find((p) => p.id === 'cosyvoice');
+            setSystemVoices(cosy?.voices ?? []);
           }
         }
-        // Fallback voices list (与 config.yaml 的 seed 一致)
+        // 3. default voice (从 /api/config 取 — 不返 tts 内部字段, 这里读不到
+        //    全局 default; 改成不显示 active marker, 而是按 [设为全局默认] 按钮
+        //    操作)。预留 — 等下个 stage 暴露 tts.cosyvoice.default_voice 字段。
         if (!cancelled) {
-          setVoicesAvail([
-            { id: 'longyumi_v3',   label: '龙裕米 v3',  traits: '正经青年女' },
-            { id: 'longfeifei_v3', label: '龙菲菲 v3',  traits: '甜美娇气女' },
-            { id: 'longwan_v3',    label: '龙婉 v3',    traits: '柔声女' },
-            { id: 'longqiang_v3',  label: '龙强 v3',    traits: '浪漫女' },
-            { id: 'longxing_v3',   label: '龙星 v3',    traits: '邻家女' },
-            { id: 'longanhuan',    label: '龙安欢',     traits: '欢脱元气女' },
-            { id: 'longanyang',    label: '龙安洋',     traits: '阳光大男孩' },
-          ]);
-          setVoiceId('longyumi_v3');
+          setDefaultVoice('');  // 不显示 default 高亮
         }
+        // 4. usage 反向索引
+        await refreshUsage();
+        // 5. 复刻 voice (走缓存)
+        await refreshCloned(false);
       } catch (e) {
         if (!cancelled) {
-          showToast(`加载 CosyVoice 配置失败：${(e as Error).message}`);
+          showToast(`加载 CosyVoice 配置失败:${(e as Error).message}`);
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [showToast]);
+  }, [showToast, refreshUsage, refreshCloned]);
 
-  const onVoiceChange = useCallback(async (next: string) => {
-    if (next === voiceId || busy) return;
-    const prev = voiceId;
-    setVoiceId(next);
-    setBusy(true);
-    try {
-      await setConfigField('tts.cosyvoice.default_voice', next);
-      showToast(`CosyVoice voice → ${next}; 下条回复生效`);
-    } catch (e) {
-      setVoiceId(prev);
-      showToast(`切换 voice 失败：${(e as Error).message}`);
-    } finally {
-      setBusy(false);
+  const onPreview = useCallback(async (voiceId: string) => {
+    // 已在播这个 voice → 暂停
+    if (playingId === voiceId && audioRef._ttsAudio) {
+      audioRef._ttsAudio.pause();
+      audioRef._ttsAudio = null;
+      setPlayingId(null);
+      return;
     }
-  }, [voiceId, busy, showToast]);
+    // 切到别的 voice
+    if (audioRef._ttsAudio) {
+      audioRef._ttsAudio.pause();
+      audioRef._ttsAudio = null;
+    }
+    setPlayingId(voiceId);
+    try {
+      const r = await fetch(`${_BACKEND_BASE}/api/tts/voice/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voice: voiceId }),
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try {
+          const j = await r.json();
+          if (j?.detail) detail = String(j.detail);
+        } catch {/* ignore */}
+        throw new Error(detail);
+      }
+      const j = await r.json() as { audio_b64: string };
+      const a = new Audio(`data:audio/wav;base64,${j.audio_b64}`);
+      audioRef._ttsAudio = a;
+      a.onended = () => {
+        if (audioRef._ttsAudio === a) {
+          audioRef._ttsAudio = null;
+          setPlayingId((cur) => (cur === voiceId ? null : cur));
+        }
+      };
+      await a.play();
+    } catch (e) {
+      showToast(`试听失败:${(e as Error).message}`);
+      setPlayingId(null);
+    }
+  }, [playingId, audioRef, showToast]);
+
+  const onSetGlobalDefault = useCallback(async (voiceId: string) => {
+    if (busyVoice) return;
+    setBusyVoice(voiceId);
+    const prev = defaultVoice;
+    setDefaultVoice(voiceId);
+    try {
+      await setConfigField('tts.cosyvoice.default_voice', voiceId);
+      showToast(`全局默认 voice → ${voiceId.slice(0, 40)}…`);
+    } catch (e) {
+      setDefaultVoice(prev);
+      showToast(`设为默认失败:${(e as Error).message}`);
+    } finally {
+      setBusyVoice(null);
+    }
+  }, [busyVoice, defaultVoice, showToast]);
 
   return (
     <div
@@ -954,7 +1038,7 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
       }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-2.5 min-w-0">
           <Volume2 size={16} style={{ color: 'var(--color-text-accent)' }} />
           <span
@@ -993,51 +1077,197 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
             </span>
           )}
         </div>
-        {qwenVendor && !qwenVendor.has_credential && (
+        <div className="flex items-center gap-2 shrink-0">
+          {qwenVendor && !qwenVendor.has_credential && (
+            <button
+              type="button"
+              onClick={() => onConfigureQwenCred(qwenVendor)}
+              className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded transition"
+              style={{
+                background: 'var(--color-bg-input)',
+                border: '1px solid var(--color-border)',
+                color: 'var(--color-text-primary)',
+              }}
+            >
+              <KeyRound size={12} /> 配置 Qwen 凭证
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => onConfigureQwenCred(qwenVendor)}
-            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded transition shrink-0"
+            onClick={() => void refreshCloned(true)}
+            disabled={loadingCloned}
+            className="flex items-center gap-1 text-[11px] px-2 py-1 rounded transition disabled:opacity-50"
             style={{
-              background: 'var(--color-bg-input)',
+              background: 'transparent',
               border: '1px solid var(--color-border)',
-              color: 'var(--color-text-primary)',
+              color: 'var(--color-text-secondary)',
             }}
+            title="强制刷新 DashScope 复刻列表 (跳过 5min 缓存)"
           >
-            <KeyRound size={12} /> 配置 Qwen 凭证
+            🔄 刷新复刻列表
           </button>
-        )}
-      </div>
-
-      {/* Voice picker */}
-      <div>
-        <label className="block text-xs mb-1"
-          style={{ color: 'var(--color-text-primary)' }}>
-          默认 voice
-        </label>
-        <select
-          value={voiceId}
-          onChange={(e) => void onVoiceChange(e.target.value)}
-          disabled={busy || voicesAvail.length === 0}
-          className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none disabled:opacity-50"
-          style={{
-            background: 'var(--color-bg-input)',
-            border: '1px solid var(--color-border)',
-            color: 'var(--color-text-primary)',
-          }}
-        >
-          {voicesAvail.map((v) => (
-            <option key={v.id} value={v.id}>
-              {v.label ?? v.id}
-              {v.traits ? ` — ${v.traits}` : ''}
-            </option>
-          ))}
-        </select>
-        <div className="text-[10px] mt-1"
-          style={{ color: 'var(--color-text-secondary)' }}>
-          角色级 voice 仍在 ⚙ 设置 → 角色管理 内单独配; 这里是全局 fallback。
         </div>
       </div>
+
+      {/* 系统 voice */}
+      <div className="mb-4">
+        <h5 className="text-[11px] font-medium uppercase tracking-wide mb-1.5"
+          style={{ color: 'var(--color-text-secondary)' }}>
+          系统音色 ({systemVoices.length})
+        </h5>
+        <ul className="space-y-1.5">
+          {systemVoices.map((v) => (
+            <TtsGalleryRow
+              key={v.id}
+              voiceId={v.id}
+              label={v.label}
+              sub={v.traits + (v.instruct ? ' · 支持情感' : '')}
+              kindLabel="系统"
+              isDefault={defaultVoice === v.id}
+              playing={playingId === v.id}
+              busy={busyVoice === v.id}
+              usage={usage[v.id]}
+              onPreview={() => void onPreview(v.id)}
+              onSetDefault={() => void onSetGlobalDefault(v.id)}
+            />
+          ))}
+        </ul>
+      </div>
+
+      {/* 用户复刻 voice */}
+      <div>
+        <h5 className="text-[11px] font-medium uppercase tracking-wide mb-1.5"
+          style={{ color: 'var(--color-text-secondary)' }}>
+          用户复刻 {loadingCloned ? '(加载中…)' : `(${clonedVoices.length})`}
+        </h5>
+        {clonedVoices.length === 0 && !loadingCloned && (
+          <div className="text-[11px] italic px-2 py-2"
+            style={{ color: 'var(--color-text-secondary)' }}>
+            没有复刻 voice。在 DashScope 控制台 (model-studio.console.aliyun.com)
+            复刻后,这里按 [🔄 刷新复刻列表] 拉新。
+          </div>
+        )}
+        <ul className="space-y-1.5">
+          {clonedVoices.map((v) => (
+            <TtsGalleryRow
+              key={v.voice_id}
+              voiceId={v.voice_id}
+              label={v.voice_id.replace(/^cosyvoice-v[\d.]+-plus-bailian-/, '*').slice(0, 22) + '…'}
+              sub={`复刻 · ${v.status ?? '?'}${v.update_time ? ' · ' + v.update_time : ''}`}
+              kindLabel="复刻"
+              isDefault={defaultVoice === v.voice_id}
+              playing={playingId === v.voice_id}
+              busy={busyVoice === v.voice_id}
+              usage={usage[v.voice_id]}
+              onPreview={() => void onPreview(v.voice_id)}
+              onSetDefault={() => void onSetGlobalDefault(v.voice_id)}
+            />
+          ))}
+        </ul>
+      </div>
+
+      <div className="text-[10px] mt-3"
+        style={{ color: 'var(--color-text-secondary)' }}>
+        角色级 voice 在 ⚙ 设置 → 角色管理 内单独配; 此处的 [设为全局默认] 仅用于
+        ``voice_model`` 为空的角色 (作为兜底)。
+      </div>
     </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// TtsGalleryRow — shared row for system / cloned voice
+// ---------------------------------------------------------------------------
+
+interface TtsGalleryRowProps {
+  voiceId: string;
+  label: string;
+  sub: string;
+  kindLabel: string;
+  isDefault: boolean;
+  playing: boolean;
+  busy: boolean;
+  usage?: Array<{ id: number; name: string }>;
+  onPreview: () => void;
+  onSetDefault: () => void;
+}
+
+function TtsGalleryRow({
+  voiceId, label, sub, kindLabel, isDefault, playing, busy,
+  usage, onPreview, onSetDefault,
+}: TtsGalleryRowProps) {
+  return (
+    <li
+      className="rounded-md px-3 py-2 flex items-center gap-3"
+      style={{
+        background: isDefault
+          ? 'color-mix(in srgb, var(--color-accent) 12%, transparent)'
+          : 'var(--color-bg-input)',
+        border: isDefault
+          ? '1px solid var(--color-accent)'
+          : '1px solid var(--color-border-subtle)',
+      }}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-sm truncate"
+            style={{ color: 'var(--color-text-primary)' }}>
+            {label}
+          </span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              color: 'var(--color-text-secondary)',
+            }}>
+            {kindLabel}
+          </span>
+          {isDefault && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+              style={{
+                background: 'var(--color-accent)',
+                color: 'var(--color-bubble-user-text)',
+              }}>
+              全局默认
+            </span>
+          )}
+        </div>
+        <div className="text-[11px] truncate"
+          style={{ color: 'var(--color-text-secondary)' }}>
+          {sub}
+        </div>
+        {usage && usage.length > 0 && (
+          <div className="text-[10px] mt-0.5 truncate"
+            style={{ color: 'var(--color-text-accent)' }}
+            title={usage.map((c) => c.name).join(', ')}>
+            已用于角色:{usage.map((c) => c.name).join(', ')}
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onPreview}
+        className="p-1.5 rounded transition shrink-0"
+        style={{ color: 'var(--color-text-accent)' }}
+        title={playing ? '暂停' : '试听'}
+        aria-label={playing ? '暂停' : '试听'}
+      >
+        {playing ? '⏸' : '▶'}
+      </button>
+      <button
+        type="button"
+        onClick={onSetDefault}
+        disabled={busy || isDefault}
+        className="text-[11px] px-2 py-1 rounded transition disabled:opacity-50 shrink-0"
+        style={{
+          background: isDefault ? 'transparent' : 'var(--color-bg-elevated)',
+          border: '1px solid var(--color-border)',
+          color: 'var(--color-text-primary)',
+        }}
+        title={isDefault ? '已是全局默认' : '设为全局默认 voice'}
+      >
+        {isDefault ? '✓ 默认' : '设为默认'}
+      </button>
+    </li>
   );
 }
