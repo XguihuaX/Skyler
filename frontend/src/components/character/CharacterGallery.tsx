@@ -50,6 +50,44 @@ function getBgSrc(c: { splash_art_url: string | null } | null): string {
   return PLACEHOLDER_BG;
 }
 
+// v4-fan chunk 4.4:重新引入 URL query 调参(Fan-4 retire ?fan=1 时一并
+// 删了导致 ?cy=2000 等不再生效——用户 Fan-4.3 之后的"cy 没生效"诊断
+// 实际就是这个回归)。module scope 一次解析,Gallery 每次 mount 复用。
+//
+//   ?vc=5     visibleCount = 5
+//   ?r=750    radius = 750
+//   ?arc=90   arcDegree = 90
+//   ?dur=300  transitionDuration = 300
+//   ?cy=2000  centerOffsetY = 2000(完全 override 默认公式)
+//   ?debug=1  FanLayout debug overlay + console diagnostic 全开
+const _GALLERY_QUERY = (() => {
+  if (typeof window === 'undefined') {
+    return { debug: false, layoutParams: undefined as undefined };
+  }
+  const sp = new URLSearchParams(window.location.search);
+  const numOrUndef = (key: string): number | undefined => {
+    const v = sp.get(key);
+    if (v == null) return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const lp = {
+    visibleCount:       numOrUndef('vc'),
+    radius:             numOrUndef('r'),
+    arcDegree:          numOrUndef('arc'),
+    transitionDuration: numOrUndef('dur'),
+    centerOffsetY:      numOrUndef('cy'),
+  };
+  // 如果所有 layout 参数都没传 → undefined,让 FanLayout 走纯默认
+  const hasAny = Object.values(lp).some((v) => v !== undefined);
+  return {
+    debug: sp.get('debug') === '1',
+    layoutParams: hasAny
+      ? Object.fromEntries(Object.entries(lp).filter(([, v]) => v !== undefined))
+      : undefined,
+  };
+})();
+
 export default function CharacterGallery() {
   const open  = useAppStore((s) => s.galleryOpen);
   const setOpen = useAppStore((s) => s.setGalleryOpen);
@@ -188,6 +226,8 @@ export default function CharacterGallery() {
           selectedCharId={currentCharacterId}
           onSelectCharacter={handleSelect}
           hideHeroForId={mode === 'detail' ? detailForId : null}
+          layoutParams={_GALLERY_QUERY.layoutParams}
+          debug={_GALLERY_QUERY.debug}
         />
       </div>
 

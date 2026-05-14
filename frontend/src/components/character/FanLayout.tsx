@@ -200,34 +200,79 @@ export default function FanLayout({
   const params: FanLayoutParams = useMemo(() => {
     const rawVC = layoutParams?.visibleCount ?? 7;
     const radius = layoutParams?.radius ?? 600;
-    // v4-fan chunk 4.3:centerOffsetY 公式重新推导。
+    // v4-fan chunk 4.4:第三次推 centerOffsetY 公式。诊断后发现:
+    //   - Fan-4.3 ``H*0.5 + R*0.7`` 把 selected card 视觉中心放在 ~22-28%
+    //     位置,**反而比 Fan-3 更偏上**(那个把 cy 放视口外让 fan 整体 ~48%)
+    //   - 用户报告 "cy=2000 仍偏上" 真实原因:Fan-4 移除 ?fan=1 时
+    //     连 ?cy 等 query parsing 一起删了,?cy=2000 根本没生效
+    //   - overflow-hidden 不是问题(Gallery + FanLayout 都 fixed inset-0,
+    //     viewport bounds 内的卡不被 clip)
     //
-    // 老公式 ``viewportH + 100`` (≈ 1.1×H) 把圆心放屏幕外底下,fan 弧上半
-    // 圈占据屏幕上半 → 视觉重心 ~30%,下半屏空荡。
+    // 新公式(用户拍板"中靠下", selected 视觉中心 60% 高度):
+    //   ``cy = H * 0.6 + R + CARD_H * 1.15 / 2``
     //
-    // 新公式 ``viewportH * 0.5 + radius * 0.7``:
-    //   - viewportH * 0.5 — 把基准从底部对齐改成中线对齐
-    //   - radius * 0.7   — 圆心在中线下方 70% 半径距离
+    // 推导:
+    //   selected_center_y = cy - R - CARD_H*1.15/2 (选中卡 1.15× scale)
+    //   want = 0.6 * H
+    //   → cy = 0.6*H + R + CARD_H*1.15/2
+    //   常量项 (R + 138) 抵消 cardstack height,让 0.6*H 直接落在 selected
+    //   卡视觉中心,不论 H 多大。
     //
-    // 等价于:fan 顶点 (cy - R) 落在屏幕 (0.5 - 0.3) = 20% 高度,fan
-    // 边缘 (cy - R*cos(arcDeg/2)) 落在 ~45-55% 高度(arcDeg 72° 时
-    // ~44%, 90° 时 ~50%)→ 视觉重心 ~32-38%,直觉对齐"中部"。
+    // 实测 viewport 矩阵(R=600, CARD_H=240, 1.15× scale):
+    //   720p:  cy=1170 selected center y=432  (60%)  edge bottom y=685 (95%)
+    //   1080p: cy=1386 selected center y=648  (60%)  edge bottom y=901 (83%)
+    //   1440p: cy=1602 selected center y=864  (60%)  edge bottom y=1117 (78%)
+    //   2160p: cy=2034 selected center y=1296 (60%)  edge bottom y=1549 (72%)
     //
-    // 实测 viewport 矩阵(默认 R=600):
-    //   720p:  cy=780  fan top y=180 (25%) edge bottom y=295 (41%)
-    //   1080p: cy=960  fan top y=360 (33%) edge bottom y=475 (44%)
-    //   1440p: cy=1140 fan top y=540 (38%) edge bottom y=655 (45%)
-    //
-    // 注:720p 时 selected card 顶端可能略出视口顶 (-60px),取舍可接受;
-    // 用户若仍觉位置偏可 ?cy=... 微调。
+    // CARD_H_CONST = 240 是 CharacterCard browse 模式硬编码尺寸;若改响
+    // 应式需把这个值改成 prop / measured。
+    const CARD_H_CONST = 240;
+    const SELECTED_SCALE = 1.15;
     return {
       radius,
-      centerOffsetY:      layoutParams?.centerOffsetY      ?? viewportH * 0.5 + radius * 0.7,
+      centerOffsetY:
+        layoutParams?.centerOffsetY ??
+          viewportH * 0.6 + radius + (CARD_H_CONST * SELECTED_SCALE) / 2,
       arcDegree:          layoutParams?.arcDegree          ?? 72,
       transitionDuration: layoutParams?.transitionDuration ?? 500,
       visibleCount:       normalizeVisibleCount(rawVC),
     };
   }, [layoutParams, viewportH]);
+
+  // v4-fan chunk 4.4 诊断:debug=true 时 useEffect 把 viewport / params /
+  // axis rect / 每张卡 rect 打到 console。data attr 让选择器能定位。
+  // 真机看不到 console 时:URL 加 ?debug=1 → DevTools / Tauri webview
+  // inspector 都能开。
+  useEffect(() => {
+    if (!debug) return;
+    // RAF 等首次 paint 后再 measure,否则 rect 都是空。
+    const raf = requestAnimationFrame(() => {
+      // eslint-disable-next-line no-console
+      console.group('[FanLayout 4.4 diag]');
+      console.log('viewport:', { w: window.innerWidth, h: window.innerHeight });
+      console.log('params:', params);
+      const axis = document.querySelector('[data-fan-axis]');
+      if (axis) {
+        const r = axis.getBoundingClientRect();
+        console.log('axis rect:', { top: r.top, left: r.left, w: r.width, h: r.height });
+      } else {
+        console.warn('axis element not found (data-fan-axis)');
+      }
+      const cards = document.querySelectorAll('[data-fan-card]');
+      console.log(`cards rendered: ${cards.length}`);
+      cards.forEach((el, i) => {
+        const r = el.getBoundingClientRect();
+        const id = el.getAttribute('data-fan-card');
+        console.log(
+          `  card[${i}] cid=${id} top=${r.top.toFixed(0)} left=${r.left.toFixed(0)} ` +
+          `w=${r.width.toFixed(0)} h=${r.height.toFixed(0)} ` +
+          `(center y=${(r.top + r.height / 2).toFixed(0)}, ${((r.top + r.height / 2) / window.innerHeight * 100).toFixed(1)}% of H)`,
+        );
+      });
+      console.groupEnd();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [debug, params, characters, selectedCharId]);
 
   const N = characters.length;
 
@@ -276,6 +321,7 @@ export default function FanLayout({
       )}
 
       <div
+        data-fan-axis
         className="absolute"
         style={{
           left:   '50%',
@@ -317,6 +363,7 @@ export default function FanLayout({
           return (
             <div
               key={c.id}
+              data-fan-card={c.id}
               className="absolute"
               style={{
                 left:    x - CARD_W / 2,
