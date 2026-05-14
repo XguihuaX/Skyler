@@ -37,7 +37,7 @@ def _dashscope_kwargs() -> dict:
 async def _resolve_db_provider_kwargs(
     model_override: Optional[str],
 ) -> tuple[Optional[str], dict]:
-    """Bugfix-3.1: 从 DB 取 LLM active provider + vendor credential。
+    """Bugfix-3.1 / 3.2.5: 从 DB 取 LLM active provider + vendor credential。
 
     Returns:
         ``(resolved_model, kwargs_dict)``。
@@ -46,20 +46,39 @@ async def _resolve_db_provider_kwargs(
           让 caller 走老路径(yaml default_model + dashscope env)
 
     永不抛: DB 异常 / vendor 凭证缺失 → 静默返回 (None, {}), caller 兜底。
+
+    bugfix-3.2.5: 加 ``[llm.dispatcher]`` info log 让真机走查能直接看决策路径。
+    每次 call_llm 都打一行: explicit_override / db_active / fallback_yaml 三选一。
     """
     # caller 显式传 model → 尊重不动, 让老路径处理(不要被 DB active 抢)
     if model_override:
+        logger.info(
+            "[llm.dispatcher] explicit_override model=%s", model_override,
+        )
         return None, {}
     try:
         from backend.database import ai_providers as svc
         active = await svc.get_active_provider("llm")
         if active is None or not active.enabled:
+            logger.info(
+                "[llm.dispatcher] no_db_active (active=%s enabled=%s) → fallback_yaml",
+                None if active is None else active.id,
+                None if active is None else active.enabled,
+            )
             return None, {}
         kwargs: dict = {}
+        credential_source = "none"
         if active.vendor_id:
-            cred = await svc.resolve_vendor_credential(active.vendor_id)
-            if cred:
-                kwargs["api_key"] = cred
+            # 拆开 DB / env 两步以便 log 准确 credential_source
+            db_cred = await svc.get_vendor_credential(active.vendor_id)
+            if db_cred:
+                kwargs["api_key"] = db_cred
+                credential_source = "db"
+            else:
+                env_cred = await svc.resolve_vendor_credential(active.vendor_id)
+                if env_cred:
+                    kwargs["api_key"] = env_cred
+                    credential_source = "env"
             # endpoint: provider.endpoint 优先于 vendor.default_endpoint
             endpoint = active.endpoint
             if not endpoint:
@@ -68,9 +87,15 @@ async def _resolve_db_provider_kwargs(
                     endpoint = v.default_endpoint
             if endpoint:
                 kwargs["api_base"] = endpoint
+        logger.info(
+            "[llm.dispatcher] db_active model=%s vendor=%s credential_source=%s",
+            active.model, active.vendor_id, credential_source,
+        )
         return active.model, kwargs
     except Exception:
-        logger.exception("[bugfix-3.1] DB provider resolve failed, falling back to yaml")
+        logger.exception(
+            "[llm.dispatcher] DB resolve failed, falling back to yaml"
+        )
         return None, {}
 
 
@@ -113,6 +138,12 @@ async def call_llm(
     else:
         resolved_model = model or get_default_model()
         merged = {**_dashscope_kwargs(), **kwargs}
+        if not model:  # explicit override 已经在 dispatcher log 过
+            logger.info(
+                "[llm.dispatcher] fallback_yaml model=%s "
+                "dashscope_kwargs=%s",
+                resolved_model, "yes" if _dashscope_kwargs() else "no",
+            )
 
     if enable_search:
         model_lower = resolved_model.lower()

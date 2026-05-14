@@ -205,6 +205,46 @@ async def test_activate_uses_env_fallback():
         settings.dashscope_api_key = saved
 
 
+async def test_auto_activate_on_env_credential():
+    """Bugfix-3.2.5: 老用户首启平滑过渡 —— migration 跑时若 .env 有 vendor key
+    且 DB 没 is_active LLM provider, 自动 activate 第一个 vendor 凭证可用的
+    builtin (优先 yaml default 匹配)。"""
+    print("\n[9] auto_activate_on_env_credential")
+    # 准备 fresh state: deactivate 全部 LLM (sql) — 模拟首次启动 DB
+    from sqlalchemy import text as sa_text
+    async with TEST_ENGINE.begin() as conn:
+        await conn.execute(sa_text(
+            "UPDATE ai_providers SET is_active=0 WHERE type='llm'"
+        ))
+        # 也清掉前测留下的 DB 凭证以确保 .env 是唯一路径
+        await conn.execute(sa_text("DELETE FROM ai_vendor_credentials"))
+    # 模拟 .env 配 DASHSCOPE_API_KEY
+    from backend.config import settings
+    saved = settings.dashscope_api_key
+    settings.dashscope_api_key = "sk-env-dashscope"  # type: ignore[assignment]
+    try:
+        # 重跑 migration → auto_activate 应该选 Qwen 的第一个 (matches yaml
+        # default_model "deepseek/deepseek-chat" 默认实际无匹配, 走 seed 顺序
+        # → qwen 优先)
+        await run_migration()
+        active = await svc.get_active_provider("llm")
+        check("auto-activate happened",
+              active is not None, f"got={active}")
+        check("activated provider is from Qwen vendor",
+              active is not None and active.vendor_id == "qwen",
+              f"got vendor={None if active is None else active.vendor_id}")
+
+        # 再跑一次 migration → 不应改变(尊重已有 active)
+        first_id = active.id if active else None
+        await run_migration()
+        active2 = await svc.get_active_provider("llm")
+        check("migration idempotent — active not changed",
+              active2 is not None and active2.id == first_id,
+              f"got new id={None if active2 is None else active2.id}")
+    finally:
+        settings.dashscope_api_key = saved
+
+
 async def test_dispatcher_via_vendor_credentials():
     print("\n[8] dispatcher_via_vendor_credentials")
     # 给 openai vendor 设 DB credential
@@ -244,6 +284,7 @@ async def _main():
     await test_list_providers_grouped_by_vendor()
     await test_activate_requires_credential()
     await test_activate_uses_env_fallback()
+    await test_auto_activate_on_env_credential()
     await test_dispatcher_via_vendor_credentials()
 
 

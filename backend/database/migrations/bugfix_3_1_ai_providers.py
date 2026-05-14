@@ -204,7 +204,69 @@ async def run_migration() -> None:
         logger.info("[bugfix-3.1] seeded %d builtin LLM providers (existing kept)",
                     seeded_providers)
 
+    # ---- bugfix-3.2.5: auto-activate first provider with resolvable credential ----
+    # 老用户首次启动新版本时, DB seed 全部 is_active=0, dispatcher 会
+    # fallback 到 yaml default_model — 跟"用 UI 切换 provider"的语义不一致。
+    # 这里幂等检查: 若已有任一 is_active=1 → 跳过(尊重用户选择); 否则按 seed
+    # 顺序找第一个 vendor 凭证可用(DB or .env)的 builtin provider, 自动 activate。
+    #
+    # 优先级:yaml default_model 匹配的 provider 优先(老用户最熟悉)。匹配靠
+    # substring(yaml `openai/qwen3.6-max-preview` vs DB `qwen3.6-max-preview`,
+    # 不严格相等以容忍 prefix 差异)。匹配失败回退到 seed 顺序第一个有 cred 的。
+    await _auto_activate_if_none(engine)
+
     logger.info("[bugfix-3.1] migration done")
+
+
+async def _auto_activate_if_none(engine_obj) -> None:
+    """Bugfix-3.2.5: 若 DB 无 LLM is_active → 选第一个凭证可用的 builtin activate。
+    幂等: 已有 is_active=1 → 不动; 都无凭证 → 留空(dispatcher fallback yaml)。"""
+    from backend.config import get_default_model
+    from backend.database import ai_providers as svc
+
+    async with engine_obj.begin() as conn:
+        await conn.execute(text("PRAGMA foreign_keys = ON"))
+        row = (await conn.execute(text(
+            "SELECT id FROM ai_providers WHERE type='llm' AND is_active=1 LIMIT 1"
+        ))).first()
+        if row is not None:
+            logger.info("[bugfix-3.2.5] auto-activate skip — existing active LLM provider")
+            return
+
+    yaml_default = get_default_model() or ""
+    # 候选: yaml-default substring 命中的先, 其余按 seed 顺序
+    providers = await svc.list_providers("llm")
+    builtin = [p for p in providers if p.provider_kind == "builtin"]
+    matching = [p for p in builtin if p.model and (
+        p.model == yaml_default or
+        p.model in yaml_default or yaml_default in p.model
+    )]
+    candidates = matching + [p for p in builtin if p not in matching]
+
+    for p in candidates:
+        if not p.vendor_id:
+            continue
+        cred = await svc.resolve_vendor_credential(p.vendor_id)
+        if not cred:
+            continue
+        result = await svc.activate_provider(p.id)
+        if result == "ok":
+            logger.info(
+                "[bugfix-3.2.5] auto-activated provider id=%s name=%r model=%s "
+                "(matched yaml_default=%r)",
+                p.id, p.name, p.model, yaml_default,
+            )
+            return
+        logger.warning(
+            "[bugfix-3.2.5] auto-activate candidate id=%s failed: %s",
+            p.id, result,
+        )
+
+    logger.info(
+        "[bugfix-3.2.5] auto-activate skip — no builtin LLM provider with "
+        "resolvable credential (DB or .env). Set DASHSCOPE_API_KEY / "
+        "OPENAI_API_KEY / etc, or POST /api/ai-vendors/<id>/credentials"
+    )
 
 
 if __name__ == "__main__":
