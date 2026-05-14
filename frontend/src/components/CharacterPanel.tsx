@@ -37,6 +37,7 @@ import {
   parseVoiceModelJson,
 } from '../lib/tts';
 import VoicePickerModal from './VoicePickerModal';
+import { fetchVoiceAliases, resolveVoiceName } from '../lib/voiceAliases';
 
 const DEFAULT_CHARACTER_NAME = 'Momo';
 const PERSONA_PREVIEW_LEN = 30;
@@ -318,6 +319,10 @@ export default function CharacterPanel() {
   const [showLive2DUpload, setShowLive2DUpload] = useState(false);
   // bugfix-3.3.1: VoicePickerModal 开关
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
+  // bugfix-3.4: cloned voice + aliases — dropdown 列全部 cloned voice 而非
+  // 仅当前角色,让用户能 cross-assign。aliases 给友好名显示。
+  const [clonedVoices, setClonedVoices] = useState<Array<{ voice_id: string }>>([]);
+  const [voiceAliases, setVoiceAliases] = useState<Record<string, string>>({});
   const [pendingMotionMap, setPendingMotionMap] = useState<{
     targetCharacterId: number;
     targetCharacterName: string;
@@ -521,6 +526,27 @@ export default function CharacterPanel() {
     // 触发重拉（避免清空后又自动重拉成死循环）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTts]);
+
+  // bugfix-3.4: 拉全 cloned voice (DashScope) + aliases map (友好名)。
+  // 让 TTS voice dropdown 能看到所有 cloned voice (含其他角色绑的) → 用户
+  // 可 cross-assign,例如把"八重神子 voice"分给"凝光"。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('http://127.0.0.1:8000/api/tts/voices/cloned');
+        if (r.ok) {
+          const j = await r.json() as { voices: Array<{ voice_id: string }> };
+          if (!cancelled) setClonedVoices(j.voices);
+        }
+      } catch { /* 静默 — dropdown 无 cloned 也能用 */ }
+      try {
+        const m = await fetchVoiceAliases();
+        if (!cancelled) setVoiceAliases(m);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const startCreate = () => {
     setForm({ ...EMPTY_FORM, mode: 'create' });
@@ -930,18 +956,47 @@ export default function CharacterPanel() {
                     <div className="relative mb-1">
                       <select
                         value={selectedVoiceId}
-                        onChange={(e) => onVoiceChange(e.target.value)}
+                        onChange={(e) => {
+                          // bugfix-3.4: cloned voice option → 走 instruct_supported=true
+                          // (即便模型 v3.5-plus 当前 backend 会 skip instruction)。
+                          const newId = e.target.value;
+                          const isCloned = clonedVoices.some((c) => c.voice_id === newId);
+                          if (isCloned) {
+                            // 跟 VoicePickerModal 同样的 voice_model JSON shape
+                            setForm({
+                              ...form,
+                              voice_model: buildVoiceModelJson(
+                                'cosyvoice', newId, true,
+                              ),
+                            });
+                          } else {
+                            onVoiceChange(newId);
+                          }
+                        }}
                         className="w-full appearance-none rounded-md px-2 py-1.5 pr-8 text-sm focus:outline-none"
                         style={inputStyle}
                       >
                         {/* 当前 voice 不在新拉的列表里 → 保留为"自定义"项不丢
                             数据（比如配置文件 yaml 删了某个音色但角色还在用）*/}
-                        {selectedVoiceId &&
-                          !selectedProvider.voices.some((v) => v.id === selectedVoiceId) && (
+                        {selectedVoiceId
+                          && !selectedProvider.voices.some((v) => v.id === selectedVoiceId)
+                          && !clonedVoices.some((c) => c.voice_id === selectedVoiceId) && (
                             <option value={selectedVoiceId}>
-                              自定义：{selectedVoiceId}
+                              自定义:{selectedVoiceId}
                             </option>
                           )}
+                        {/* bugfix-3.4: cosyvoice provider 下额外把所有 cloned voice
+                            列出来 (跨角色), 友好名走 voiceAliases。其他 provider
+                            (edge/sovits) 不展示 cloned。 */}
+                        {selectedProvider.id === 'cosyvoice' && clonedVoices.length > 0 && (
+                          <optgroup label="── 用户复刻 ──">
+                            {clonedVoices.map((c) => (
+                              <option key={c.voice_id} value={c.voice_id}>
+                                {resolveVoiceName(c.voice_id, voiceAliases)} · 复刻
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
                         {selectedProvider.voices.map((v) => (
                           <option key={v.id} value={v.id}>
                             {v.label}

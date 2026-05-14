@@ -106,6 +106,10 @@ from backend.database.migrations.bugfix_3_2_8_dedup_and_trim_seed import (
 from backend.database.migrations.bugfix_3_3_1_seed_cloned_voices import (
     run_migration as migrate_bugfix_3_3_1_seed_cloned_voices,
 )
+# bugfix-3.4: voice_aliases 表 + 从 characters 自动 seed 友好名
+from backend.database.migrations.bugfix_3_4_voice_aliases import (
+    run_migration as migrate_bugfix_3_4_voice_aliases,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -292,6 +296,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 用户在 DashScope 控制台复刻了 3 个 voice, 这里写入对应 character.voice_model
     # JSON。幂等:已是 cloned voice 不动; 其他 (NULL / 系统 longxxx) 才覆盖。
     await migrate_bugfix_3_3_1_seed_cloned_voices()
+
+    # ── 1b26. Bugfix-3.4: voice_aliases 表 + 从 characters 自动 seed 友好名 ──
+    # CREATE TABLE voice_aliases + 反查 characters.voice_model 给已绑 cloned
+    # voice 的角色 seed ``<角色名> voice`` 友好名。幂等 (INSERT OR IGNORE)。
+    # 必须在 3.3.1 之后跑 — 不然反查不到 char→voice 映射。
+    await migrate_bugfix_3_4_voice_aliases()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

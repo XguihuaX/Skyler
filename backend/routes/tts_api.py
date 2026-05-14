@@ -307,3 +307,42 @@ async def voice_usage() -> Any:
         by_voice=[VoiceUsageEntry(voice=v, characters=chars)
                   for v, chars in sorted(by_voice.items())],
     )
+
+
+# ---------------------------------------------------------------------------
+# Bugfix-3.4 — voice_aliases (用户给 cloned voice 自定义友好名)
+# ---------------------------------------------------------------------------
+
+
+class VoiceAliasMap(BaseModel):
+    # voice_id → display_name. 直接 dict 给前端 O(1) 查。
+    aliases: dict[str, str]
+
+
+class VoiceAliasSetBody(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=64)
+
+
+@router.get("/tts/voices/aliases", response_model=VoiceAliasMap)
+async def list_voice_aliases() -> Any:
+    """全量 voice_id → display_name map。前端拉一次后 O(1) 查。"""
+    from backend.database import voice_aliases as svc
+    aliases = await svc.list_aliases()
+    return VoiceAliasMap(aliases=aliases)
+
+
+@router.put("/tts/voices/aliases/{voice_id}", status_code=204)
+async def set_voice_alias(voice_id: str, body: VoiceAliasSetBody) -> None:
+    """Upsert alias。空 display_name → 400。"""
+    from backend.database import voice_aliases as svc
+    name = body.display_name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="display_name 不能为空")
+    await svc.set_alias(voice_id, name)
+
+
+@router.delete("/tts/voices/aliases/{voice_id}", status_code=204)
+async def delete_voice_alias(voice_id: str) -> None:
+    """删 alias;下次显示走 fallback (character.name + ' voice' 或截断 id)。"""
+    from backend.database import voice_aliases as svc
+    await svc.delete_alias(voice_id)

@@ -74,6 +74,17 @@ _INSTRUCT_EMOTION_WHITELIST: frozenset[str] = frozenset({
 })
 
 
+# bugfix-3.4: cosyvoice-v3.5-plus / v3.5-flash 系列 (含用户复刻 voice 跑这两个
+# 模型) 当前不支持 ``instruction`` 参数,SDK 调用直接返 ``Engine return error
+# code: 418 InvalidParameter``。这里硬性 skip instruction (即便 voice JSON 标
+# ``instruct_supported=true``),走 plain text 路径保合成成功。等 DashScope 官
+# 方支持 v3.5-plus instruct 后,从这个集合移除。v4.1+ backlog。
+_MODELS_WITHOUT_INSTRUCT: frozenset[str] = frozenset({
+    "cosyvoice-v3.5-plus",
+    "cosyvoice-v3.5-flash",
+})
+
+
 # 中文情感词 → CosyVoice 英文情感值。语义见 _normalise_emotion 注释：
 # - 命中本表 → 返回映射的英文值
 # - 未命中（已是英文枚举如 "happy"，或未知中文如 "困惑"）→ 透传不变
@@ -108,9 +119,20 @@ class CosyVoiceTTS(TTSBase):
         self,
         voice: Optional[str] = None,
         instruct_supported: bool = False,
+        model: Optional[str] = None,
     ) -> None:
+        """构造 CosyVoiceTTS。
+
+        Args:
+            voice: 音色 ID。None → yaml default_voice。
+            instruct_supported: 该音色是否支持 instruct 情感引导。
+            model: bugfix-3.4 — DashScope CosyVoice model 版本。None → yaml
+                ``tts.cosyvoice.model``。非空时优先于 yaml — 让用户复刻 voice
+                (跑 cosyvoice-v3.5-plus) 与系统 voice (跑 v3-flash) 在同一进程
+                内并存,不会因 model/voice 不匹配返 418。
+        """
         cfg = get_cosyvoice_config()
-        self.model: str = cfg.get("model", "cosyvoice-v3-flash")
+        self.model: str = model or cfg.get("model", "cosyvoice-v3-flash")
         self.voice: str = voice or cfg.get("default_voice", "longyumi_v3")
         self.instruct_supported: bool = bool(instruct_supported)
         # 模块级单例配置 API key — DashScope SDK 通过模块属性读取
@@ -139,9 +161,14 @@ class CosyVoiceTTS(TTSBase):
             # 24kHz mono 16bit WAV — 浏览器原生可播
             "format": AudioFormat.WAV_24000HZ_MONO_16BIT,
         }
+        # bugfix-3.4: v3.5-plus / v3.5-flash 模型即便 voice 标 instruct_supported
+        # 也跑 instruction → 418。这里硬性 skip,走 plain text 保合成成功。
+        # 等 DashScope 支持 v3.5-plus instruct 后从 _MODELS_WITHOUT_INSTRUCT 移除。
+        model_blocks_instruct = self.model in _MODELS_WITHOUT_INSTRUCT
         emotion_active = (
             self.instruct_supported
             and emotion_en in _INSTRUCT_EMOTION_WHITELIST
+            and not model_blocks_instruct
         )
         if emotion_active:
             # 文档严格格式："你说话的情感是{emotion}。"
@@ -152,6 +179,13 @@ class CosyVoiceTTS(TTSBase):
             logger.debug(
                 '[CosyVoice instruct] voice=%s emotion=%s instruction="%s"',
                 self.voice, emotion_en, instruction,
+            )
+        elif model_blocks_instruct and emotion_en and emotion_en != "neutral":
+            # 明示 log: voice 本来 instruct_supported=True 但 model 整体不支持
+            logger.info(
+                "[CosyVoice] model=%s 不支持 instruction, voice=%s emotion=%s "
+                "→ plain text (v4.1+ DashScope 加 v3.5-plus instruct 后取消)",
+                self.model, self.voice, emotion_en,
             )
         else:
             # 三种情况会落这里：音色不支持 instruct / emotion 未在白名单 /

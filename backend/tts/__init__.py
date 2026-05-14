@@ -248,8 +248,9 @@ def _build_engine(voice_model: Optional[str] = None) -> TTSBase:
         else "character_db"
     )
     logger.info(
-        "[TTS] synthesize voice=%s provider=%s source=%s instruct=%s",
-        cfg.voice, cfg.provider, source, cfg.instruct_supported,
+        "[TTS] synthesize voice=%s provider=%s model=%s source=%s instruct=%s",
+        cfg.voice, cfg.provider, cfg.model or "<yaml-default>",
+        source, cfg.instruct_supported,
     )
 
     if cfg.provider == "cosyvoice":
@@ -258,6 +259,7 @@ def _build_engine(voice_model: Optional[str] = None) -> TTSBase:
         return CosyVoiceTTS(
             voice=cfg.voice,
             instruct_supported=cfg.instruct_supported,
+            model=cfg.model,  # bugfix-3.4: model 透传, v3.5-plus / v3-flash 并存
         )
     if cfg.provider == "edge":
         return _LegacyProviderAdapter(EdgeTTSProvider(), character=cfg.voice)

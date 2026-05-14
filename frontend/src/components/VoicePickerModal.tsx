@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Play, Pause, RefreshCw, X, CheckCircle2 } from 'lucide-react';
+import { fetchVoiceAliases, resolveVoiceName } from '../lib/voiceAliases';
 
 const _BACKEND_BASE = 'http://127.0.0.1:8000';
 
@@ -81,6 +82,8 @@ export default function VoicePickerModal({
   const [systemVoices, setSystemVoices] = useState<SystemVoiceInfo[]>([]);
   const [clonedVoices, setClonedVoices] = useState<ClonedVoiceInfo[]>([]);
   const [usageByVoice, setUsageByVoice] = useState<Record<string, Array<{ id: number; name: string }>>>({});
+  // bugfix-3.4: 拉 aliases map, 显示友好名
+  const [aliases, setAliases] = useState<Record<string, string>>({});
   const [selectedId, setSelectedId] = useState<string>(currentVoice ?? '');
   const [loadingSys, setLoadingSys] = useState(false);
   const [loadingCloned, setLoadingCloned] = useState(false);
@@ -136,17 +139,25 @@ export default function VoicePickerModal({
     } catch {/* ignore */}
   }, []);
 
+  const refreshAliases = useCallback(async () => {
+    try {
+      const m = await fetchVoiceAliases();
+      setAliases(m);
+    } catch {/* ignore */}
+  }, []);
+
   useEffect(() => {
     void refreshSystem();
     void refreshCloned();
     void refreshUsage();
+    void refreshAliases();
     return () => {
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
       }
     };
-  }, [refreshSystem, refreshCloned, refreshUsage]);
+  }, [refreshSystem, refreshCloned, refreshUsage, refreshAliases]);
 
   const onPreview = useCallback(async (voiceId: string) => {
     // 已在播这个 voice → 暂停
@@ -298,8 +309,9 @@ export default function VoicePickerModal({
               <VoiceRow
                 key={v.voice_id}
                 voiceId={v.voice_id}
-                label={v.voice_id.replace(/^cosyvoice-v\d[.\d]*-plus-bailian-/, '*')
-                  .slice(0, 22) + '…'}
+                // bugfix-3.4: 复刻 voice 用 alias 友好名 (eg "八重神子 voice");
+                // 无 alias fallback 到截断 raw id。
+                label={resolveVoiceName(v.voice_id, aliases)}
                 sub={`复刻 · ${v.status ?? '?'} · ${v.update_time ?? v.create_time ?? ''}`}
                 kindLabel="复刻"
                 selected={selectedId === v.voice_id}
@@ -310,6 +322,13 @@ export default function VoicePickerModal({
               />
             ))}
           </ul>
+          {clonedVoices.length > 0 && (
+            <div className="text-[10px] mt-1.5 px-1"
+              style={{ color: 'var(--color-text-secondary)' }}>
+              ⓘ 复刻 voice 跑 cosyvoice-v3.5-plus 模型,当前不支持情感引导(plain
+              text 播放)。v4.1+ DashScope 支持后开放。
+            </div>
+          )}
         </div>
 
         {/* Actions */}

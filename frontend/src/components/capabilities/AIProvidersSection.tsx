@@ -10,6 +10,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { setConfigField } from '../../lib/window';
+import { fetchVoiceAliases, setVoiceAlias, resolveVoiceName } from '../../lib/voiceAliases';
 import {
   type AIProvider,
   type AIVendor,
@@ -889,6 +890,10 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
   const [usage, setUsage] = useState<UsageMap>({});
   const [loadingCloned, setLoadingCloned] = useState(false);
   const [busyVoice, setBusyVoice] = useState<string | null>(null);
+  // bugfix-3.4: aliases map (voice_id → display_name) + inline rename state
+  const [aliases, setAliases] = useState<Record<string, string>>({});
+  const [renamingVoice, setRenamingVoice] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState<string>('');
   // 试听播放状态:正在播的 voice id;null = 无播放
   const [playingId, setPlayingId] = useState<string | null>(null);
   // ref to current Audio so toggling 暂停 / 切歌 都能停老的
@@ -906,6 +911,30 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
       setUsage(m);
     } catch {/* ignore */}
   }, []);
+
+  const refreshAliases = useCallback(async () => {
+    try {
+      const m = await fetchVoiceAliases();
+      setAliases(m);
+    } catch {/* ignore */}
+  }, []);
+
+  const onSubmitRename = useCallback(async (voiceId: string) => {
+    const next = renameDraft.trim();
+    if (!next) {
+      setRenamingVoice(null);
+      return;
+    }
+    try {
+      await setVoiceAlias(voiceId, next);
+      setAliases((m) => ({ ...m, [voiceId]: next }));
+      showToast(`已重命名 → ${next}`);
+    } catch (e) {
+      showToast(`重命名失败:${(e as Error).message}`);
+    } finally {
+      setRenamingVoice(null);
+    }
+  }, [renameDraft, showToast]);
 
   const refreshCloned = useCallback(async (force: boolean) => {
     setLoadingCloned(true);
@@ -960,6 +989,8 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
         await refreshUsage();
         // 5. 复刻 voice (走缓存)
         await refreshCloned(false);
+        // 6. bugfix-3.4: alias map
+        await refreshAliases();
       } catch (e) {
         if (!cancelled) {
           showToast(`加载 CosyVoice 配置失败:${(e as Error).message}`);
@@ -967,7 +998,7 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
       }
     })();
     return () => { cancelled = true; };
-  }, [showToast, refreshUsage, refreshCloned]);
+  }, [showToast, refreshUsage, refreshCloned, refreshAliases]);
 
   const onPreview = useCallback(async (voiceId: string) => {
     // 已在播这个 voice → 暂停
@@ -1148,21 +1179,38 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
           </div>
         )}
         <ul className="space-y-1.5">
-          {clonedVoices.map((v) => (
-            <TtsGalleryRow
-              key={v.voice_id}
-              voiceId={v.voice_id}
-              label={v.voice_id.replace(/^cosyvoice-v[\d.]+-plus-bailian-/, '*').slice(0, 22) + '…'}
-              sub={`复刻 · ${v.status ?? '?'}${v.update_time ? ' · ' + v.update_time : ''}`}
-              kindLabel="复刻"
-              isDefault={defaultVoice === v.voice_id}
-              playing={playingId === v.voice_id}
-              busy={busyVoice === v.voice_id}
-              usage={usage[v.voice_id]}
-              onPreview={() => void onPreview(v.voice_id)}
-              onSetDefault={() => void onSetGlobalDefault(v.voice_id)}
-            />
-          ))}
+          {clonedVoices.map((v) => {
+            const isRenaming = renamingVoice === v.voice_id;
+            const friendly = resolveVoiceName(v.voice_id, aliases);
+            return (
+              <TtsGalleryRow
+                key={v.voice_id}
+                voiceId={v.voice_id}
+                // bugfix-3.4: 用友好名 (alias 优先 / fallback 截断 id)
+                label={friendly}
+                sub={`复刻 · cosyvoice-v3.5-plus · ${v.status ?? '?'}${v.update_time ? ' · ' + v.update_time : ''}`}
+                kindLabel="复刻"
+                isDefault={defaultVoice === v.voice_id}
+                playing={playingId === v.voice_id}
+                busy={busyVoice === v.voice_id}
+                usage={usage[v.voice_id]}
+                onPreview={() => void onPreview(v.voice_id)}
+                onSetDefault={() => void onSetGlobalDefault(v.voice_id)}
+                // bugfix-3.4: 重命名相关
+                isRenaming={isRenaming}
+                renameDraft={renameDraft}
+                onStartRename={() => {
+                  setRenameDraft(friendly);
+                  setRenamingVoice(v.voice_id);
+                }}
+                onChangeRenameDraft={setRenameDraft}
+                onSubmitRename={() => void onSubmitRename(v.voice_id)}
+                onCancelRename={() => setRenamingVoice(null)}
+                // bugfix-3.4: v3.5-plus 模型 banner
+                noteText="ⓘ cosyvoice-v3.5-plus, 暂无情绪表达 (v4.1+)"
+              />
+            );
+          })}
         </ul>
       </div>
 
@@ -1191,15 +1239,26 @@ interface TtsGalleryRowProps {
   usage?: Array<{ id: number; name: string }>;
   onPreview: () => void;
   onSetDefault: () => void;
+  // bugfix-3.4: 重命名相关 (仅复刻 voice 显示按钮)
+  isRenaming?: boolean;
+  renameDraft?: string;
+  onStartRename?: () => void;
+  onChangeRenameDraft?: (next: string) => void;
+  onSubmitRename?: () => void;
+  onCancelRename?: () => void;
+  noteText?: string;  // bugfix-3.4: 行底 small note (v3.5-plus 无 emotion 等)
 }
 
 function TtsGalleryRow({
   voiceId, label, sub, kindLabel, isDefault, playing, busy,
   usage, onPreview, onSetDefault,
+  isRenaming, renameDraft, onStartRename, onChangeRenameDraft,
+  onSubmitRename, onCancelRename, noteText,
 }: TtsGalleryRowProps) {
+  const canRename = !!onStartRename;
   return (
     <li
-      className="rounded-md px-3 py-2 flex items-center gap-3"
+      className="rounded-md px-3 py-2 flex flex-col gap-1"
       style={{
         background: isDefault
           ? 'color-mix(in srgb, var(--color-accent) 12%, transparent)'
@@ -1209,65 +1268,133 @@ function TtsGalleryRow({
           : '1px solid var(--color-border-subtle)',
       }}
     >
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-sm truncate"
-            style={{ color: 'var(--color-text-primary)' }}>
-            {label}
-          </span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-            style={{
-              background: 'var(--color-bg-elevated)',
-              color: 'var(--color-text-secondary)',
-            }}>
-            {kindLabel}
-          </span>
-          {isDefault && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-              style={{
-                background: 'var(--color-accent)',
-                color: 'var(--color-bubble-user-text)',
-              }}>
-              全局默认
-            </span>
+      <div className="flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {isRenaming ? (
+              <>
+                <input
+                  type="text"
+                  value={renameDraft ?? ''}
+                  onChange={(e) => onChangeRenameDraft?.(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') onSubmitRename?.();
+                    else if (e.key === 'Escape') onCancelRename?.();
+                  }}
+                  autoFocus
+                  className="text-sm rounded px-1.5 py-0.5 focus:outline-none flex-1 min-w-0"
+                  style={{
+                    background: 'var(--color-bg-elevated)',
+                    border: '1px solid var(--color-accent)',
+                    color: 'var(--color-text-primary)',
+                  }}
+                  maxLength={64}
+                />
+                <button
+                  type="button"
+                  onClick={onSubmitRename}
+                  className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                  style={{
+                    background: 'var(--color-accent)',
+                    color: 'var(--color-bubble-user-text)',
+                  }}
+                  title="保存 (Enter)"
+                >
+                  ✓ 保存
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancelRename}
+                  className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                  style={{
+                    background: 'var(--color-bg-elevated)',
+                    color: 'var(--color-text-secondary)',
+                  }}
+                  title="取消 (Esc)"
+                >
+                  取消
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="text-sm truncate"
+                  style={{ color: 'var(--color-text-primary)' }}>
+                  {label}
+                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                  style={{
+                    background: 'var(--color-bg-elevated)',
+                    color: 'var(--color-text-secondary)',
+                  }}>
+                  {kindLabel}
+                </span>
+                {isDefault && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                    style={{
+                      background: 'var(--color-accent)',
+                      color: 'var(--color-bubble-user-text)',
+                    }}>
+                    全局默认
+                  </span>
+                )}
+                {canRename && (
+                  <button
+                    type="button"
+                    onClick={onStartRename}
+                    className="text-[10px] px-1 py-0.5 rounded hover:opacity-70 shrink-0"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                    title="为此 voice 自定义名称"
+                  >
+                    ✏️ 重命名
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+          <div className="text-[11px] truncate"
+            style={{ color: 'var(--color-text-secondary)' }}
+            title={voiceId}>
+            {sub}
+          </div>
+          {usage && usage.length > 0 && (
+            <div className="text-[10px] mt-0.5 truncate"
+              style={{ color: 'var(--color-text-accent)' }}
+              title={usage.map((c) => c.name).join(', ')}>
+              已用于角色:{usage.map((c) => c.name).join(', ')}
+            </div>
           )}
         </div>
-        <div className="text-[11px] truncate"
-          style={{ color: 'var(--color-text-secondary)' }}>
-          {sub}
-        </div>
-        {usage && usage.length > 0 && (
-          <div className="text-[10px] mt-0.5 truncate"
-            style={{ color: 'var(--color-text-accent)' }}
-            title={usage.map((c) => c.name).join(', ')}>
-            已用于角色:{usage.map((c) => c.name).join(', ')}
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={onPreview}
+          className="p-1.5 rounded transition shrink-0"
+          style={{ color: 'var(--color-text-accent)' }}
+          title={playing ? '暂停' : '试听'}
+          aria-label={playing ? '暂停' : '试听'}
+        >
+          {playing ? '⏸' : '▶'}
+        </button>
+        <button
+          type="button"
+          onClick={onSetDefault}
+          disabled={busy || isDefault}
+          className="text-[11px] px-2 py-1 rounded transition disabled:opacity-50 shrink-0"
+          style={{
+            background: isDefault ? 'transparent' : 'var(--color-bg-elevated)',
+            border: '1px solid var(--color-border)',
+            color: 'var(--color-text-primary)',
+          }}
+          title={isDefault ? '已是全局默认' : '设为全局默认 voice'}
+        >
+          {isDefault ? '✓ 默认' : '设为默认'}
+        </button>
       </div>
-      <button
-        type="button"
-        onClick={onPreview}
-        className="p-1.5 rounded transition shrink-0"
-        style={{ color: 'var(--color-text-accent)' }}
-        title={playing ? '暂停' : '试听'}
-        aria-label={playing ? '暂停' : '试听'}
-      >
-        {playing ? '⏸' : '▶'}
-      </button>
-      <button
-        type="button"
-        onClick={onSetDefault}
-        disabled={busy || isDefault}
-        className="text-[11px] px-2 py-1 rounded transition disabled:opacity-50 shrink-0"
-        style={{
-          background: isDefault ? 'transparent' : 'var(--color-bg-elevated)',
-          border: '1px solid var(--color-border)',
-          color: 'var(--color-text-primary)',
-        }}
-        title={isDefault ? '已是全局默认' : '设为全局默认 voice'}
-      >
-        {isDefault ? '✓ 默认' : '设为默认'}
-      </button>
+      {noteText && (
+        <div className="text-[10px]"
+          style={{ color: 'var(--color-text-secondary)' }}>
+          {noteText}
+        </div>
+      )}
     </li>
   );
 }

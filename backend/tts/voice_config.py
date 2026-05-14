@@ -36,10 +36,16 @@ class VoiceConfig:
         voice:              音色 ID (cosyvoice / edge) 或模型路径 (sovits)
         instruct_supported: 该音色是否支持 instruct/情感引导。
                             False 时即便上层传了 emotion 也会被忽略。
+        model:              bugfix-3.4: TTS provider 的 model 版本。None →
+                            走全局 yaml 默认 (yaml::tts.cosyvoice.model)。
+                            非空时优先于 yaml — 让 cosyvoice-v3.5-plus 复刻
+                            voice 与 cosyvoice-v3-flash 系统 voice 同 DB 表
+                            和谐共存。
     """
     provider: str
     voice: str
     instruct_supported: bool = False
+    model: Optional[str] = None
 
 
 def parse_voice_config(
@@ -70,10 +76,14 @@ def parse_voice_config(
             voice = data.get("model_path") or data.get("voice") or default.voice
         else:
             voice = data.get("voice") or default.voice
+        # bugfix-3.4: model 字段从 voice_model JSON 透传出来 (None = yaml fallback)
+        raw_model = data.get("model")
+        model = raw_model.strip() if isinstance(raw_model, str) and raw_model.strip() else None
         return VoiceConfig(
             provider=provider,
             voice=voice,
             instruct_supported=bool(data.get("instruct_supported", False)),
+            model=model,
         )
     except (json.JSONDecodeError, TypeError) as exc:
         logger.warning(
