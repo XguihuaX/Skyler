@@ -115,6 +115,22 @@ _TOOL_CALL_FALLBACK_STRIP_PATTERNS = [
         r"<([a-z_][a-z_0-9]*\.[a-z_][a-z_0-9]*)(?:\s+[^>]*?)?(?:\s*/>|>[\s\S]*?</\1>)",
         re.IGNORECASE,
     ),
+    # 6. bugfix-1：函数调用风格 hallucinated tag —— ``<docx.create(filename="...", ...)>``
+    #    LLM 把 Python 函数调用语法包进 angle bracket，既不 ``/>`` 自闭合也无
+    #    paired close。前 5 条全漏（capability-as-tag 要求 attrs 前有空白；
+    #    SUSPICIOUS_TAG_RE 要求闭合或 ``/>``）。
+    #
+    #    判别特征：``<name`` 后**紧跟** ``(...)``（容许 name 含 ``.``）。HTML
+    #    正常 attr 写法是 ``<a href="...">``——name 后接空白和 attr=value，
+    #    不会接 ``(``。所以这条对正常 HTML 零误伤。
+    #
+    #    ``\([^>]*?\)`` 非贪婪匹配第一个 ``)``，避免 ``[...]`` / nested 参数
+    #    把范围撑过头。结尾 ``[^>]*?>`` 容许 ``)`` 和 ``>`` 之间还有杂质（如
+    #    ``<docx.create(...)?>``）。
+    re.compile(
+        r"<[a-z_][a-z_0-9.]*\s*\([^>]*?\)[^>]*?>",
+        re.IGNORECASE,
+    ),
 ]
 
 
@@ -389,3 +405,79 @@ def has_partial_open_tag(text: str) -> bool:
         if not close_re.search(text, om.end()):
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# bugfix-1：code-block-aware 全套 sanitizer
+#
+# 现有 strip 链 + SUSPICIOUS 兜底已覆盖 99% case，但都不区分文本是否在
+# markdown 代码段里。用户偶发会粘贴或讲解 ``<thinking>`` 等合法引用，进
+# 代码段就该保留——剥掉会破坏教学/文档场景。
+#
+# ``sanitize_llm_output`` 流程：
+#   1. 把 fenced ``` ```...``` ``` 和 inline ``` `...` ``` 用 placeholder 暂存
+#      （markdown_json tool_call fallback 已被 strip_tool_call_fallback 单独
+#      识别 + 剥，那条优先于这里执行——这里的 fenced 保护剩下的纯描述用法）
+#   2. 跑全套 strip 链（emotion / thinking / state_update / motion / tool_call
+#      fallback——含新加的 func-call regex 即 ``<docx.create(...)>``）
+#   3. SUSPICIOUS_TAG_RE 兜底剥未知格式
+#   4. 还原 placeholder
+#
+# 用途分工：
+#   * ``strip_all_for_tts``：sentence 级别（流式按句剥；句子很少跨代码段）—— 走原路径
+#   * ``sanitize_llm_output``：full-message 级别（写库前 / 大段回复整体清理）
+# ---------------------------------------------------------------------------
+
+#: fenced code block：``` 三个反引号包裹的整段（可跨行）``` —— 优先级最高
+#: （fenced 内部允许 inline `` ` `` 字符）。先扫先存。
+_FENCED_CODE_RE = re.compile(r"```[\s\S]*?```")
+
+#: inline code：单/双反引号包裹的短段，不跨行。``\1`` 反向引用保证闭合数一致。
+_INLINE_CODE_RE = re.compile(r"(`+)(?:(?!\1).)+?\1")
+
+#: placeholder 形态：``__MOMO_CODE_BLOCK_{n}__``。下划线 + ``MOMO`` 前缀确保
+#: 极小概率在 LLM 自然输出里碰撞。
+_CODE_BLOCK_PLACEHOLDER = "\x00__MOMO_CODE_BLOCK_{n}__\x00"
+
+
+def sanitize_llm_output(text: str) -> str:
+    """Code-block-aware 全套 sanitize ——剥所有 hallucinated tag，保留代码段。
+
+    覆盖：emotion / thinking / state_update / motion / tool_call fallback
+    （含新加的 ``<docx.create(args)>`` 函数调用风格）+ SUSPICIOUS 兜底。
+
+    用法：
+      * 写库前对 full_reply 做最后一道清理时调本函数（替代手工组合的
+        ``strip_motion(strip_emotion(strip_tool_call_fallback(...)))`` 链）
+      * 任何展示给用户的整段文本，过一道本函数防 LLM 新格式从兜底逃逸
+
+    与 ``strip_all_for_tts`` 区别：本函数保留 markdown 代码段（合法引用），
+    ``strip_all_for_tts`` 走 sentence 级别不做代码段感知。
+    """
+    if not text:
+        return text
+
+    # Step 1：保护代码段
+    placeholders: list[str] = []
+
+    def _stash(match: re.Match) -> str:
+        placeholders.append(match.group(0))
+        return _CODE_BLOCK_PLACEHOLDER.format(n=len(placeholders) - 1)
+
+    protected = _FENCED_CODE_RE.sub(_stash, text)
+    protected = _INLINE_CODE_RE.sub(_stash, protected)
+
+    # Step 2：全套 strip
+    out = strip_emotion(protected)
+    out = strip_thinking(out)
+    out = strip_state_update(out)
+    out = strip_motion(out)
+    out = strip_tool_call_fallback(out)
+    # Step 3：SUSPICIOUS 兜底（未知格式）
+    out = sanitize_suspicious_tags(out)
+
+    # Step 4：还原代码段
+    for i, raw in enumerate(placeholders):
+        out = out.replace(_CODE_BLOCK_PLACEHOLDER.format(n=i), raw)
+
+    return out
