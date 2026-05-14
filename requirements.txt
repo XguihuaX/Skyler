@@ -36,3 +36,5 @@ bilibili-api-python>=17.4
 # v3.5 chunk 8a — 公开 URL 正文提取（readability-lxml + 内置 lxml-html-clean）
 # ActivityWatcher 后台 fetch 浏览器当前 tab 的公开页面时用，让 LLM 看到正文。
 readability-lxml>=0.8
+# v4 persona engineering segment 1 — 5-layer prompt templates (Jinja2)
+jinja2>=3.0

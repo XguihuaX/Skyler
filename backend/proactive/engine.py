@@ -336,6 +336,11 @@ async def run_trigger(
             "context": {
                 "extra_system": system_prompt,
                 "enable_search": bool(trigger.enable_search),
+                # v4 segment 1: turn_origin 让 renderer 选 Mode.PROACTIVE
+                # 走 layer_b.j2 PROACTIVE directive(signature_phrases 开场
+                # / briefing 是 context 不是台词 / 单条 < 50 字)。trigger.name
+                # 在 PROACTIVE_ORIGINS 名单内 → PROACTIVE,否则 fallback ROLEPLAY。
+                "turn_origin": trigger.name,
             },
         },
     }
@@ -701,6 +706,9 @@ async def run_wake_call_trigger(
                 # 关键：跳过 short_term 历史。否则历史里的长简报 turn 会
                 # 污染 LLM tone，stage 1 输出从 8-15 字漂移到 100+ 字。
                 "skip_short_term": True,
+                # v4 segment 1: wake_call trigger.name 在 PROACTIVE_ORIGINS 内
+                # → renderer Mode.PROACTIVE。
+                "turn_origin": trigger.name,
             },
         },
     }

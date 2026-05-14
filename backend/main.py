@@ -114,6 +114,10 @@ from backend.database.migrations.bugfix_3_4_voice_aliases import (
 from backend.database.migrations.bugfix_4_observability import (
     run_migration as migrate_bugfix_4_observability,
 )
+# v4 persona engineering segment 1: character_personas + builtin_seed
+from backend.database.migrations.v4_persona_thickening_segment1 import (
+    run_migration as migrate_v4_persona_thickening_segment1,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -312,6 +316,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 给每次 CosyVoice synthesize 调用埋点 (source, voice, model, input_chars,
     # cost_estimate, success)。前端 TTS tab 用量 panel + 异常 call 诊断走这张表。
     await migrate_bugfix_4_observability()
+
+    # ── 1b28. V4 persona engineering segment 1 ─────────────────────────────
+    # character_personas + character_personas_builtin_seed 两张表 + 给现有
+    # characters 表里每个角色 seed 一行 variant_name='default'。Tier-1 7 JSON
+    # 字段必填，default_emotion 从旧 yaml 迁入 personality_core 子字段（D-4）。
+    # 必须在 bugfix-3.x 系列把 characters 行 seed 完之后跑（依赖 characters
+    # 表的角色行已存在）。幂等：partial UNIQUE INDEX 保证同 character 仅一
+    # 行 is_active=1，重复跑只补缺、不重写已有 active variant。
+    await migrate_v4_persona_thickening_segment1()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

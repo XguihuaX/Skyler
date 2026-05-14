@@ -570,120 +570,12 @@ _TOOL_BEHAVIOR_BLOCK = (
 )
 
 
-_TOOL_PROMPT_ADDENDUM = (
-    "\n\n你有以下 tool 可用，请按用户意图主动调用——不是装饰品，是真的能办事的工具。\n\n"
-    "【日历类】Apple Calendar (macOS EventKit)：\n"
-    "  - 用户说\"提醒我X\"/\"帮我记一下\"/\"加日程\"/\"X月X日X点Y\"/\"明天X点开会\" "
-    "→ 先调 time.now 拿当前时间锚点，再调 apple_calendar.create_event；\n"
-    "  - 用户问\"今天/明天/这周有什么事\" → 调 calendar.today_events 或 calendar.upcoming_events；\n"
-    "  - 用户说\"删除X日程\" → 先 calendar.today_events / upcoming_events 找事件 id，"
-    "再调 apple_calendar.delete_event。\n"
-    "【日程录入】（v3-G chunk 2.5）用户说\"提醒我明天 10 点 X\"/\"下周三下午 X 开会\""
-    "等含时间词的命令：\n"
-    "  - 先调 time.now 拿当前 ISO 基准；\n"
-    "  - 再调 apple_calendar.create_event（默认走 calendar router 默认 source）；\n"
-    "  - 时长缺省 1 小时，可询问；地点 / 备注从用户原话提取，没有就留空。\n\n"
-    "【时间类】：\n"
-    "  - 用户问\"现在几点\"/\"今天星期几\"/\"今天X月X日吗\" → 调 time.now；\n"
-    "  - 任何涉及相对时间（明天 / 后天 / 下周 / N 小时后）的请求，先 time.now 拿基准再继续。\n\n"
-    "【记忆类】save_memory / delete_memory / list_memories / compress_memories：\n"
-    "  - **save_memory 仅在用户明确说要记时调**（'请记住 X' / '别忘了 Y'）；"
-    "日常对话事实由 chunk 10 server-side worker 每 5 分钟自动提取，**不要主动**调；\n"
-    "  - 当用户要求忘掉某事，先 list_memories 找匹配再 delete_memory；\n"
-    "  - 当用户要求整理记忆，调 compress_memories。\n\n"
-    "【系统类】switch_character / clear_short_term：\n"
-    "  - 仅当用户明确要求切换角色时调 switch_character；\n"
-    "  - 仅当用户明确要求清空当前对话上下文时调 clear_short_term。\n\n"
-    "【音乐类】网易云场景类（v3.5 chunk 6b hotfix-1 后：mpv 装好则真自动播放）：\n"
-    "  - 用户说\"放日推 / 听今天的推荐 / 给我来点新歌\" → netease.daily_recommend；\n"
-    "  - 用户说\"随便放点 / 听点新的 / 私人电台\" → netease.personal_fm；\n"
-    "  - 用户说\"放某某歌 / 听某歌手的某首 / 来一首 X\" → netease.play_song（keyword 直接传用户原话）；\n"
-    "  - 用户说\"放我的红心歌单 / 放我那个跑步歌单 / 放我工作用的那个\" → "
-    "**两步**：先 netease.play_playlist 拿歌单列表 → 你自己用语义"
-    "模糊匹配（emoji / 别名 / 多语言都能识别，如\"跑步\" → \"🏃 跑步专用\"）→ "
-    "再调 netease.play_playlist_by_id；\n"
-    "  - 用户说\"网易云有没有 X / 这首歌的歌手是谁\" → netease.search（不播放，只查信息）；\n"
-    "  - 用户说\"好听！加红心 / 喜欢这首 / 收藏\" → 先 media.now_playing 拿当前歌名 + 歌手，"
-    "再 netease.like_current 传过去（仅当前在播是网易云资源时有效）。\n"
-    "  - **关键：看返回的 ``autoplay`` 字段诚实回话**——``backend: \"mpv\"`` +"
-    " ``autoplay: true`` 时直说\"已经在放第 X 首\"；``backend: \"url_scheme\"`` +"
-    " ``autoplay: false`` 时**不要**假装在播，照实告诉用户「网易云客户端打开了，"
-    "但自动播放需要装 mpv（``brew install mpv``），装好后下次会真自动播」；"
-    "返回 ``is_trial: true`` 时如实告诉用户「这是试听片段」（VIP 限制）。\n\n"
-    "【媒体控制】macOS 系统级播放控制（跨来源——网易云 / Apple Music / Spotify / YouTube / "
-    "B 站网页都能控）：\n"
-    "  - 用户说\"下一首 / 切歌 / 换一首 / 不喜欢这首\" → media.next_track；\n"
-    "  - 用户说\"上一首 / 刚才那首 / 退回去\" → media.previous_track；\n"
-    "  - 用户说\"暂停 / 播放 / 继续 / 停一下 / 接着放\" → media.play_pause（toggle）；\n"
-    "  - 用户问\"现在在放什么 / 这首叫啥 / 谁唱的\" → media.now_playing；\n"
-    "  - 用户说\"音量调到 X / 大声点 / 小声点 / 静音\" → media.set_volume（\"大声/小声\"由你"
-    "判一个合理 level，不要反复问\"调到多少\"）。\n\n"
-    "【角色状态】（v3-G chunk 3b）：\n"
-    "  - 你可以**偶尔**调 character.set_activity 更新自己「当前在做什么 / 在想什么」，"
-    "让用户感受到「连续性」。如长时间未互动后说\"刚才在烤面包，现在好啦\"——这种"
-    "闲笔比每次都同样开场更自然。\n"
-    "  - **克制使用**：不要每轮都调（会显得机械）。每 5-10 轮一次为宜，或在用户问"
-    "「你刚才在干什么」「在忙什么」时调。\n"
-    "  - 用户问「你状态如何 / 你最近怎么样」时调 character.get_state 拿当前值再回答。\n"
-    "  - 心情 mood 与亲密度 intimacy 的更新通过 <state_update /> 标签（不通过 tool 调用），"
-    "见 system prompt 关于该标签的指示。\n\n"
-    "【剪贴板】（v3-G chunk 3a）：\n"
-    "  - 用户提到「刚复制的」「上面那个」「这段」时，调 clipboard.get_recent 拿最近内容；\n"
-    "  - 用户要「翻译」「帮我看看」「总结一下」复制的内容时调 clipboard.translate / "
-    "clipboard.summarize；\n"
-    "  - **不要**自动响应剪贴板变化（用户只想 Momo 在被问到时回应，否则烦人）。\n\n"
-    "【小红书 URL 解析】（v3.5 chunk 6c，**只做被动**）：\n"
-    "  - 用户贴小红书 URL（xiaohongshu.com / xhslink.com 短链）时调 xhs.parse_url；\n"
-    "  - 拿到 title / text / images / author / tags 后用你**自己的话**总结 / 翻译 / "
-    "回答——不要原样输出整段 text 或 tag 列表（小红书笔记噪声大）；\n"
-    "  - **没有**主动搜索 / 推荐流 / 评论抓取 / 账号自动化 capability。若用户说"
-    "「帮我搜小红书 X」「拉一下小红书首页」「我关注的人发了啥」**如实告诉用户**："
-    "「Skyler 不主动爬小红书；你贴具体笔记链接给我就能解析」。**不要瞎编**结果或"
-    "假装调了不存在的 capability。\n"
-    "  - 返回 ``blocked_by_antibot`` 时如实说「小红书暂时拒绝访问（反爬限流），过几"
-    "分钟再试」；返回 ``parse_failed`` 时让用户检查链接是否仍可访问（可能私人 / 已删）。\n\n"
-    "【网易云本地 mpv 自动播放】（v3.5 chunk 6b，**首选自动播放路径**）：\n"
-    "  - 用户说\"放 X 这首歌 / 来一首 Y / 听一下 Z\" → **首选** netease.search "
-    "拿 song_id，再 netease.local_play_song(song_id)。mpv 自解码自动播放真"
-    "闭环，**不**依赖 NCM 客户端打开；\n"
-    "  - 用户说\"放 X 歌单\" → netease.local_play_playlist(playlist_id)；\n"
-    "  - mpv 播放控制：netease.local_pause / local_resume / local_stop / "
-    "local_next_in_queue；\n"
-    "  - 返回 ``is_trial=True`` 时**如实告诉用户「这是试听片段」**（VIP 限制）；"
-    "返回 ``url_unavailable`` 时告诉用户「这首在网易云已下架或地区不可用」；"
-    "返回 ``mpv_not_installed`` 时引导用户跑 ``brew install mpv``。\n"
-    "  - **何时用 chunk 1 netease.play_song**（旧 URL Scheme 路径）：仅当用户"
-    "明确说\"在 NCM 客户端打开\"或想要 NCM 客户端的歌词 / 动画时；自动播放不可靠，"
-    "v3-H chunk 1 partial 已封存。\n"
-    "  - 与 chunk 1 ``media.*`` 区分：local_* 操作 mpv 自身；media.* 走系统媒体键"
-    "跨 source 控制（NCM / Apple Music / Spotify / 浏览器视频）；两套并存。\n\n"
-    "【B 站类】（v3.5 chunk 6a）11 个 capability：\n"
-    "  - 用户说\"B 站搜 X / 有没有 X 视频 / B 站上 X 怎么讲的\" → bilibili.search_video；\n"
-    "  - 看到 B 站 URL（bilibili.com/video/BVxxx）或 BV 号默认 bilibili.get_video_info "
-    "拿标题 / UP 主 / 时长等信息；\n"
-    "  - 用户问\"这视频讲了啥 / 帮我总结一下 / 太长不看 / 3 分钟讲完\" → "
-    "bilibili.get_subtitles（⭐ 杀手 use case：拿字幕后用你**自己的话**总结，"
-    "不要原样输出字幕——字幕带时间戳 / 口语 / 重复，要做内容凝练）；\n"
-    "  - 字幕返 source='none' 时如实说「这个视频没有字幕，我没法看到内容」，"
-    "**不要瞎编**视频内容；返 'cookie_required' 时引导用户去 docs/bilibili-setup.md "
-    "配 BILIBILI_SESSDATA；\n"
-    "  - 用户说\"B 站现在有啥热门 / 最近 B 站火什么\" → bilibili.hot_videos；\n"
-    "  - 用户说\"B 站排行榜 / 这周 B 站排行\" → bilibili.get_ranking；\n"
-    "  - 用户说\"X UP 主最近发了啥\" → 先 bilibili.search_user 拿 mid，再 "
-    "bilibili.get_user_videos；\n"
-    "  - 用户说\"我最近在 B 站看了啥 / 我关注了谁 / 我的稍后再看 / 我的收藏\" → "
-    "bilibili.get_my_history / get_my_followings / get_later_watch / get_favorites；"
-    "未配 cookie 时返 cookie_required，照实引导。\n"
-    "  - 红线：不做投币 / 一键三连 / 自动评论 / 弹幕发送 / 视频下载——B 站社区"
-    "礼仪界限。\n\n"
-    "工具调用准则（重要）：\n"
-    "  - 不要假装权限状态（比如自己说\"未授权\"、\"我没有日历访问权限\"）——直接调用，"
-    "让真实结果说话。第一次访问日历时 macOS 会自动弹权限框；用户给完授权重试一次就行。\n"
-    "  - 不要编造工具结果或错误解释——工具失败会返回真实 error 字段，按内容如实告知用户。\n"
-    "  - 调用是主动行为，不需要先问\"要不要\"。从上下文判断该调就调。\n"
-    "  - 调完 tool 后用你自己的语气一两句话自然包装结果给用户，不要复述工具 JSON、"
-    "不要堆开场白。\n\n"
-    "你既温柔又靠谱，遇到正经事真的会帮人办成。"
+# v4 segment 1 D-1 sign-off:_TOOL_PROMPT_ADDENDUM 原样搬到
+# ``backend/agents/prompt/tool_addendum.py``。chat.py 与 renderer 都从此处
+# import 同一常量 —— 一处真相。v4.1 重构(审 LiteLLM auto tools 重复行 +
+# 保留 3 条策略并入 Layer B2 + 删冗余 prose)在那个文件里改。
+from backend.agents.prompt.tool_addendum import (
+    TOOL_PROMPT_ADDENDUM as _TOOL_PROMPT_ADDENDUM,
 )
 
 
@@ -1112,6 +1004,22 @@ async def _maybe_build_wake_call_addendum(
         return None
 
 
+async def _get_active_llm_vendor() -> str:
+    """Best-effort detect active LLM vendor 给 renderer 做 vendor-aware
+    forbidden_phrases 注入(Layer C 模板)。
+
+    DB 异常 / 无 active provider → ``"qwen"`` 兜底(项目默认)。
+    """
+    try:
+        from backend.database.ai_providers import get_active_provider
+        active = await get_active_provider("llm")
+        if active and active.vendor_id:
+            return active.vendor_id
+    except Exception:
+        logger.debug("[chat] _get_active_llm_vendor failed, defaulting to qwen")
+    return "qwen"
+
+
 async def _build_messages(
     user_id: str,
     text: str,
@@ -1119,19 +1027,152 @@ async def _build_messages(
     character_id: Optional[int] = None,
     extra_system: str | None = None,
     skip_short_term: bool = False,
+    turn_origin: str = "user",
 ) -> List[dict]:
     """Assemble the full message list to send to the LLM.
 
-    System prompt order:
-      1. Character persona (DB by character_id, fallback to prompt_manager YAML)
-      2. Memory-tool usage instructions
-      3. User profile summary (from users table)
-      4. Long-term memory Top-5 (vector search)
-      5. Tool result (legacy MemoryAgent pre-call result, if any)
+    v4 segment 1:
+      Primary path → ``backend.agents.prompt.renderer.render_system_prompt`` 5-layer
+      Legacy fallback → 旧 head_parts + system_parts 拼装(prompt_manager 路径,
+        @deprecated 待 v4.1 删除)。
+
+    Renderer path 在以下场景 fallthrough 到 legacy:
+      * ``character_id is None``(legacy 仍依赖 yaml ``默认``)
+      * ``character_personas`` 无 active variant(``RuntimeError``,可能 migration
+        没跑或被人工 disable)
+      * 任何 jinja / DB 异常(logged warning)
 
     Short-term conversation history follows as real turns, then the current
     user message as the final entry.
     """
+    # ===== v4 segment 1 — renderer path (try first) =====
+    if character_id is not None:
+        try:
+            # Gather data shared with renderer kwargs
+            profile_str: Optional[str] = None
+            if get_profile_enabled():
+                try:
+                    from backend.services.profile_regen import (
+                        format_profile_for_prompt, get_profile_data,
+                    )
+                    profile_data = await get_profile_data(user_id)
+                    formatted = format_profile_for_prompt(profile_data)
+                    if formatted:
+                        profile_str = formatted
+                    else:
+                        async with AsyncSessionLocal() as session:
+                            summary = await get_profile_summary(session, user_id)
+                        if summary:
+                            profile_str = summary
+                except Exception:
+                    logger.exception("[chat] profile gather failed (renderer path)")
+
+            activity_str: Optional[str] = None
+            try:
+                from backend.services.activity_timeline import (
+                    format_today_activity_for_prompt,
+                )
+                activity_str = await format_today_activity_for_prompt(user_id)
+            except Exception as exc:
+                logger.debug(
+                    "[chat] activity_timeline inject skipped (renderer path): %s",
+                    exc,
+                )
+
+            memory_top5: List[str] = []
+            if get_long_term_enabled():
+                try:
+                    relevant = await search_relevant_memories(
+                        user_id, query=text, top_k=5,
+                    )
+                    memory_top5 = [m.content for m in (relevant or [])]
+                except Exception:
+                    logger.exception("[chat] long-term memory recall failed (renderer path)")
+
+            # stage2 proactive 简报检测(沿用 legacy 路径相同 sentinel 逻辑)
+            stage2_addendum: Optional[str] = None
+            try:
+                import backend.proactive.triggers.wake_call_briefing  # noqa: F401
+                try:
+                    import backend.proactive.triggers.lunch_call    # noqa: F401
+                    import backend.proactive.triggers.dinner_call   # noqa: F401
+                    import backend.proactive.triggers.bedtime_chat  # noqa: F401
+                    import backend.proactive.triggers.long_idle     # noqa: F401
+                except ImportError:
+                    pass
+                from backend.proactive.triggers._stage2_registry import (
+                    all_stage1_sentinels,
+                )
+                _sentinels = all_stage1_sentinels()
+            except Exception:
+                _sentinels = []
+            _in_stage1 = bool(
+                extra_system and any(s in extra_system for s in _sentinels)
+            )
+            if not _in_stage1:
+                try:
+                    stage2_addendum = await _maybe_build_wake_call_addendum(
+                        user_id, text,
+                    )
+                except Exception:
+                    logger.exception("[chat] stage2 addendum failed (renderer path)")
+
+            # 合并 extra_system + stage2_addendum → temp_instructions(Layer D 段)
+            _temp_parts: List[str] = []
+            if extra_system:
+                _temp_parts.append(extra_system)
+            if stage2_addendum:
+                _temp_parts.append(f"【proactive 简报】\n{stage2_addendum}")
+            temp_instructions = "\n\n".join(_temp_parts) if _temp_parts else None
+
+            llm_vendor = await _get_active_llm_vendor()
+
+            from backend.agents.prompt import render_system_prompt
+            system_prompt = await render_system_prompt(
+                character_id=character_id,
+                turn_origin=turn_origin,
+                tool_prompt_addendum=_TOOL_PROMPT_ADDENDUM,
+                user_profile=profile_str,
+                today_activity=activity_str,
+                long_memory_top5=memory_top5 or None,
+                tool_results=tool_result,
+                temp_instructions=temp_instructions,
+                llm_vendor=llm_vendor,
+            )
+            logger.info(
+                "[renderer] mode_origin=%s character_id=%s prompt_chars=%d "
+                "profile=%s activity=%s memories=%d stage2=%s",
+                turn_origin, character_id, len(system_prompt),
+                bool(profile_str), bool(activity_str), len(memory_top5),
+                bool(stage2_addendum),
+            )
+
+            messages: List[dict] = [
+                {"role": "system", "content": system_prompt}
+            ]
+            if not skip_short_term:
+                for turn in await short_term_memory.get(user_id):
+                    messages.append(
+                        {"role": turn["role"], "content": turn["content"]}
+                    )
+            messages.append({"role": "user", "content": text})
+            return messages
+
+        except Exception as exc:
+            logger.warning(
+                "[chat] v4 renderer path failed (%s: %s), falling back to "
+                "legacy @deprecated prompt_manager assembly",
+                type(exc).__name__, exc,
+            )
+            # fallthrough to legacy
+
+    # ===== Legacy @deprecated path (v4.1 will remove) =====
+    if character_id is not None:
+        # 仅 renderer 异常时打 warning(character_id is None 时是正常 fallback)
+        logger.debug(
+            "[chat] legacy assembly path used for character_id=%s", character_id,
+        )
+
     # ---- 1. Persona ----
     # v3-B 补丁：把 config.yaml 里的 base_instruction (通用设定) 拼到
     # persona 之前，作为所有角色共享的输出风格约束。空串则跳过。
@@ -1328,6 +1369,9 @@ class ChatAgent(IAgent):
         context = payload.get("context") or {}
         tool_result: str | None = context.get("tool_result")
         extra_system: str | None = context.get("extra_system")
+        # v4 segment 1: deterministic mode classification 依据 context.turn_origin
+        # (ws.py 默认不设 → 'user';proactive/engine.py 写 trigger.name)。
+        turn_origin: str = str(context.get("turn_origin") or "user")
         raw_char = payload.get("character_id")
         character_id: Optional[int] = (
             int(raw_char) if isinstance(raw_char, (int, str)) and str(raw_char).strip() else None
@@ -1345,6 +1389,7 @@ class ChatAgent(IAgent):
                 user_id, text, tool_result,
                 character_id=character_id,
                 extra_system=extra_system,
+                turn_origin=turn_origin,
             )
 
             reply_parts: List[str] = []
@@ -1407,6 +1452,8 @@ class ChatAgent(IAgent):
         extra_system: str | None = context.get("extra_system")
         enable_search: bool = bool(context.get("enable_search", False))
         skip_short_term: bool = bool(context.get("skip_short_term", False))
+        # v4 segment 1: 见 handle() 注释,deterministic mode 依 turn_origin
+        turn_origin: str = str(context.get("turn_origin") or "user")
         raw_char = payload.get("character_id")
         character_id: Optional[int] = (
             int(raw_char) if isinstance(raw_char, (int, str)) and str(raw_char).strip() else None
@@ -1421,6 +1468,7 @@ class ChatAgent(IAgent):
                 character_id=character_id,
                 extra_system=extra_system,
                 skip_short_term=skip_short_term,
+                turn_origin=turn_origin,
             )
 
         prompt_str = json.dumps(messages, ensure_ascii=False)

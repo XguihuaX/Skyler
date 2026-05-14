@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -8,6 +9,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -65,6 +67,60 @@ class Character(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     conversations = relationship("Conversation", back_populates="character")
+    personas = relationship("CharacterPersona", back_populates="character",
+                            cascade="all, delete-orphan")
+
+
+class CharacterPersona(Base):
+    """v4 persona engineering segment 1 — multi-variant persona schema.
+
+    一个 character 可有多个 persona variant（``default`` / ``user_custom_1`` / 等）；
+    partial UNIQUE INDEX ``idx_persona_active_per_char`` (见
+    migrations/v4_persona_thickening_segment1.py) 保证同 character 任意时刻只有
+    一行 ``is_active=1``。
+
+    7 个 Tier-1 字段以 JSON-in-TEXT 存（SQLite 无 JSON 类型）：renderer 侧的
+    ``persona_loader`` 负责 ``json.loads`` 解析；写入前 caller 负责 ``json.dumps``。
+    """
+    __tablename__ = "character_personas"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(
+        Integer,
+        ForeignKey("characters.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    variant_name = Column(Text, nullable=False)
+    is_builtin = Column(Boolean, default=False, server_default="0")
+    is_active = Column(Boolean, default=False, server_default="0")
+    display_order = Column(Integer, default=0, server_default="0")
+    description = Column(Text, nullable=True)
+
+    # Tier-1 必填（JSON-in-TEXT）
+    identity = Column(Text, nullable=False)
+    personality_core = Column(Text, nullable=False)
+    speech_style = Column(Text, nullable=False)
+    signature_phrases = Column(Text, nullable=False)
+    voice_samples = Column(Text, nullable=False)
+    forbidden_phrases = Column(Text, nullable=False)
+    relationship_to_user = Column(Text, nullable=False)
+
+    # Tier-2 可选（NULL 表示走默认）
+    taboo_topics = Column(Text, nullable=True)
+    lore = Column(Text, nullable=True)
+    capability_overrides = Column(Text, nullable=True)
+    style_preset = Column(Text, default="anime_classic",
+                          server_default="anime_classic")
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+    character = relationship("Character", back_populates="personas")
+
+    __table_args__ = (
+        UniqueConstraint("character_id", "variant_name",
+                         name="uq_character_personas_char_variant"),
+    )
 
 
 class Conversation(Base):

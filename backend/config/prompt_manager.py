@@ -1,8 +1,20 @@
 """Per-user character state and system-prompt assembly.
 
+⚠️ DEPRECATED — v4 persona engineering segment 1 supersedes this module.
+
+* ``get_prompt(user_id)`` 仅被 ``backend.agents.chat._build_messages`` 在
+  v4 renderer 失败或 ``character_id is None`` 时 fallback 调用,会打 warning。
+* ``switch_character(user_id, character_id)`` / ``get_current_character(user_id)``
+  仍承担**用户当前角色名**的进程内追踪(switch_character tool / ws.py 都依赖),
+  这部分功能未被 v4 segment 1 接管,留作 segment 2 后续重构(届时会迁入
+  ``character_personas.active`` + per-user 关联表)。
+
 Characters are loaded once at import time from characters.yaml.
 Each user independently tracks their active character; switching is instant
 and requires no DB round-trip.
+
+**v4.1 计划**:删除 ``get_prompt`` / ``_build_system_prompt`` / yaml 文件加载;
+``switch_character`` / ``get_current_character`` 迁到独立模块或直接走 DB。
 """
 import logging
 from collections import defaultdict
@@ -54,6 +66,10 @@ class PromptManager:
     def get_prompt(self, user_id: str) -> dict:
         """Return prompt metadata for *user_id*'s current character.
 
+        ⚠️ DEPRECATED v4 segment 1: 仅作为 ``backend.agents.prompt.renderer``
+        失败 / ``character_id is None`` 时的 fallback,会打 warning。预计 v4.1
+        删除。
+
         Returns a dict with keys:
           character_id    — active character name
           system_prompt   — full system prompt (persona + BASE_INSTRUCTION)
@@ -61,7 +77,12 @@ class PromptManager:
         """
         character_id = self._user_characters[user_id]
         cfg = _CHARACTERS.get(character_id, _CHARACTERS.get(_DEFAULT_CHARACTER, {}))
-        logger.debug("get_prompt: user=%s character=%s", user_id, character_id)
+        logger.warning(
+            "[prompt_manager] @deprecated get_prompt path used "
+            "(user=%s character=%s) — v4.1 will remove. "
+            "Reason: renderer failed or character_id is None.",
+            user_id, character_id,
+        )
         return {
             "character_id": character_id,
             "system_prompt": _build_system_prompt(character_id),
