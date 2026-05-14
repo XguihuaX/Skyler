@@ -16,6 +16,7 @@ from litellm import acompletion
 import litellm.exceptions as llm_exc
 
 from backend.config import get_default_model, settings
+from backend.llm.tool_name_sanitize import sanitize_tools_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,21 @@ async def call_llm(
             "(expected 'provider/model'); LiteLLM will likely reject this call",
             resolved_model,
         )
+
+    # bugfix-3.2.9: sanitize tools[*].function.name 防 DeepSeek/OpenAI 按严格 schema
+    # 拒(``Invalid 'tools[N].function.name': string does not match pattern.``)。
+    # Qwen/Anthropic 宽松接 sanitized name 也 OK,因此对所有 vendor 都跑。
+    # 幂等:已合规 name 不变。caller (chat.py) 同时持有 reverse_map 做 dispatch
+    # 反查;此处只是 defensive 二保 + 打 log。
+    if "tools" in merged and merged["tools"]:
+        san_tools, rev_map = sanitize_tools_for_llm(merged["tools"])
+        if rev_map:
+            sample = list(rev_map.items())[:3]
+            logger.info(
+                "[llm.dispatcher] sanitized %d tool name(s) (sample: %s)",
+                len(rev_map), sample,
+            )
+        merged["tools"] = san_tools
 
     try:
         response = await acompletion(

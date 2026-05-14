@@ -58,6 +58,7 @@ from backend.database.services import (
     get_profile_summary,
 )
 from backend.llm.client import LLMError, call_llm, stream_llm
+from backend.llm.tool_name_sanitize import sanitize_tools_for_llm
 from backend.memory.long_term import generate_embedding, search_relevant_memories
 from backend.memory.short_term import short_term_memory
 from backend.tools.registry import ToolRegistry
@@ -1442,11 +1443,16 @@ class ChatAgent(IAgent):
 
             llm_t0 = time.perf_counter()
             timing_logger.info("[TIME] LLM call start (round=%d)", round_idx)
+            # bugfix-3.2.9: sanitize tool names (eg 'clipboard.summarize' →
+            # 'clipboard_summarize') 防 DeepSeek/OpenAI strict schema 拒。
+            # reverse_map 给后面 tool dispatch 反查回 ToolRegistry 原 key。
+            # call_llm 内部还会 defensive 再跑一次 (幂等),且打 dispatcher log。
+            san_tools, tool_name_rev_map = sanitize_tools_for_llm(_get_all_tools())
             try:
                 wrapper = await call_llm(
                     messages,
                     stream=True,
-                    tools=_get_all_tools(),
+                    tools=san_tools,
                     enable_search=enable_search,
                 )
             except LLMError as exc:
@@ -1542,14 +1548,21 @@ class ChatAgent(IAgent):
 
                 # Execute each tool sequentially and append a tool-result message
                 for i, v in tool_calls_acc.items():
-                    name = v["name"]
+                    san_name = v["name"]
+                    # bugfix-3.2.9: LLM emit 的是 sanitized name (eg
+                    # 'clipboard_summarize') — 反查回 original ('clipboard.summarize')
+                    # 才能在 ToolRegistry / CapabilityRegistry 里找到 handler。
+                    # 没改过的 name 不在 reverse_map 里 → 走 .get() fallback。
+                    name = tool_name_rev_map.get(san_name, san_name)
                     raw_args = v["arguments"] or "{}"
                     logger.info(
                         "ChatAgent tool call: %s args=%s",
                         name, raw_args[:200],
                     )
                     # UX-004: emit tool_use_start before exec — frontend 据此
-                    # 点亮 loading 指示器(基于 tool_name 前缀做 label mapping)
+                    # 点亮 loading 指示器(基于 tool_name 前缀做 label mapping)。
+                    # 用 original name 让前端的 label-mapping 按既有 prefix
+                    # ('clipboard.', 'apple_calendar.') 工作。
                     yield {"type": "tool_use_start", "tool_name": name}
                     tool_t0 = time.perf_counter()
                     with timed(f"tool {name}"):
