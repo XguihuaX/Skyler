@@ -38,9 +38,17 @@ import {
 } from '../lib/tts';
 import VoicePickerModal from './VoicePickerModal';
 import { fetchVoiceAliases, resolveVoiceName } from '../lib/voiceAliases';
+// v4 segment 2:Persona variant 编辑入口取代老 persona textarea
+import PersonaEditorModal from './PersonaEditorModal';
+import {
+  type CharacterPersonaRow,
+  activatePersona,
+  deletePersona,
+  listPersonas,
+  restorePersonaToBuiltin,
+} from '../lib/personas';
 
 const DEFAULT_CHARACTER_NAME = 'Momo';
-const PERSONA_PREVIEW_LEN = 30;
 
 // ---------------------------------------------------------------------------
 // 通用：确认弹窗 + Toast
@@ -114,7 +122,6 @@ interface FormState {
   id: number | null;          // 编辑目标 id；create 时为 null
   isMomo: boolean;            // Momo(id=1)：名字 disabled
   name: string;
-  persona: string;
   voice_model: string;
   live2d_model: string;
   avatar_path: string;
@@ -127,15 +134,14 @@ const EMPTY_FORM: FormState = {
   id: null,
   isMomo: false,
   name: '',
-  persona: '',
   voice_model: '',
   live2d_model: '',
   avatar_path: '',
   background_path: '',
 };
 
-const PERSONA_PLACEHOLDER =
-  '描述这个角色的性格、说话风格、背景设定等。\n例：\n你是一只傲娇的猫娘助理「小桃」。说话简短，带「喵～」语气词。\n擅长记住用户的事，遇到夸奖会害羞地否认。';
+// v4 segment 2:删旧 PERSONA_PLACEHOLDER + 角色提示词 textarea。persona 编辑
+// 入口改为 "Personas" 区域 + PersonaEditorModal (Tier-1 7 字段 + 滑块)。
 
 // ---------------------------------------------------------------------------
 // 头像占位：取角色名首字符（汉字 / 英文均可），背景用 accent
@@ -273,6 +279,247 @@ function BaseInstructionSection({ showToast }: BaseInstructionSectionProps) {
 }
 
 // ---------------------------------------------------------------------------
+// v4 segment 2 — PersonasSection
+// Inline 嵌入编辑表单内,列 character_personas + 编辑 / 激活 / 删除 / 还原。
+// 单独组件让 CharacterPanel 主流不复杂化;PersonaEditorModal 由本组件管开关。
+// ---------------------------------------------------------------------------
+
+interface PersonasSectionProps {
+  characterId: number;
+  showToast: (text: string) => void;
+}
+
+function PersonasSection({ characterId, showToast }: PersonasSectionProps) {
+  const [personas, setPersonas] = useState<CharacterPersonaRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState<CharacterPersonaRow | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await listPersonas(characterId);
+      setPersonas(rows);
+    } catch (e) {
+      showToast(`加载 persona 失败:${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [characterId, showToast]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const onActivate = async (p: CharacterPersonaRow) => {
+    try {
+      const r = await activatePersona(p.id);
+      showToast(
+        r.just_switched
+          ? `已激活 「${p.variant_name}」 — 下条对话会用新风格`
+          : `「${p.variant_name}」 已是激活状态`,
+      );
+      await refresh();
+    } catch (e) {
+      showToast(`激活失败:${(e as Error).message}`);
+    }
+  };
+
+  const onDelete = async (p: CharacterPersonaRow) => {
+    if (p.is_active) {
+      showToast('激活中的 variant 不能删除,先激活其他');
+      return;
+    }
+    if (!window.confirm(`确认删除 persona variant 「${p.variant_name}」?`)) return;
+    try {
+      await deletePersona(p.id);
+      showToast(`已删除 「${p.variant_name}」`);
+      await refresh();
+    } catch (e) {
+      showToast(`删除失败:${(e as Error).message}`);
+    }
+  };
+
+  const onRestore = async (p: CharacterPersonaRow) => {
+    if (!p.is_builtin) return;
+    if (!window.confirm(`恢复 「${p.variant_name}」 到出厂默认?会覆盖你的编辑内容`)) return;
+    try {
+      await restorePersonaToBuiltin(p.id);
+      showToast(`「${p.variant_name}」 已恢复出厂`);
+      await refresh();
+    } catch (e) {
+      showToast(`恢复失败:${(e as Error).message}`);
+    }
+  };
+
+  const cardStyle: React.CSSProperties = {
+    background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
+    border: '1px solid var(--color-border-subtle)',
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <label
+          className="text-xs font-medium"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          Personas (人设 variant)
+        </label>
+        <button
+          type="button"
+          onClick={() => setShowCreate(true)}
+          className="text-[11px] inline-flex items-center gap-1 px-2 py-1 rounded hover:opacity-80"
+          style={{
+            background: 'var(--color-accent)',
+            color: 'var(--color-bubble-user-text)',
+          }}
+        >
+          <Plus size={12} /> 新建 variant
+        </button>
+      </div>
+
+      {loading && personas.length === 0 ? (
+        <p
+          className="text-[11px] py-2"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          加载中...
+        </p>
+      ) : personas.length === 0 ? (
+        <p
+          className="text-[11px] py-2"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          (无 persona variant — 新建一个开始编辑)
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {personas.map((p) => {
+            const subtitle = (p.identity?.name || '').trim() || '(未填 identity.name)';
+            return (
+              <div key={p.id} className="rounded-md p-2.5" style={cardStyle}>
+                <div className="flex items-center gap-2">
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{
+                      background: p.is_active
+                        ? 'var(--color-accent)'
+                        : 'var(--color-text-secondary)',
+                    }}
+                    title={p.is_active ? '当前激活' : '未激活'}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-sm font-medium truncate"
+                        style={{ color: 'var(--color-text-primary)' }}
+                      >
+                        {p.variant_name}
+                      </span>
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                        style={{
+                          background: p.is_builtin
+                            ? 'color-mix(in srgb, var(--color-accent) 50%, transparent)'
+                            : 'var(--color-bg-elevated)',
+                          color: 'var(--color-text-primary)',
+                        }}
+                      >
+                        {p.is_builtin ? '系统预设' : '自定义'}
+                      </span>
+                      {p.is_active && (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                          style={{
+                            background: 'var(--color-accent)',
+                            color: 'var(--color-bubble-user-text)',
+                          }}
+                        >
+                          ★ 当前激活
+                        </span>
+                      )}
+                    </div>
+                    <p
+                      className="text-[11px] mt-0.5 truncate"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                    >
+                      {subtitle}{p.description ? ` — ${p.description}` : ''}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 mt-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setEditing(p)}
+                    className="text-[11px] px-2 py-1 rounded hover:opacity-80"
+                    style={{
+                      background: 'var(--color-bg-input)',
+                      border: '1px solid var(--color-border)',
+                      color: 'var(--color-text-primary)',
+                    }}
+                  >
+                    编辑
+                  </button>
+                  {!p.is_active && (
+                    <button
+                      type="button"
+                      onClick={() => void onActivate(p)}
+                      className="text-[11px] px-2 py-1 rounded hover:opacity-80"
+                      style={{
+                        background: 'var(--color-accent)',
+                        color: 'var(--color-bubble-user-text)',
+                      }}
+                    >
+                      激活
+                    </button>
+                  )}
+                  {p.is_builtin && (
+                    <button
+                      type="button"
+                      onClick={() => void onRestore(p)}
+                      className="text-[11px] px-2 py-1 rounded hover:opacity-80"
+                      style={{
+                        background: 'var(--color-bg-input)',
+                        border: '1px solid var(--color-border)',
+                        color: 'var(--color-text-secondary)',
+                      }}
+                      title="恢复出厂默认 (从 builtin_seed 备份)"
+                    >
+                      恢复默认
+                    </button>
+                  )}
+                  {!p.is_active && (
+                    <button
+                      type="button"
+                      onClick={() => void onDelete(p)}
+                      className="text-[11px] px-2 py-1 rounded text-rose-300 hover:bg-rose-700/30"
+                    >
+                      删除
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {(editing || showCreate) && (
+        <PersonaEditorModal
+          characterId={characterId}
+          existing={editing}
+          onClose={() => { setEditing(null); setShowCreate(false); }}
+          onSaved={async () => {
+            setEditing(null);
+            setShowCreate(false);
+            await refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CharacterPanel — Sidebar 「角色」入口的主区视图
 // ---------------------------------------------------------------------------
 
@@ -330,6 +577,10 @@ export default function CharacterPanel() {
   } | null>(null);
   const [applyingMotionMap, setApplyingMotionMap] = useState(false);
 
+  // v4 segment 2:列表预览改成 active variant 名;loads after characters fetch
+  const [activeVariantNames, setActiveVariantNames] =
+    useState<Map<number, string>>(new Map());
+
   const showToast = useCallback((text: string) => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, text }]);
@@ -342,6 +593,28 @@ export default function CharacterPanel() {
       const rows = await fetchCharacters();
       setCharacters(rows);
       setCharactersInStore(rows);
+
+      // v4 segment 2:并行拿每个 character 的 active variant 名,失败 silent
+      // (load_active_persona 没有对应行时 server 返 404,前端 fallthrough)
+      const entries = await Promise.all(
+        rows.map(async (c) => {
+          try {
+            const list = await listPersonas(c.id);
+            const active = list.find((p) => p.is_active);
+            const display = active?.identity?.name?.trim()
+              ? active.identity.name.trim()
+              : active?.variant_name ?? '';
+            return [c.id, display] as const;
+          } catch {
+            return [c.id, ''] as const;
+          }
+        }),
+      );
+      const map = new Map<number, string>();
+      for (const [cid, name] of entries) {
+        if (name) map.set(cid, name);
+      }
+      setActiveVariantNames(map);
     } catch (e) {
       console.error('[CharacterPanel] fetch failed:', e);
       showToast(`角色加载失败：${(e as Error).message}`);
@@ -558,7 +831,6 @@ export default function CharacterPanel() {
       id: c.id,
       isMomo: c.name === DEFAULT_CHARACTER_NAME,
       name: c.name,
-      persona: c.persona,
       voice_model: c.voice_model ?? '',
       live2d_model: c.live2d_model ?? '',
       avatar_path: c.avatar_path ?? '',
@@ -571,31 +843,34 @@ export default function CharacterPanel() {
   const submitForm = async () => {
     if (!form) return;
     const name           = form.name.trim();
-    const persona        = form.persona.trim();
     const voiceModel     = form.voice_model.trim();
     const live2dModel    = form.live2d_model.trim();
     const avatarPath     = form.avatar_path.trim();
     const backgroundPath = form.background_path.trim();
-    if (!name || !persona) {
-      showToast('角色名和提示词都是必填项');
+    if (!name) {
+      showToast('角色名是必填项');
       return;
     }
     setSubmitting(true);
     try {
       if (form.mode === 'create') {
+        // v4 segment 2:create 不再要求 persona text。后端 characters.persona
+        // 仍是 NOT NULL,临时占位字符串;真人设存 character_personas。
+        // 创建后用户应去 "Personas" 区域编辑 default variant 字段。
         await createCharacter({
           name,
-          persona,
+          persona: `(v4 placeholder for ${name}; edit Personas panel instead)`,
           avatar_path: avatarPath || null,
           voice_model: voiceModel || null,
           live2d_model: live2dModel || null,
           background_path: backgroundPath || null,
         });
       } else if (form.id !== null) {
-        // Momo(id=1) 名字不可改 — 即使前端表单 disabled，这里也排除掉
+        // Momo(id=1) 名字不可改 — 即使前端表单 disabled，这里也排除掉。
+        // v4 segment 2:patch 不再覆写 persona 字段(后端字段还在,只是 renderer
+        // 不读它了)。
         await patchCharacter(form.id, {
           ...(form.isMomo ? {} : { name }),
-          persona,
           avatar_path: avatarPath || null,
           voice_model: voiceModel || null,
           live2d_model: live2dModel || null,
@@ -637,7 +912,7 @@ export default function CharacterPanel() {
     }
   };
 
-  const formValid = !!form && form.name.trim() && form.persona.trim();
+  const formValid = !!form && !!form.name.trim();
 
   // -------------------------------------------------------------------------
   // 样式片段
@@ -703,9 +978,12 @@ export default function CharacterPanel() {
           characters.map((c) => {
             const isMomo  = c.name === DEFAULT_CHARACTER_NAME;
             const active  = c.id === currentCharacterId;
-            const preview = c.persona.length > PERSONA_PREVIEW_LEN
-              ? `${c.persona.slice(0, PERSONA_PREVIEW_LEN)}…`
-              : c.persona;
+            // v4 segment 2:列表 preview 改成显示 active variant 名(从父级
+            // activeVariantNames Map 取),拿不到时 fall back 到 "(未设置 persona)"。
+            const activeVariantName = activeVariantNames.get(c.id);
+            const preview = activeVariantName
+              ? `${c.name} / ${activeVariantName}`
+              : '(未设置 persona)';
             return (
               <div
                 key={c.id}
@@ -833,22 +1111,26 @@ export default function CharacterPanel() {
               )}
             </div>
 
-            <div>
-              <label
-                className="block text-xs mb-1"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                角色提示词 *
-              </label>
-              <textarea
-                value={form.persona}
-                onChange={(e) => setForm({ ...form, persona: e.target.value })}
-                placeholder={PERSONA_PLACEHOLDER}
-                rows={8}
-                className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none resize-y"
-                style={inputStyle}
+            {/* v4 segment 2:旧 "角色提示词" textarea 已删除。
+                Persona 内核(7 字段 Tier-1)在下方 "Personas" 区域编辑(PersonaEditorModal)。 */}
+            {form.mode === 'edit' && form.id !== null && (
+              <PersonasSection
+                characterId={form.id}
+                showToast={showToast}
               />
-            </div>
+            )}
+            {form.mode === 'create' && (
+              <p
+                className="text-[11px] rounded-md p-2"
+                style={{
+                  background: 'color-mix(in srgb, var(--color-accent) 12%, transparent)',
+                  color: 'var(--color-text-secondary)',
+                }}
+              >
+                ⓘ 创建后,在编辑此角色时会出现 <b>Personas</b> 区域,可编辑
+                身份卡 / 性格 / 说话风格 / voice_samples 等 7 字段。
+              </p>
+            )}
 
             {/* v3-G' chunk 1b：TTS 声音两级下拉（provider → voice）。
                 form.voice_model 仍是 character.voice_model JSON 字符串，
@@ -1100,6 +1382,46 @@ export default function CharacterPanel() {
                   >
                     🎙 试听并选 voice (含复刻)
                   </button>
+
+                  {/* v4 segment 2 §2.1 + §4.4:TTS 语言 ── ja/en 音色走双语
+                      模式(中文字幕 + 目标语言朗读)。仅在选了 voice 后可用,
+                      avoid 给 "未配置" 还能选 ja(没用)。 */}
+                  {parsed && (
+                    <div className="mt-2">
+                      <label
+                        className="block text-[11px] mb-1"
+                        style={{ color: 'var(--color-text-primary)' }}
+                      >
+                        TTS 语言
+                      </label>
+                      <select
+                        value={parsed.tts_language ?? 'zh'}
+                        onChange={(e) => {
+                          const newLang = e.target.value as 'zh' | 'ja' | 'en';
+                          setForm({
+                            ...form,
+                            voice_model: buildVoiceModelJson(
+                              parsed.provider, parsed.voice,
+                              parsed.instruct_supported, newLang,
+                            ),
+                          });
+                        }}
+                        className="w-full appearance-none rounded-md px-2 py-1.5 text-xs focus:outline-none"
+                        style={inputStyle}
+                      >
+                        <option value="zh">中文(默认)</option>
+                        <option value="ja">日语(中文字幕 + 日语朗读)</option>
+                        <option value="en">英语(中文字幕 + 英文朗读)</option>
+                      </select>
+                      <p
+                        className="text-[10px] mt-1"
+                        style={{ color: 'var(--color-text-secondary)' }}
+                      >
+                        选 ja/en 时,LLM 自动输出双语:中文给字幕,目标语言给 TTS。
+                        Mai 复刻的日语 voice 应选 "日语" 才自然。
+                      </p>
+                    </div>
+                  )}
                 </div>
               );
             })()}

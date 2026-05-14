@@ -17,7 +17,10 @@ thinking、有没有闭合，都返回剥干净的版本（含末尾紧贴的空
   不应该进这里，后者宁可保留半截标签也比丢弃后续内容好（前端层会兜底再
   剥一次，渲染时不会暴露）。
 """
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 _THINKING_BLOCK_RE = re.compile(
     r"<thinking>[\s\S]*?</thinking>\s*",
@@ -256,6 +259,11 @@ def strip_all_for_tts(text: str) -> str:
     chunk 4 hotfix-1 之前 TTS preprocessor 只覆盖 emotion / thinking /
     state_update 三道；chunk 4 引入 tool_call fallback；chunk 9 Part 0.5
     补 motion——4 个 Skyler 自有 meta tag + tool_call fallback 共 5 道。
+
+    v4 segment 2 §2.3 注:本函数**不剥** ``<ja>`` / ``<en>`` —— 这两个 tag
+    是 caller-语义,只有 ``tts_language`` 已知时才知道剥哪个 / 留哪个。
+    主路径走 ``extract_tts_text(text, tts_language)`` 在 caller 侧决定。
+    本函数仍可对中文路径(无 ja/en tag)安全调用。
     """
     if not text:
         return text
@@ -264,6 +272,80 @@ def strip_all_for_tts(text: str) -> str:
     out = strip_state_update(out)
     out = strip_motion(out)
     out = strip_tool_call_fallback(out)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# v4 segment 2 — ja / en TTS 语言双轨 tag
+#
+# tts_language='ja' / 'en' 角色 voice 是日语 / 英语复刻 sample,中文音色差。
+# Layer A 模板让 LLM 在中文正文后追加 <ja>日语翻译</ja>:
+#   - 中文部分 → WS text_chunk(字幕给用户看)
+#   - <ja> 内容 → TTS engine(给用户听)
+# 流程:
+#   1. ws.py / proactive engine 拿 sentence + character.voice_model.tts_language
+#   2. extract_tts_text(sentence, tts_language) → 送 TTS 的实际文本
+#   3. strip_ja_en_tags_for_subtitle(strip_all_for_tts(sentence)) → 字幕文本
+# 兼容性:
+#   - zh 角色(默认):extract_tts_text 等价于 strip_all_for_tts
+#   - ja/en 角色没出 tag:fallback 到原文 + log warning(LLM 漏标)
+# ---------------------------------------------------------------------------
+
+_JA_TAG_RE = re.compile(r"<ja>([\s\S]*?)</ja>", re.IGNORECASE)
+_EN_TAG_RE = re.compile(r"<en>([\s\S]*?)</en>", re.IGNORECASE)
+
+
+def extract_tts_text(raw_text: str, tts_language: str) -> str:
+    """按 tts_language 选实际送 TTS 的文本。
+
+    Args:
+        raw_text: LLM 输出原句(已经过 sentence 切分,可能含各种 meta tag)
+        tts_language: ``'zh'`` / ``'ja'`` / ``'en'``;未知或 None → 视为 ``'zh'``
+
+    Returns:
+        送 TTS 的字符串。
+          * zh / default:走 ``strip_all_for_tts``(原行为)
+          * ja:取第一个 ``<ja>...</ja>`` 内容(剥 meta tag 后);无 tag → fallback
+            ``strip_all_for_tts(raw_text)`` + log warning
+          * en:同上,取 ``<en>...</en>``
+    """
+    if not raw_text:
+        return raw_text or ""
+    lang = (tts_language or "zh").lower()
+    if lang == "ja":
+        m = _JA_TAG_RE.search(raw_text)
+        if m:
+            return strip_all_for_tts(m.group(1)).strip()
+        logger.warning(
+            "[tts] tts_language=ja but no <ja> tag found; "
+            "falling back to raw sentence(LLM 漏标 ja)"
+        )
+        return strip_all_for_tts(raw_text)
+    if lang == "en":
+        m = _EN_TAG_RE.search(raw_text)
+        if m:
+            return strip_all_for_tts(m.group(1)).strip()
+        logger.warning(
+            "[tts] tts_language=en but no <en> tag found; "
+            "falling back to raw sentence(LLM 漏标 en)"
+        )
+        return strip_all_for_tts(raw_text)
+    # zh / unknown
+    return strip_all_for_tts(raw_text)
+
+
+def strip_ja_en_tags_for_subtitle(text: str) -> str:
+    """字幕路径用:删 ``<ja>...</ja>`` / ``<en>...</en>`` 整段,留中文正文。
+
+    与 ``extract_tts_text`` 互补:本函数是字幕路径(去掉外语翻译,只留中文),
+    ``extract_tts_text`` 是 TTS 路径(只保留外语翻译)。
+
+    None / 空 → 原样返回。
+    """
+    if not text:
+        return text
+    out = _JA_TAG_RE.sub("", text)
+    out = _EN_TAG_RE.sub("", out)
     return out
 
 

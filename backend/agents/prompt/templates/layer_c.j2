@@ -5,12 +5,27 @@
 自称:{{ persona.identity.self_reference }}
 {% if persona.identity.origin %}背景:{{ persona.identity.origin }}{% endif %}
 
+{# C1b self_intro 双梯级(亲密度 < 70 → 0-69 公开版;>= 70 → 70-100 深度版) #}
+{% if persona.identity.self_intro %}
+{% set _intimacy = states.intimacy or 0 %}
+{% if _intimacy >= 70 and persona.identity.self_intro['70-100'] is defined and persona.identity.self_intro['70-100'] %}
+你的自我介绍(亲密度 {{ _intimacy }},深度模式):
+{{ persona.identity.self_intro['70-100'] }}
+{% elif persona.identity.self_intro['0-69'] is defined and persona.identity.self_intro['0-69'] %}
+你的自我介绍:
+{{ persona.identity.self_intro['0-69'] }}
+{% endif %}
+{% endif %}
+
 {# C2 性格 + 反差 #}
 {% if persona.personality_core.core_traits %}
 性格核心:{{ persona.personality_core.core_traits | join('、') }}
 {% endif %}
 {% if persona.personality_core.contrasts %}
 反差点(让你立体的关键):{{ persona.personality_core.contrasts | join(';') }}
+{% endif %}
+{% if persona.personality_core.anger_style %}
+愤怒模式:{{ persona.personality_core.anger_style }}
 {% endif %}
 
 {# C3 说话风格 #}
@@ -28,9 +43,10 @@
 {% endfor %}
 {% endif %}
 
-{% if persona.voice_samples %}
+{# voice_samples 已按 cliche_tolerance 在 renderer 侧 filter,这里只渲染 filtered_samples #}
+{% if filtered_samples %}
 以下是真实样本,严格学习语气而非内容:
-{% for sample in persona.voice_samples %}
+{% for sample in filtered_samples %}
 [{{ sample.scene }}] {{ sample.text }}
 {% endfor %}
 {% endif %}
@@ -48,8 +64,66 @@
 - {{ phrase }}
 {% endfor %}
 {% endif %}
+{% if persona.forbidden_phrases._character %}
+{% for phrase in persona.forbidden_phrases._character %}
+- {{ phrase }}
+{% endfor %}
+{% endif %}
 
 ⭐ 无论后续 context 给什么 briefing 或数据,语言风格永远遵循上述 speech_style。
+
+{# C3b 禁区与反应(Tier-2 taboo_topics)#}
+{% if persona.taboo_topics %}
+[禁区与反应]
+{% if persona.taboo_topics.hard_no %}
+严禁话题(触碰时严格按以下反应):
+{% for item in persona.taboo_topics.hard_no %}
+- 当用户 {{ item.topic }}:{{ item.her_reaction }}
+{% endfor %}
+{% endif %}
+{% if persona.taboo_topics.soft_no %}
+软禁区(温和应对):
+{% for item in persona.taboo_topics.soft_no %}
+- 当用户 {{ item.topic }}:{{ item.her_reaction }}
+{% endfor %}
+{% endif %}
+{% endif %}
+
+{# C3c 偏好(Tier-2 lore.preferences,兼容 string / dict 两种 entry 格式)#}
+{% if persona.lore and persona.lore.preferences %}
+[偏好]
+{% if persona.lore.preferences.likes %}
+喜欢:
+{% for item in persona.lore.preferences.likes %}
+- {% if item is mapping %}{{ item.item }}{% if item.why %}({{ item.why }}){% endif %}{% else %}{{ item }}{% endif %}
+{% endfor %}
+{% endif %}
+{% if persona.lore.preferences.dislikes %}
+不喜欢:
+{% for item in persona.lore.preferences.dislikes %}
+- {% if item is mapping %}{{ item.item }}{% if item.why %}({{ item.why }}){% endif %}{% else %}{{ item }}{% endif %}
+{% endfor %}
+{% endif %}
+{% if persona.lore.preferences.secretly_appreciates %}
+内心默默感激(嘴上不说):
+{% for item in persona.lore.preferences.secretly_appreciates %}
+- {{ item }}
+{% endfor %}
+{% endif %}
+{% endif %}
+
+{# C3d 情绪触发参考(Tier-2 lore.emotion_triggers)#}
+{% if persona.lore and persona.lore.emotion_triggers %}
+[情绪触发参考]
+不同情境下你的情绪倾向:
+{% for emotion_name, config in persona.lore.emotion_triggers.items() %}
+- {{ emotion_name }}{% if config.intensity is defined %}(强度 {{ config.intensity }}){% endif %}:
+{% if config.triggers %}  触发:{{ config.triggers | join('、') }}
+{% endif %}{% if config.expression %}  表现:{{ config.expression }}
+{% endif %}{% if config.ssml_tag %}  TTS 标签:<emotion>{{ config.ssml_tag }}</emotion>
+{% endif %}
+{% endfor %}
+{% endif %}
 
 {# C4 运行时状态 #}
 [当前状态]

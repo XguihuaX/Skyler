@@ -30,8 +30,8 @@ import { X, Sparkles } from 'lucide-react';
 import CharacterCard from './CharacterCard';
 import { fetchCharacterState, type CharacterStateResponse, type CharacterMood } from '../../lib/integrations';
 import type { CharacterRow } from '../../lib/config';
-
-const PERSONA_TRUNCATE = 240;
+// v4 segment 2 D-S2-1:用 active variant 取代旧 character.persona 文本展示
+import { getActivePersona, type CharacterPersonaRow } from '../../lib/personas';
 
 const MOOD_EMOJI: Record<CharacterMood, string> = {
   happy: '😊', sad: '😢', curious: '🤔', calm: '😌',
@@ -52,7 +52,9 @@ export default function CharacterDetailModal({
   character, onClose, onSwitch,
 }: CharacterDetailModalProps) {
   const [state, setState] = useState<CharacterStateResponse | null>(null);
-  const [personaExpanded, setPersonaExpanded] = useState(false);
+  // v4 segment 2:展示 active variant 名 + description + style_preset
+  // 替代 character.persona 自由文本(后者在 v4 已 deprecated)。
+  const [activePersona, setActivePersona] = useState<CharacterPersonaRow | null>(null);
 
   // ESC close
   useEffect(() => {
@@ -78,11 +80,16 @@ export default function CharacterDetailModal({
     return () => { cancelled = true; };
   }, [character.id]);
 
-  const persona = character.persona ?? '';
-  const needsTruncate = persona.length > PERSONA_TRUNCATE;
-  const personaShown = !needsTruncate || personaExpanded
-    ? persona
-    : persona.slice(0, PERSONA_TRUNCATE) + '…';
+  // v4 segment 2:per-mount 拉 active variant。无 active(eg 老 character 没
+  // run segment-1 migration)→ 仍 silent,只是 Persona 区不出现。
+  useEffect(() => {
+    let cancelled = false;
+    setActivePersona(null);
+    getActivePersona(character.id)
+      .then((p) => { if (!cancelled) setActivePersona(p); })
+      .catch(() => { /* silent — 旧角色无 active variant 时 404 是正常 */ });
+    return () => { cancelled = true; };
+  }, [character.id]);
 
   return (
     <>
@@ -163,8 +170,9 @@ export default function CharacterDetailModal({
               </div>
             )}
 
-            {/* persona */}
-            {persona.trim() && (
+            {/* v4 segment 2 D-S2-1:展示 active variant 名 + description,
+                替代旧 character.persona 自由文本(后者已 deprecated)。 */}
+            {activePersona && (
               <div className="mb-5">
                 <div
                   className="text-[10px] uppercase tracking-wider mb-1.5"
@@ -172,22 +180,41 @@ export default function CharacterDetailModal({
                 >
                   Persona
                 </div>
-                <p
-                  className="text-sm leading-relaxed whitespace-pre-line"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
-                  {personaShown}
-                </p>
-                {needsTruncate && (
-                  <button
-                    type="button"
-                    onClick={() => setPersonaExpanded((v) => !v)}
-                    className="text-xs mt-2 transition"
-                    style={{ color: 'var(--color-text-accent)' }}
+                <div className="flex items-baseline gap-2 mb-1 flex-wrap">
+                  <span
+                    className="text-base font-medium"
+                    style={{ color: 'var(--color-text-primary)' }}
                   >
-                    {personaExpanded ? '收起' : '展开全部'}
-                  </button>
+                    {activePersona.identity?.name?.trim()
+                      || activePersona.variant_name}
+                  </span>
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded"
+                    style={{
+                      background: activePersona.is_builtin
+                        ? 'color-mix(in srgb, var(--color-accent) 40%, transparent)'
+                        : 'var(--color-bg-elevated)',
+                      color: 'var(--color-text-secondary)',
+                    }}
+                  >
+                    {activePersona.variant_name}
+                    {activePersona.is_builtin ? ' · 系统预设' : ' · 自定义'}
+                  </span>
+                </div>
+                {activePersona.description && (
+                  <p
+                    className="text-sm leading-relaxed"
+                    style={{ color: 'var(--color-text-primary)' }}
+                  >
+                    {activePersona.description}
+                  </p>
                 )}
+                <p
+                  className="text-[11px] mt-1"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  风格预设:{activePersona.style_preset}
+                </p>
               </div>
             )}
 

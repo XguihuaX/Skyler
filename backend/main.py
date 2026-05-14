@@ -118,6 +118,15 @@ from backend.database.migrations.bugfix_4_observability import (
 from backend.database.migrations.v4_persona_thickening_segment1 import (
     run_migration as migrate_v4_persona_thickening_segment1,
 )
+# v4 persona segment 2: Mai voice tts_language='ja' tagging (D-S2-3: by voice_id)
+from backend.database.migrations.v4_persona_segment2_mai_ja import (
+    run_migration as migrate_v4_persona_segment2_mai_ja,
+)
+# v4 persona segment 2: ensure every character has default active variant
+# (D-S2-2 backfill: characters inserted after segment-1 migration ship)
+from backend.database.migrations.v4_persona_segment2_ensure_defaults import (
+    run_migration as migrate_v4_persona_segment2_ensure_defaults,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -131,6 +140,7 @@ from backend.routes.mcp_api import (
     router as mcp_router,
 )
 from backend.routes.characters_api import router as characters_router
+from backend.routes.persona_api import router as persona_router
 from backend.routes.config_api import router as config_router
 from backend.routes.conversations_api import router as conversations_router
 from backend.routes.health_api import app_state, router as health_router
@@ -325,6 +335,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 表的角色行已存在）。幂等：partial UNIQUE INDEX 保证同 character 仅一
     # 行 is_active=1，重复跑只补缺、不重写已有 active variant。
     await migrate_v4_persona_thickening_segment1()
+
+    # ── 1b29. V4 persona segment 2 - ensure-defaults backfill ──────────────
+    # D-S2-2 sign-off：防御性给 segment-1 跑完后才插入的 character 补 default
+    # active variant。扫 characters 找 NOT EXISTS (is_active=1 variant) 的行，
+    # 给每行 seed 一份空模板。幂等（WHERE NOT EXISTS），已有 variant 的 character
+    # 不动。**必须在 segment-1 之后跑**（依赖 character_personas + builtin_seed
+    # 两张表存在）。
+    await migrate_v4_persona_segment2_ensure_defaults()
+
+    # ── 1b30. V4 persona segment 2 - Mai voice tts_language='ja' ───────────
+    # D-S2-3 sign-off：按 voice_id 标 ja（不按 character_id），自动覆盖所有
+    # 用 Mai 复刻 voice 的角色（当前 id=1 Momo/Mai 借壳 + id=101 樱岛麻衣）。
+    # 让 renderer 走 layer_a.j2 的 ja 分支，LLM 输出 <ja>日语翻译</ja>，
+    # TTS 取 ja 段，中文给字幕。幂等（WHERE tts_language IS NULL OR != 'ja'）。
+    await migrate_v4_persona_segment2_mai_ja()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
@@ -800,6 +825,7 @@ app.include_router(config_router,        prefix="/api", tags=["config"])
 app.include_router(memory_router,        prefix="/api", tags=["memory"])
 app.include_router(conversations_router, prefix="/api", tags=["conversations"])
 app.include_router(characters_router,    prefix="/api", tags=["characters"])
+app.include_router(persona_router,        prefix="/api", tags=["persona"])
 app.include_router(users_router,         prefix="/api", tags=["users"])
 app.include_router(live2d_router,        prefix="/api", tags=["live2d"])
 app.include_router(backgrounds_router,    prefix="/api", tags=["backgrounds"])

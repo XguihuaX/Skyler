@@ -69,9 +69,53 @@ def sanitize_thought(thought: Optional[str]) -> Optional[str]:
     return thought
 
 
-def _render_layer_a(available_motions: Optional[List[str]]) -> str:
+def filter_samples_by_tolerance(
+    samples: List[Dict[str, Any]],
+    tolerance: float,
+) -> List[Dict[str, Any]]:
+    """按 ``speech_style.cliche_tolerance`` 过滤 voice_samples。
+
+    每条 sample 可带 ``tolerance_range = [min, max]``(0.0~1.0)字段,表示这条
+    样本适用的"糖度区间"。当前 character 的 tolerance 落入区间内 → 命中。
+    无 ``tolerance_range`` → 视为全域 [0.0, 1.0],总命中(向后兼容 segment 1
+    Mai 灌入前的旧数据)。
+
+    Fallback 决策点:若 filter 后 0 条命中 → 返回**全部** samples 并 log
+    warning。理由:LLM 看到 0 条 voice_sample 等于丢了风格锚点,比"看到错配
+    糖度的样本"更糟。
+    """
+    if not samples:
+        return []
+    matched: List[Dict[str, Any]] = []
+    for s in samples:
+        rng = s.get("tolerance_range") if isinstance(s, dict) else None
+        if not rng or not isinstance(rng, (list, tuple)) or len(rng) != 2:
+            matched.append(s)
+            continue
+        try:
+            lo, hi = float(rng[0]), float(rng[1])
+        except (TypeError, ValueError):
+            matched.append(s)
+            continue
+        if lo <= tolerance <= hi:
+            matched.append(s)
+    if not matched:
+        logger.warning(
+            "[renderer] cliche_tolerance=%.2f filtered all %d samples to 0; "
+            "falling back to full sample list to keep style anchor",
+            tolerance, len(samples),
+        )
+        return list(samples)
+    return matched
+
+
+def _render_layer_a(
+    available_motions: Optional[List[str]],
+    tts_language: str = "zh",
+) -> str:
     return _jinja_env.get_template("layer_a.j2").render(
         available_motions=available_motions or [],
+        tts_language=tts_language,
     )
 
 
@@ -89,12 +133,22 @@ def _render_layer_c(
     states: LoadedState,
     safe_thought: Optional[str],
     llm_vendor: str,
+    filtered_samples: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
+    """渲染 Layer C。
+
+    ``filtered_samples``:已按 ``speech_style.cliche_tolerance`` 过滤过的
+    voice_samples 列表。None → 默认用 ``persona.voice_samples`` 全集
+    (backward compat,segment 1 tests / 旧数据无 tolerance_range 也能跑)。
+    """
+    if filtered_samples is None:
+        filtered_samples = persona.voice_samples or []
     return _jinja_env.get_template("layer_c.j2").render(
         persona=persona,
         states=states,
         safe_thought=safe_thought,
         llm_vendor=llm_vendor,
+        filtered_samples=filtered_samples,
     )
 
 
@@ -136,6 +190,7 @@ async def render_system_prompt(
     proactive_briefing_raw: Optional[Dict[str, Any]] = None,
     available_motions: Optional[List[str]] = None,
     llm_vendor: str = "qwen",
+    tts_language: str = "zh",
 ) -> str:
     """渲染 5 层 system prompt。
 
@@ -170,10 +225,21 @@ async def render_system_prompt(
     safe_thought = sanitize_thought(states.current_thought)
     briefing = validate_and_sanitize_briefing(proactive_briefing_raw)
 
+    # v4 segment 2 §1.2:按 cliche_tolerance 过滤 voice_samples。tolerance 缺
+    # 失 / 非数字 → 0.5 兜底。filter 结果空 → fallback 到全集(filter 内部
+    # 已 log warning)。
+    try:
+        _tolerance = float(persona.speech_style.get("cliche_tolerance", 0.5))
+    except (TypeError, ValueError):
+        _tolerance = 0.5
+    filtered_samples = filter_samples_by_tolerance(
+        persona.voice_samples or [], _tolerance,
+    )
+
     parts: List[str] = [
-        _render_layer_a(available_motions),
+        _render_layer_a(available_motions, tts_language),
         _render_layer_b(mode, tool_prompt_addendum),
-        _render_layer_c(persona, states, safe_thought, llm_vendor),
+        _render_layer_c(persona, states, safe_thought, llm_vendor, filtered_samples),
         _render_layer_d(
             user_profile, today_activity, long_memory_top5,
             tool_results, temp_instructions, briefing,

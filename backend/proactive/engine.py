@@ -60,7 +60,12 @@ from backend.database.services import (
 )
 from backend.memory.short_term import short_term_memory
 from backend.tts import get_tts_engine
-from backend.utils.text_filters import strip_all_for_tts, strip_thinking
+from backend.utils.text_filters import (
+    extract_tts_text,
+    strip_all_for_tts,
+    strip_ja_en_tags_for_subtitle,
+    strip_thinking,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +353,14 @@ async def run_trigger(
     # ── TTS engine ──────────────────────────────────────────────────────
     voice_model: Optional[str] = character.voice_model
     tts_engine = get_tts_engine(voice_model)
+    # v4 segment 2 §2.5:解析 voice_model.tts_language(ja/en/zh)给 extract_tts_text
+    tts_language = "zh"
+    if voice_model:
+        try:
+            _vm_obj = json.loads(voice_model)
+            tts_language = (_vm_obj or {}).get("tts_language", "zh") or "zh"
+        except (json.JSONDecodeError, TypeError):
+            tts_language = "zh"
     tts_enabled = get_tts_enabled()
 
     # bugfix-4: 设 TTS source — activity_smart 单独标记,其他 proactive trigger
@@ -446,7 +459,10 @@ async def run_trigger(
             # text_chunk 立即推
             # hotfix-7 commit 2：最后一道 strip_all_for_tts 兜底,与 ws.py
             # 主路径同语义。防回归 + 给未来新 LLM 标签留缓冲。
-            final_chunk = strip_all_for_tts(sentence)
+            # v4 segment 2 §2.5:字幕路径剥 ja/en 翻译,只留中文给用户看。
+            final_chunk = strip_ja_en_tags_for_subtitle(
+                strip_all_for_tts(sentence)
+            )
             if not final_chunk.strip():
                 continue
             await _push({
@@ -456,10 +472,14 @@ async def run_trigger(
             })
 
             # TTS 并发合成 + 顺序入队（复用 ws.py 的 helper + semaphore）
+            # v4 segment 2 §2.5:TTS 路径走 extract_tts_text 选 ja/en 翻译。
             if tts_enabled and consumer is not None:
+                tts_text = extract_tts_text(sentence, tts_language)
+                if not tts_text or not tts_text.strip():
+                    continue
                 task = asyncio.create_task(
                     _ws._tts_synth_with_timeout(
-                        tts_engine, sentence, turn_emotion,
+                        tts_engine, tts_text, turn_emotion,
                         idx=len(reply_parts),
                     )
                 )
@@ -715,6 +735,14 @@ async def run_wake_call_trigger(
 
     voice_model: Optional[str] = character.voice_model
     tts_engine = get_tts_engine(voice_model)
+    # v4 segment 2 §2.5:解析 voice_model.tts_language(ja/en/zh)给 extract_tts_text
+    tts_language = "zh"
+    if voice_model:
+        try:
+            _vm_obj = json.loads(voice_model)
+            tts_language = (_vm_obj or {}).get("tts_language", "zh") or "zh"
+        except (json.JSONDecodeError, TypeError):
+            tts_language = "zh"
     tts_enabled = get_tts_enabled()
 
     # bugfix-4: 同 upper proactive path — 设 TTS source for log
@@ -776,15 +804,21 @@ async def run_wake_call_trigger(
                 continue
             reply_parts.append(sentence)
             # hotfix-7 commit 2：text_chunk 最后一道 strip 兜底（同 run_trigger）。
-            final_chunk = strip_all_for_tts(sentence)
+            # v4 segment 2 §2.5:字幕剥 ja/en,TTS 走 extract_tts_text。
+            final_chunk = strip_ja_en_tags_for_subtitle(
+                strip_all_for_tts(sentence)
+            )
             if not final_chunk.strip():
                 continue
             await _push({"type": "text_chunk", "content": final_chunk, **proactive_meta})
 
             if tts_enabled and consumer is not None:
+                tts_text = extract_tts_text(sentence, tts_language)
+                if not tts_text or not tts_text.strip():
+                    continue
                 task = asyncio.create_task(
                     _ws._tts_synth_with_timeout(
-                        tts_engine, sentence, turn_emotion,
+                        tts_engine, tts_text, turn_emotion,
                         idx=len(reply_parts),
                     )
                 )

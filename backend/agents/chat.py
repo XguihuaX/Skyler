@@ -345,6 +345,9 @@ _VALID_MEMORY_TYPES = {"fact", "instruction", "emotion", "activity", "daily"}
 _BOUNDARY_PAIRED_TAGS = frozenset({
     "thinking", "emotion", "state_update", "motion",
     "tool_call", "function_calls", "invoke",
+    # v4 segment 2 §2.4:ja / en 双语 TTS 模式 — <ja>「...バカ。」</ja> 内的
+    # 全角句末标点必须不切句,等 </ja> 出现再 boundary。
+    "ja", "en",
 })
 
 _BOUNDARY_TAG_NAME_RE = re.compile(r"<([a-zA-Z_][a-zA-Z_0-9]*)\b")
@@ -1127,6 +1130,28 @@ async def _build_messages(
 
             llm_vendor = await _get_active_llm_vendor()
 
+            # v4 segment 2 §2.1:从 character.voice_model JSON 抽 tts_language。
+            # ja/en 走 layer_a.j2 双语 directive,LLM 输出 <ja>...</ja>。
+            tts_language = "zh"
+            try:
+                async with AsyncSessionLocal() as session:
+                    vm_str = (await session.execute(
+                        select(Character.voice_model).where(Character.id == character_id)
+                    )).scalar_one_or_none()
+                if isinstance(vm_str, str) and vm_str.strip():
+                    _vm = json.loads(vm_str)
+                    if isinstance(_vm, dict):
+                        _t = _vm.get("tts_language")
+                        if _t in ("zh", "ja", "en"):
+                            tts_language = _t
+            except (json.JSONDecodeError, TypeError):
+                pass
+            except Exception:
+                logger.exception(
+                    "[chat] tts_language lookup failed for character_id=%s",
+                    character_id,
+                )
+
             from backend.agents.prompt import render_system_prompt
             system_prompt = await render_system_prompt(
                 character_id=character_id,
@@ -1138,13 +1163,14 @@ async def _build_messages(
                 tool_results=tool_result,
                 temp_instructions=temp_instructions,
                 llm_vendor=llm_vendor,
+                tts_language=tts_language,
             )
             logger.info(
                 "[renderer] mode_origin=%s character_id=%s prompt_chars=%d "
-                "profile=%s activity=%s memories=%d stage2=%s",
+                "profile=%s activity=%s memories=%d stage2=%s tts_lang=%s",
                 turn_origin, character_id, len(system_prompt),
                 bool(profile_str), bool(activity_str), len(memory_top5),
-                bool(stage2_addendum),
+                bool(stage2_addendum), tts_language,
             )
 
             messages: List[dict] = [

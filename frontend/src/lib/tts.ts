@@ -45,6 +45,9 @@ export interface VoiceModelJson {
   provider: string;
   voice: string;
   instruct_supported: boolean;
+  /** v4 segment 2 §2.1:'zh'(默认) / 'ja'(日语 voice 走 <ja> tag) /
+   *  'en'(英语 voice)。NULL / undefined → 视为 'zh'。 */
+  tts_language?: 'zh' | 'ja' | 'en';
 }
 
 /**
@@ -75,10 +78,14 @@ export function parseVoiceModelJson(
     const provider = typeof obj.provider === 'string' ? obj.provider : '';
     const voice    = typeof obj.voice    === 'string' ? obj.voice    : '';
     if (!provider || !voice) return null;
+    const ttsLang = obj.tts_language;
     return {
       provider,
       voice,
       instruct_supported: Boolean(obj.instruct_supported),
+      ...(ttsLang === 'ja' || ttsLang === 'en' || ttsLang === 'zh'
+        ? { tts_language: ttsLang }
+        : {}),
     };
   } catch {
     return null;
@@ -86,17 +93,24 @@ export function parseVoiceModelJson(
 }
 
 /**
- * 把 (provider, voice, instruct_supported) 序列化回 character.voice_model
- * 字段值。后端 ``parse_voice_config`` 直接消费此格式。
+ * 把 (provider, voice, instruct_supported [, tts_language]) 序列化回
+ * character.voice_model 字段值。后端 ``parse_voice_config`` 直接消费此格式。
+ * v4 segment 2:加 tts_language 可选参数。
  */
 export function buildVoiceModelJson(
   provider: string,
   voice: string,
   instructSupported: boolean,
+  ttsLanguage?: 'zh' | 'ja' | 'en',
 ): string {
-  return JSON.stringify({
+  const obj: VoiceModelJson = {
     provider,
     voice,
     instruct_supported: instructSupported,
-  });
+  };
+  if (ttsLanguage && ttsLanguage !== 'zh') {
+    // 默认 zh 不入库,节省 JSON 字段
+    obj.tts_language = ttsLanguage;
+  }
+  return JSON.stringify(obj);
 }
