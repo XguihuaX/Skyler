@@ -25,6 +25,8 @@ import {
 } from '../lib/live2d';
 import Live2DDropzone from './live2d/Live2DDropzone';
 import MotionMapConfirmDialog from './live2d/MotionMapConfirmDialog';
+import SplashArtDropzone from './character/SplashArtDropzone';
+import { deleteSplashArt } from '../lib/characters';
 import {
   fetchBackgrounds,
   type BackgroundItem,
@@ -305,6 +307,12 @@ export default function CharacterPanel() {
   const [backgrounds, setBackgrounds]     = useState<BackgroundItem[]>([]);
   const [bgLoading, setBgLoading]         = useState(false);
   const [bgError,   setBgError]           = useState<string | null>(null);
+  // v4-fan chunk 5: splash art 删除确认对话框 target(point to character row,
+  // 拿名字 + id 给确认文案;upload 不需要 confirm,直接走 SplashArtDropzone)
+  const [pendingSplashDelete, setPendingSplashDelete] =
+    useState<CharacterRow | null>(null);
+  const [splashDeleting, setSplashDeleting] = useState(false);
+
   // Stage 2.2.1: Live2D dropzone modal + 上传成功后的 motion_map 确认弹窗
   const [showLive2DUpload, setShowLive2DUpload] = useState(false);
   const [pendingMotionMap, setPendingMotionMap] = useState<{
@@ -429,6 +437,38 @@ export default function CharacterPanel() {
       '已跳过 motion_map;可在 character.motion_map_json 字段手动配置',
     );
   }, [showToast]);
+
+  // v4-fan chunk 5: splash art 上传成功 → toast + refresh characters
+  // (拉新 splash_art_url 同步进 store / 本地 state, Gallery 切回时
+  // 背景自动跟着变,因为读 store reactive)
+  const onSplashUploadSuccess = useCallback(
+    async (newUrl: string) => {
+      showToast(`立绘已更新 (${newUrl})`);
+      await refresh();
+    },
+    [refresh, showToast],
+  );
+
+  // v4-fan chunk 5: splash art 删除确认 → 调 backend DELETE → refresh
+  const confirmSplashDelete = useCallback(async () => {
+    const target = pendingSplashDelete;
+    if (!target) return;
+    setSplashDeleting(true);
+    try {
+      await deleteSplashArt(target.id);
+      showToast(`已删除 ${target.name} 的立绘`);
+      setPendingSplashDelete(null);
+      await refresh();
+    } catch (e) {
+      console.error('[CharacterPanel] delete splash art failed:', e);
+      const err = e as Error & { status?: number };
+      showToast(
+        `删除失败:${err.status ? err.status + ' · ' : ''}${err.message}`,
+      );
+    } finally {
+      setSplashDeleting(false);
+    }
+  }, [pendingSplashDelete, refresh, showToast]);
 
   // v3.5 chunk 5a：背景资产 mount 时拉一次，[刷新] 按钮 + 新增 / 编辑表单
   // 打开时复用 callback。失败不阻塞主路径——下拉只剩 "(无)"，用户能继续
@@ -1160,6 +1200,44 @@ export default function CharacterPanel() {
               />
             </div>
 
+            {/* v4-fan chunk 5 — Splash art 上传 / 删除。仅 edit 模式渲染:
+                upload endpoint 需要 character.id, create 模式还没保存就没
+                id 可挂。create 时给一句"先保存再上传"提示。 */}
+            <div>
+              <label
+                className="block text-xs mb-1"
+                style={{ color: 'var(--color-text-primary)' }}
+              >
+                角色立绘
+              </label>
+              {form.mode === 'edit' && form.id !== null ? (
+                <SplashArtDropzone
+                  characterId={form.id}
+                  currentUrl={
+                    characters.find((c) => c.id === form.id)?.splash_art_url ?? null
+                  }
+                  onUploadSuccess={onSplashUploadSuccess}
+                  onDeleteRequest={() => {
+                    const target = characters.find((c) => c.id === form.id);
+                    if (target) setPendingSplashDelete(target);
+                  }}
+                />
+              ) : (
+                <p
+                  className="text-[11px] py-2"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  保存角色后即可上传立绘。
+                </p>
+              )}
+              <p
+                className="text-[10px] mt-1"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                用于 Character Gallery 卡片视觉。推荐 1024×1536 / 2:3,&lt; 5 MB。
+              </p>
+            </div>
+
             {/* v3.5 chunk 5a — 每角色背景层（image / video）。Live2D 在
                 背景层之上，仍正常显示。第一项 "(无)" → 保存 null，回退到
                 原 fallback 链。 */}
@@ -1309,6 +1387,21 @@ export default function CharacterPanel() {
           text={`确认删除角色「${pendingDelete.name}」？\n该角色名下的对话与记忆不会自动迁移。`}
           onConfirm={confirmDelete}
           onCancel={() => setPendingDelete(null)}
+        />
+      )}
+
+      {/* v4-fan chunk 5: splash art 删除确认 */}
+      {pendingSplashDelete && (
+        <ConfirmModal
+          text={
+            `删除「${pendingSplashDelete.name}」的立绘？\n`
+            + '删除后该角色将回退到默认占位图(???)。后续可随时重新上传。'
+            + (splashDeleting ? '\n\n（删除中…）' : '')
+          }
+          onConfirm={() => void confirmSplashDelete()}
+          onCancel={() => {
+            if (!splashDeleting) setPendingSplashDelete(null);
+          }}
         />
       )}
 
