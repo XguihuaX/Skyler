@@ -12,7 +12,9 @@ import {
   Users,
 } from 'lucide-react';
 import { useAppStore } from '../../store';
-import { fetchModels } from '../../lib/models';
+// bugfix-3.3: lib/models.ts 下线 (旧 /api/settings/model 路径)。AboutSection 改走
+// /api/ai-providers?type=llm 找 is_active=true 的 provider 显示。
+import { listProvidersByType } from '../../lib/ai_providers';
 import ActivityAwarenessSection from '../ActivityAwarenessSection';
 import ActivityTimelineDrawer from '../ActivityTimelineDrawer';
 import CharacterPanel from '../CharacterPanel';
@@ -212,10 +214,23 @@ function AboutSection() {
   const [model, setModel] = useState<string>('…');
 
   const refreshModel = useCallback(async () => {
+    // bugfix-3.3: 走 DB ai_providers,找 type='llm' 且 is_active=true 的 provider。
+    // 无 active → '(none)'。
     try {
-      const s = await fetchModels();
-      const info = s.available.find((m) => m.id === s.current);
-      setModel(info?.display_name ?? s.current);
+      const resp = await listProvidersByType('llm');
+      for (const v of resp.vendors) {
+        const active = v.providers.find((p) => p.is_active);
+        if (active) {
+          setModel(active.name);
+          return;
+        }
+      }
+      const ungroupedActive = resp.ungrouped.find((p) => p.is_active);
+      if (ungroupedActive) {
+        setModel(ungroupedActive.name);
+        return;
+      }
+      setModel('(none)');
     } catch {
       setModel('(unknown)');
     }

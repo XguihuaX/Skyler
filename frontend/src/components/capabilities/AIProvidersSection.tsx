@@ -4,9 +4,12 @@ import {
   CheckCircle2,
   Circle,
   KeyRound,
+  Mic,
   Plus,
   Trash2,
+  Volume2,
 } from 'lucide-react';
+import { setConfigField } from '../../lib/window';
 import {
   type AIProvider,
   type AIVendor,
@@ -211,36 +214,23 @@ export default function AIProvidersSection({ showToast }: AIProvidersSectionProp
         >
           还没有 LLM Provider。
         </div>
-      ) : tab === 'asr' && vendorGroups.every((v) => v.providers.length === 0) && ungrouped.length === 0 ? (
-        // bugfix-3.2 过渡期:ASR provider 列表为空, 但保留 VAD / Whisper
-        // 现有控件可用。3.3 ship 后 ASR provider 才入 DB。
-        <div className="space-y-4">
-          <div
-            className="text-xs px-3 py-2 rounded"
-            style={{
-              background: 'color-mix(in srgb, var(--color-accent) 8%, transparent)',
-              color: 'var(--color-text-secondary)',
-              border: '1px dashed var(--color-border-subtle)',
-            }}
-          >
-            ASR Provider 管理将在 Bugfix-3.3 推出。当前 VAD / 静音超时
-            等控件保留在下方,可继续使用。
-          </div>
+      ) : tab === 'asr' ? (
+        // bugfix-3.3 (light): Faster Whisper 卡 + VAD 现有控件。ASR provider
+        // 不入 DB ai_providers (本 stage 用户拍板:单 backend, 不需 dispatcher
+        // 抽象)。model_size 切换走 POST /api/config/asr → yaml; 下次 transcribe
+        // 触发 whisper reload。
+        <div className="space-y-3">
+          <FasterWhisperCard showToast={showToast} />
           <AsrVadSection />
         </div>
-      ) : tab === 'tts' && vendorGroups.every((v) => v.providers.length === 0) && ungrouped.length === 0 ? (
-        <div className="space-y-4">
-          <div
-            className="text-xs px-3 py-2 rounded"
-            style={{
-              background: 'color-mix(in srgb, var(--color-accent) 8%, transparent)',
-              color: 'var(--color-text-secondary)',
-              border: '1px dashed var(--color-border-subtle)',
-            }}
-          >
-            TTS Provider 管理将在 Bugfix-3.3 推出。当前 TTS 总开关保留
-            在下方,角色音色仍在 ⚙ 设置 → 角色管理 内编辑。
-          </div>
+      ) : tab === 'tts' ? (
+        // bugfix-3.3 (light): CosyVoice 卡 (绑 Qwen vendor 凭证) + voice 下拉 +
+        // TTS 总开关。Edge / SoVITS 不占位 — 用户拍板 v4.1+ 再加。
+        <div className="space-y-3">
+          <CosyVoiceTTSCard
+            showToast={showToast}
+            onConfigureQwenCred={(qwenVendor) => setCredentialsForVendor(qwenVendor)}
+          />
           <TtsSection showToast={showToast} />
         </div>
       ) : (
@@ -708,6 +698,344 @@ function ConfirmDialog({ title, body, danger, onCancel, onConfirm }: ConfirmDial
           >
             确认
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Bugfix-3.3 — FasterWhisperCard (ASR tab)
+// ---------------------------------------------------------------------------
+
+const _BACKEND_BASE = 'http://127.0.0.1:8000';
+
+interface AsrConfigResponse {
+  whisper_model_size: string;
+  allowed_sizes: string[];
+}
+
+interface FasterWhisperCardProps {
+  showToast: (text: string) => void;
+}
+
+// 本 stage 用户拍板:UI 只暴露 small / medium 两档,其他 size 留 v4.1+。
+const _ASR_UI_SIZES = ['small', 'medium'] as const;
+
+function FasterWhisperCard({ showToast }: FasterWhisperCardProps) {
+  const [size, setSize] = useState<string>('small');
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${_BACKEND_BASE}/api/config/asr`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as AsrConfigResponse;
+        if (cancelled) return;
+        setSize(j.whisper_model_size);
+        setLoaded(true);
+      } catch (e) {
+        showToast(`加载 ASR 配置失败：${(e as Error).message}`);
+        setLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showToast]);
+
+  const onChange = useCallback(async (next: string) => {
+    if (next === size || busy) return;
+    const prev = size;
+    setSize(next);  // optimistic
+    setBusy(true);
+    try {
+      const r = await fetch(`${_BACKEND_BASE}/api/config/asr`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ whisper_model_size: next }),
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try {
+          const j = await r.json();
+          if (j?.detail) detail = String(j.detail);
+        } catch { /* ignore */ }
+        throw new Error(detail);
+      }
+      showToast(`Whisper model_size → ${next}; 下次录音重新加载`);
+    } catch (e) {
+      setSize(prev);
+      showToast(`切换失败：${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [size, busy, showToast]);
+
+  return (
+    <div
+      className="rounded-lg p-4"
+      style={{
+        background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
+        border: '1px solid var(--color-border-subtle)',
+      }}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Mic size={16} style={{ color: 'var(--color-text-accent)' }} />
+          <span
+            className="text-sm font-medium truncate"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
+            Faster Whisper (本地)
+          </span>
+          <span
+            className="text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              color: 'var(--color-text-secondary)',
+            }}
+          >
+            builtin
+          </span>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div>
+          <label className="block text-xs mb-1"
+            style={{ color: 'var(--color-text-primary)' }}>
+            Model 大小
+          </label>
+          {!loaded ? (
+            <div className="text-xs"
+              style={{ color: 'var(--color-text-secondary)' }}>
+              加载中…
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              {_ASR_UI_SIZES.map((s) => {
+                const active = s === size;
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => void onChange(s)}
+                    disabled={busy}
+                    className="text-xs px-3 py-1.5 rounded-md transition disabled:opacity-50"
+                    style={
+                      active
+                        ? {
+                            background: 'var(--color-accent)',
+                            color: 'var(--color-bubble-user-text)',
+                          }
+                        : {
+                            background: 'var(--color-bg-input)',
+                            border: '1px solid var(--color-border)',
+                            color: 'var(--color-text-primary)',
+                          }
+                    }
+                  >
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className="text-[10px] mt-1"
+            style={{ color: 'var(--color-text-secondary)' }}>
+            small 快 / 体积小; medium 准 / 加载稍慢。切换后下次录音才 reload。
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Bugfix-3.3 — CosyVoiceTTSCard (TTS tab)
+// ---------------------------------------------------------------------------
+
+interface CosyVoiceVoiceCfg {
+  id: string;
+  label?: string;
+  traits?: string;
+  instruct?: boolean;
+}
+
+interface ConfigTtsExtract {
+  default_voice: string;
+  available_voices: CosyVoiceVoiceCfg[];
+}
+
+interface CosyVoiceTTSCardProps {
+  showToast: (text: string) => void;
+  onConfigureQwenCred: (qwenVendor: AIVendor) => void;
+}
+
+function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardProps) {
+  const [qwenVendor, setQwenVendor] = useState<AIVendor | null>(null);
+  const [voiceId, setVoiceId] = useState<string>('');
+  const [voicesAvail, setVoicesAvail] = useState<CosyVoiceVoiceCfg[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // 1. Qwen vendor cred 状态 (CosyVoice 走 DashScope, 复用 Qwen vendor 的 key)
+        const r1 = await fetch(`${_BACKEND_BASE}/api/ai-vendors`);
+        if (r1.ok) {
+          const vList = (await r1.json()) as AIVendor[];
+          if (!cancelled) {
+            setQwenVendor(vList.find((v) => v.id === 'qwen') ?? null);
+          }
+        }
+        // 2. 当前 voice + 可选 voices (从 yaml::tts.cosyvoice.default_voice +
+        //    yaml::tts.available_voices.cosyvoice 读)
+        const r2 = await fetch(`${_BACKEND_BASE}/api/config`);
+        if (r2.ok) {
+          const cfg = await r2.json();
+          if (!cancelled) {
+            // /api/config 不暴露 tts 内部字段; 退而读 .tts 不够 → 直接读 yaml
+            // 没接口,只显示 default_voice 的 id (用户暂只看可读名)。
+            // 这里 voicesAvail 通过 hard-coded fallback list (yaml seed) — 真正
+            // 切 voice 走 setConfigField('tts.cosyvoice.default_voice', id)。
+            void cfg;  // /api/config 当前不返 cosyvoice 子节, 等下个 stage 加
+          }
+        }
+        // Fallback voices list (与 config.yaml 的 seed 一致)
+        if (!cancelled) {
+          setVoicesAvail([
+            { id: 'longyumi_v3',   label: '龙裕米 v3',  traits: '正经青年女' },
+            { id: 'longfeifei_v3', label: '龙菲菲 v3',  traits: '甜美娇气女' },
+            { id: 'longwan_v3',    label: '龙婉 v3',    traits: '柔声女' },
+            { id: 'longqiang_v3',  label: '龙强 v3',    traits: '浪漫女' },
+            { id: 'longxing_v3',   label: '龙星 v3',    traits: '邻家女' },
+            { id: 'longanhuan',    label: '龙安欢',     traits: '欢脱元气女' },
+            { id: 'longanyang',    label: '龙安洋',     traits: '阳光大男孩' },
+          ]);
+          setVoiceId('longyumi_v3');
+        }
+      } catch (e) {
+        if (!cancelled) {
+          showToast(`加载 CosyVoice 配置失败：${(e as Error).message}`);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showToast]);
+
+  const onVoiceChange = useCallback(async (next: string) => {
+    if (next === voiceId || busy) return;
+    const prev = voiceId;
+    setVoiceId(next);
+    setBusy(true);
+    try {
+      await setConfigField('tts.cosyvoice.default_voice', next);
+      showToast(`CosyVoice voice → ${next}; 下条回复生效`);
+    } catch (e) {
+      setVoiceId(prev);
+      showToast(`切换 voice 失败：${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [voiceId, busy, showToast]);
+
+  return (
+    <div
+      className="rounded-lg p-4"
+      style={{
+        background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
+        border: '1px solid var(--color-border-subtle)',
+      }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Volume2 size={16} style={{ color: 'var(--color-text-accent)' }} />
+          <span
+            className="text-sm font-medium truncate"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
+            CosyVoice (DashScope)
+          </span>
+          <span
+            className="text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              color: 'var(--color-text-secondary)',
+            }}
+          >
+            builtin
+          </span>
+          {qwenVendor?.has_credential ? (
+            <span
+              className="text-[11px] flex items-center gap-1 shrink-0"
+              style={{ color: 'var(--color-text-accent)' }}
+              title={
+                qwenVendor.credential_source === 'env'
+                  ? '复用 Qwen vendor .env 凭证 (DASHSCOPE_API_KEY)'
+                  : '复用 Qwen vendor DB 凭证'
+              }
+            >
+              <CheckCircle2 size={12} /> 凭证已配置 (复用 Qwen)
+            </span>
+          ) : (
+            <span
+              className="text-[11px] flex items-center gap-1 shrink-0"
+              style={{ color: 'rgb(245,158,11)' }}
+            >
+              <AlertTriangle size={12} /> 未配置 (需 Qwen 凭证)
+            </span>
+          )}
+        </div>
+        {qwenVendor && !qwenVendor.has_credential && (
+          <button
+            type="button"
+            onClick={() => onConfigureQwenCred(qwenVendor)}
+            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded transition shrink-0"
+            style={{
+              background: 'var(--color-bg-input)',
+              border: '1px solid var(--color-border)',
+              color: 'var(--color-text-primary)',
+            }}
+          >
+            <KeyRound size={12} /> 配置 Qwen 凭证
+          </button>
+        )}
+      </div>
+
+      {/* Voice picker */}
+      <div>
+        <label className="block text-xs mb-1"
+          style={{ color: 'var(--color-text-primary)' }}>
+          默认 voice
+        </label>
+        <select
+          value={voiceId}
+          onChange={(e) => void onVoiceChange(e.target.value)}
+          disabled={busy || voicesAvail.length === 0}
+          className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none disabled:opacity-50"
+          style={{
+            background: 'var(--color-bg-input)',
+            border: '1px solid var(--color-border)',
+            color: 'var(--color-text-primary)',
+          }}
+        >
+          {voicesAvail.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label ?? v.id}
+              {v.traits ? ` — ${v.traits}` : ''}
+            </option>
+          ))}
+        </select>
+        <div className="text-[10px] mt-1"
+          style={{ color: 'var(--color-text-secondary)' }}>
+          角色级 voice 仍在 ⚙ 设置 → 角色管理 内单独配; 这里是全局 fallback。
         </div>
       </div>
     </div>

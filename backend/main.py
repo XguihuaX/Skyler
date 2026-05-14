@@ -121,7 +121,8 @@ from backend.routes.health_api import app_state, router as health_router
 from backend.routes.integrations_api import router as integrations_router
 from backend.routes.live2d_api import router as live2d_router
 from backend.routes.memory_api import router as memory_router
-from backend.routes.settings_api import router as settings_router
+# bugfix-3.3: settings_api 仅 GET/POST /api/settings/model — DB ai_providers
+# 已是新唯一 LLM 路由,该路由整文件删除。yaml available_models 字段一并删。
 from backend.routes.tts_api import router as tts_router
 from backend.routes.users_api import router as users_router
 from backend.routes.webhooks_api import router as webhooks_router
@@ -752,7 +753,8 @@ app.add_middleware(
 
 app.include_router(health_router,        prefix="/api", tags=["health"])
 app.include_router(config_router,        prefix="/api", tags=["config"])
-app.include_router(settings_router,      prefix="/api", tags=["settings"])
+# bugfix-3.3: settings_router (仅 /api/settings/model) 已下线 — DB ai_providers
+# 是 LLM 路由唯一入口。前端切 model 走 POST /api/ai-providers/{id}/activate。
 app.include_router(memory_router,        prefix="/api", tags=["memory"])
 app.include_router(conversations_router, prefix="/api", tags=["conversations"])
 app.include_router(characters_router,    prefix="/api", tags=["characters"])

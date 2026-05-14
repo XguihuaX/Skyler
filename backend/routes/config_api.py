@@ -197,3 +197,69 @@ async def set_base_instruction_endpoint(body: BaseInstructionUpdateBody) -> dict
             status_code=500, detail=f"config.yaml write failed: {exc}"
         ) from exc
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Bugfix-3.3: ASR (Faster Whisper) model_size 配置
+# ---------------------------------------------------------------------------
+
+_ASR_ALLOWED_SIZES = ("tiny", "base", "small", "medium", "large-v3")
+
+
+class AsrConfigResponse(BaseModel):
+    whisper_model_size: str = "small"
+    allowed_sizes: list[str] = list(_ASR_ALLOWED_SIZES)
+
+
+class AsrConfigUpdateBody(BaseModel):
+    whisper_model_size: str
+
+
+@router.get("/config/asr", response_model=AsrConfigResponse)
+async def get_asr_config_endpoint() -> Any:
+    """读取 ASR 配置 (当前 + 可选 list)。bugfix-3.3: UI Faster Whisper 卡用。"""
+    from backend.config import get_whisper_model_size
+    return AsrConfigResponse(whisper_model_size=get_whisper_model_size())
+
+
+@router.post("/config/asr")
+async def set_asr_config_endpoint(body: AsrConfigUpdateBody) -> dict:
+    """更新 ASR 配置 + 触发 WhisperASR reload (异步,下次 transcribe 用新 size)。
+
+    Validation: model_size 必须在 ``_ASR_ALLOWED_SIZES`` 内。
+    """
+    if body.whisper_model_size not in _ASR_ALLOWED_SIZES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"unknown whisper_model_size {body.whisper_model_size!r}. "
+                f"Allowed: {list(_ASR_ALLOWED_SIZES)}"
+            ),
+        )
+
+    def _mutate(current: dict) -> None:
+        asr_cfg = current.get("asr")
+        if not isinstance(asr_cfg, dict):
+            asr_cfg = {}
+        asr_cfg["whisper_model_size"] = body.whisper_model_size
+        current["asr"] = asr_cfg
+
+    try:
+        await write_config_atomic(_CONFIG_PATH, _mutate)
+        reload_config_yaml()
+    except yaml.YAMLError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"config.yaml syntax error: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"config.yaml write failed: {exc}"
+        ) from exc
+
+    # 触发 lazy reload —— 不 await 完整加载 (medium ~ 100MB 加载耗时), 让下次
+    # transcribe 走 load_model 触发 size-mismatch 路径自然 reload。
+    from backend.asr.whisper import whisper_asr
+    import asyncio as _asyncio
+    _asyncio.create_task(whisper_asr.reload_if_size_changed())
+
+    return {"status": "ok", "whisper_model_size": body.whisper_model_size}

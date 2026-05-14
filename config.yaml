@@ -1,61 +1,27 @@
 default_model: openai/qwen3.6-max-preview
 planner_model: openai/qwen-turbo
 default_user_id: default
-available_models:
-- id: openai/qwen3.6-plus
-  display_name: Qwen3.6 Plus
-  description: 稳定平衡，日常推荐
-  tier: stable
-- id: openai/qwen3.6-max-preview
-  display_name: Qwen3.6 Max
-  description: 最强能力，preview 期可能偶发不稳
-  tier: preview
+# bugfix-3.3: available_models 字段下线。LLM 列表 / 切换由 DB ai_providers
+# (bugfix-3.1+) 统一管,前端走 /api/ai-providers。default_model 保留作 yaml
+# fallback (LLM dispatcher 无 DB active 时用)。
 base_instruction: 回复简短克制，通常不超过3句话，除非用户明确需要详细解释。不总结、不复述用户说的话。不用"当然"、"没问题"、"好的"等开场白。不在句尾加多余的关心语。像真实的人一样说话，不像客服或AI助手。
 memory:
   long_term_enabled: true
   profile_enabled: true
-  # v3.5 chunk 9 Part 0：embedding 检索性能调优
-  #   device:                "auto" / "cpu" / "mps"。auto = cpu（benchmark
-  #                          显示对短文本 cpu / mps median 几乎一致 ~15ms，
-  #                          mps avg 因 cold JIT 更高 + 与 Whisper 抢 GPU；
-  #                          要 mps 显式改 ``device: mps``）。详见
-  #                          ROADMAP §chunk 9 audit。
-  #   short_input_threshold: 单 user 输入字符数 < N 时跳过 memory 检索（短问
-  #                          候 / 单字命令 / 标点等无语义内容，向量检索价值
-  #                          极低，纯浪费 10-30ms encode 时间）
-  #   cache_size:            最近 N 条 user_input → embedding 的 LRU 缓存大小
-  #   cache_ttl_seconds:     缓存 entry TTL；超过即丢弃重新 encode
   embedding:
     device: auto
     short_input_threshold: 10
     cache_size: 100
     cache_ttl_seconds: 300
-  # v3.5 chunk 9 Part 4：forgetting curve
-  #   score = relevance * (1 + log(1 + access_count)) / (1 + age_days * decay)
-  #   threshold      score < N 的 entry 不进 top-k（保留 DB，可被后续召回）
-  #   age_decay      每天衰减系数（0.01 = 100 天后约半权）
-  #   enabled=false  退回旧 pure-cosine 排序（用于调试 / 用户偏好关闭衰减）
   forgetting_curve:
     enabled: true
     threshold: 0.3
     age_decay_factor: 0.01
-  # v3.5 chunk 11：structured profile_data（取代 chunk 9 自然语言 profile_summary）
-  #   enabled=false       → cron 不真跑；legacy profile_summary 注入路径继续
-  #   cron                每天定时全用户重生
-  #   input_days          重生时取最近 N 天的 role='user' 消息作输入
-  #   min_user_messages   input_days 窗口内 user 行 < N → skip（数据保护）
   profile_structured:
     enabled: true
-    cron: "55 23 * * *"
+    cron: 55 23 * * *
     input_days: 7
     min_user_messages: 10
-  # v3.5 chunk 10：server-side memory extractor worker
-  #   enabled=false       → worker 不启动；save_memory tool 显式入口仍可用
-  #   interval_seconds    两次 batch 间隔；默认 300（5 分钟）
-  #   batch_size          单批次最多扫多少条新 turn；默认 50
-  #   min_confidence      LLM 自评 < N → reject；默认 0.5
-  #   dup_threshold       cosine 相似度 > N → 视同重复 reject；默认 0.9
-  #   llm_judge_enabled   第 5 道 filter "对未来对话有用吗"；默认 false
   extractor:
     enabled: true
     interval_seconds: 300
@@ -134,7 +100,7 @@ proactive:
     cron: 0 8 * * *
     pending_ttl_minutes: 30
     default_snooze_minutes: 30
-    city: 东京
+    city: 上海
   triggers:
     lunch_call:
       enabled: true
@@ -190,85 +156,55 @@ mcp_clients:
     - NOTION_API_KEY
     enabled: false
     expose_via_skyler_server: false
-
-# v3.5 chunk 8a — 活动感知 (active app / browser URL / 公开页面正文 / 主动 trigger)
-# 默认 enabled: true，但 macOS AppleScript 权限要用户首次启动手动授权（NSAppleEvents
-# UsageDescription 弹窗）。前端 ActivityPermissionModal 会在自检失败时引导用户去
-# 系统设置 → 隐私与安全性 → 自动化 给权限。
+  filesystem-skyler:
+    description: Read files from MomoOS-v2 repo
+    transport: stdio
+    enabled: true
+    expose_via_skyler_server: true
+    command: npx
+    args:
+    - '@modelcontextprotocol/server-filesystem'
+    - /Users/liujunhong/Desktop/MomoOS-v2
 activity_watcher:
   enabled: true
   poll_interval_seconds: 30
-  fetch_url_content: true        # 切到非黑名单 URL 时后台抓正文给 Momo 看
+  fetch_url_content: true
   blocked_apps:
-    - 1Password
-    - Bitwarden
-    - Keychain Access
+  - 1Password
+  - Bitwarden
+  - Keychain Access
   blocked_url_patterns:
-    # 银行 / 金融
-    - '*chase.com*'
-    - '*bankofamerica.com*'
-    - '*wellsfargo.com*'
-    - '*paypal.com*'
-    # 邮箱
-    - '*mail.google.com*'
-    - '*outlook.live.com*'
-    - '*outlook.office.com*'
-    - '*mail.yahoo.com*'
-    - '*mail.qq.com*'
-    - '*mail.163.com*'
-    # 社交（登录后内容隐私敏感）
-    - '*facebook.com/*'
-    - '*instagram.com/*'
-    - '*twitter.com/*'
-    - '*x.com/*'
-    - '*linkedin.com/feed*'
-    # 本地 dev / 局域网
-    - '*localhost*'
-    - '127.0.0.1*'
-    - '192.168.*'
-    - '10.0.*'
-  trigger_throttle_minutes: 30   # 同类型 activity trigger 间隔
-  max_daily_triggers: 5          # 一天最多触发 activity trigger 数（0 = 无上限）
-
-
-# v3.5 chunk 8a-ext — 智能陪伴 judge 慢路径
-# 在快路径(IDE/音乐/技术文档等硬编码 trigger)没命中时,用 qwen-turbo
-# 判断"用户在当前 app/URL 停 5+ min 时是否值得主动说话"。yes → fire 走
-# 现有 proactive engine + ChatAgent 主对话。共享 activity_watcher 的
-# daily_cap (max_daily_triggers)。
-#
-# 三重门防滥用:
-#   * min_stay_minutes  停留 < N 分钟 → 不 judge(默 5)
-#   * throttle_minutes  同 stay_key 节流(默 10)
-#   * fire_throttle     同 label 30 min(由 activity_watcher.trigger_throttle_minutes 共享)
-#
-# v3.5 chunk 8a-ext V2 追加: macOS 键鼠 idle 闸
-#   * idle_threshold_seconds  ioreg HIDIdleTime > N 秒 → 认为人不在电脑前,
-#                             skip judge LLM call。0 = 关闭检测(老 V1 行为)。
-#                             非 macOS get_idle_seconds 返 None,自动按"活跃"走
-#                             不影响 V1 行为。
+  - '*chase.com*'
+  - '*bankofamerica.com*'
+  - '*wellsfargo.com*'
+  - '*paypal.com*'
+  - '*mail.google.com*'
+  - '*outlook.live.com*'
+  - '*outlook.office.com*'
+  - '*mail.yahoo.com*'
+  - '*mail.qq.com*'
+  - '*mail.163.com*'
+  - '*facebook.com/*'
+  - '*instagram.com/*'
+  - '*twitter.com/*'
+  - '*x.com/*'
+  - '*linkedin.com/feed*'
+  - '*localhost*'
+  - 127.0.0.1*
+  - 192.168.*
+  - 10.0.*
+  trigger_throttle_minutes: 30
+  max_daily_triggers: 5
 activity_judge:
-  enabled: true               # 默认 ON。用户明确要陪伴感,SettingsPanel 二级 toggle 可关
-  model: qwen-turbo           # 便宜模型,与 chunk 10/11 同源
+  enabled: true
+  model: qwen-turbo
   min_stay_minutes: 5
   throttle_minutes: 10
-  prompt_max_chars: 2000      # 喂 judge 的 URL 正文摘要上限
-  idle_threshold_seconds: 300 # chunk 8a-ext V2: 键鼠静止超 300s 视为离开
-
-
-# v3.5 chunk 14 — 活动 timeline(activity_sessions 表)
-# 跟 chat_history 平行的第二条 timeline,session-writer poll listener 在
-# (app, url) 元组变化时把上一段 stay 写一行。chime in 决策路径(8a-ext judge)
-# 与本 timeline 完全独立 — 关掉 enabled 只影响 timeline 持久化,judge 继续跑。
-#
-#   * enabled               总开关(默 ON);关掉后 watcher 仍跑但不写 DB
-#   * min_session_seconds   短 session 过滤(默 30,与 poll_interval 同步)
-#   * cleanup_days          保留天数,> N 天的 session 行被每日 cron 清除(默 30)
-#   * cleanup_cron          清理 cron(默 23:59 每日,timezone 走 scheduler.timezone)
+  prompt_max_chars: 2000
+  idle_threshold_seconds: 300
 activity_timeline:
-  enabled: true              # 总开关:写 activity_sessions(关掉后 watcher 仍跑只是不写表)
-  inject_into_chat: true     # commit 5 ChatAgent system prompt 注入今日摘要;
-                             # 与 enabled 解耦 — 用户可"记录但不在对话里被引用"
-  min_session_seconds: 30    # 短 session 过滤,与 watcher poll_interval 同步
-  cleanup_days: 30           # 保留天数,> N 天的行被每日 cron 清(commit 7)
-  cleanup_cron: "59 23 * * *"
+  enabled: true
+  inject_into_chat: true
+  min_session_seconds: 30
+  cleanup_days: 30
+  cleanup_cron: 59 23 * * *

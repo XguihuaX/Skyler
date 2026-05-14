@@ -20,7 +20,7 @@ from typing import Optional
 
 from faster_whisper import WhisperModel
 
-from backend.config import settings
+from backend.config import get_whisper_model_size, settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class WhisperASR:
 
     def __init__(self) -> None:
         self._model: Optional[WhisperModel] = None
+        self._loaded_size: Optional[str] = None  # bugfix-3.3: 记录已加载 size
         self._lock: Optional[asyncio.Lock] = None
 
     def _get_lock(self) -> asyncio.Lock:
@@ -49,25 +50,44 @@ class WhisperASR:
     # ------------------------------------------------------------------
 
     async def load_model(self) -> None:
-        """Initialise the WhisperModel if not already loaded (thread-safe)."""
-        if self._model is not None:
+        """Initialise the WhisperModel if not already loaded (thread-safe)。
+
+        bugfix-3.3: model_size 走 ``get_whisper_model_size()`` 读 yaml override
+        (UI 写回 ``asr.whisper_model_size``)。若 yaml 改了 size 跟当前已加载的
+        不同 → 触发 reload (旧 model 引用置 None 让 GC 回收)。
+        """
+        desired_size = get_whisper_model_size()
+        if self._model is not None and self._loaded_size == desired_size:
             return
         async with self._get_lock():
-            if self._model is not None:   # re-check after acquiring lock
+            # re-check after acquiring lock — 跟 desired_size 比对决定是否 reload
+            if self._model is not None and self._loaded_size == desired_size:
                 return
-            model_size = settings.whisper_model
             device     = settings.whisper_device
             compute    = _compute_type(device)
+            action = "Reloading" if self._model is not None else "Loading"
             logger.info(
-                "Loading WhisperModel '%s' on %s (compute_type=%s)",
-                model_size, device, compute,
+                "%s WhisperModel '%s' on %s (compute_type=%s)",
+                action, desired_size, device, compute,
             )
+            # drop old model ref so faster-whisper / GPU mem can be freed by GC
+            self._model = None
             loop = asyncio.get_event_loop()
             self._model = await loop.run_in_executor(
                 _executor,
-                lambda: WhisperModel(model_size, device=device, compute_type=compute),
+                lambda: WhisperModel(desired_size, device=device, compute_type=compute),
             )
-            logger.info("WhisperModel ready")
+            self._loaded_size = desired_size
+            logger.info("WhisperModel '%s' ready", desired_size)
+
+    async def reload_if_size_changed(self) -> bool:
+        """Bugfix-3.3: 暴露给 API endpoint 用 — yaml 改 size 后调用,
+        若 desired != loaded → load_model 触发 reload。返回是否真的 reload。"""
+        desired = get_whisper_model_size()
+        if self._model is not None and self._loaded_size == desired:
+            return False
+        await self.load_model()
+        return True
 
     # ------------------------------------------------------------------
     # Transcription

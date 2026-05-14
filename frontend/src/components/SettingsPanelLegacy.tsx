@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore, type ThemeKey } from '../store';
 import { setConfigField } from '../lib/window';
-import { fetchModels, setModel, type ModelInfo } from '../lib/models';
+// bugfix-3.3: lib/models.ts 已下线 (旧 /api/settings/model 路径)。LLM 切换走
+// DB ai_providers; 这个 legacy 面板里的 ModelSection 一并删除。
 import {
   triggerTestBriefing,
   resetCharacterState,
@@ -1169,174 +1170,6 @@ export function ThemeSection() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// v3-G chunk 1.7 — AI 模型切换器
-// ---------------------------------------------------------------------------
-
-interface ModelSectionProps {
-  showToast: (text: string) => void;
-}
-
-// bugfix-2.2: 导出供 CapabilitiesPanel (AI Providers tab) 复用。
-export function ModelSection({ showToast }: ModelSectionProps) {
-  const [current, setCurrent] = useState<string>('');
-  const [available, setAvailable] = useState<ModelInfo[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const state = await fetchModels();
-        if (cancelled) return;
-        setCurrent(state.current);
-        setAvailable(state.available);
-        setLoaded(true);
-      } catch (e) {
-        console.error('[ModelSection] fetch failed:', e);
-        showToast(`AI 模型列表加载失败：${(e as Error).message}`);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [showToast]);
-
-  const onChange = useCallback(async (next: string) => {
-    if (next === current || busy) return;
-    const prev = current;
-    setCurrent(next);   // optimistic
-    setBusy(true);
-    try {
-      const state = await setModel(next);
-      setCurrent(state.current);
-      const picked = state.available.find((m) => m.id === state.current);
-      showToast(`已切换至 ${picked?.display_name ?? state.current}`);
-    } catch (e) {
-      console.error('[ModelSection] set failed:', e);
-      setCurrent(prev);
-      showToast(`切换失败：${(e as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
-  }, [current, busy, showToast]);
-
-  const currentInfo = available.find((m) => m.id === current);
-
-  return (
-    <section
-      className="mb-4 rounded-lg p-4"
-      style={{
-        background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
-        border: '1px solid var(--color-border-subtle)',
-      }}
-    >
-      <h3
-        className="text-sm font-medium mb-3"
-        style={{ color: 'var(--color-text-secondary)' }}
-      >
-        AI 模型
-      </h3>
-
-      {/* bugfix-3.2: deprecation banner —— 此 section 仍读 config.yaml::available_models
-          + /api/settings/model, 写后端 DB AI Provider 路径 (Bugfix-3.1) 是
-          独立的 fallback。3.3 ship 后老 yaml 路径会删, 本 section 一并下线。 */}
-      <div
-        className="text-[11px] px-2.5 py-1.5 mb-3 rounded"
-        style={{
-          background: 'color-mix(in srgb, rgb(245,158,11) 12%, transparent)',
-          color: 'rgb(245,158,11)',
-          border: '1px solid rgba(245,158,11,0.3)',
-        }}
-      >
-        ⚠ Deprecated · 本面板将在下个 stage 移除, 请改用 📂 能力 / AI Providers
-      </div>
-
-      {!loaded ? (
-        <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-          加载中…
-        </div>
-      ) : available.length === 0 ? (
-        <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-          config.yaml 没配置 available_models。
-        </div>
-      ) : (
-        <>
-          <div className="flex flex-col gap-2">
-            {available.map((m) => {
-              const active = m.id === current;
-              const isPreview = m.tier === 'preview';
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onChange(m.id)}
-                  className="text-left p-3 rounded-md transition"
-                  style={{
-                    background: active
-                      ? 'color-mix(in srgb, var(--color-accent) 15%, transparent)'
-                      : 'var(--color-bg-elevated)',
-                    border: active
-                      ? '1.5px solid var(--color-accent)'
-                      : '1px solid var(--color-border-subtle)',
-                    cursor: busy ? 'wait' : 'pointer',
-                    opacity: busy && !active ? 0.6 : 1,
-                  }}
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="text-sm font-medium"
-                      style={{
-                        color: active
-                          ? 'var(--color-text-accent)'
-                          : 'var(--color-text-primary)',
-                      }}
-                    >
-                      {active ? '✓ ' : ''}{m.display_name}
-                    </span>
-                    <span
-                      className="text-[10px] px-1.5 py-0.5 rounded"
-                      style={
-                        isPreview
-                          ? {
-                              background: 'rgba(245, 158, 11, 0.15)',
-                              color: 'rgb(245, 158, 11)',
-                              border: '1px solid rgba(245, 158, 11, 0.4)',
-                            }
-                          : {
-                              background: 'var(--color-bg-elevated)',
-                              color: 'var(--color-text-secondary)',
-                              border: '1px solid var(--color-border-subtle)',
-                            }
-                      }
-                    >
-                      {m.tier}
-                    </span>
-                  </div>
-                  <div
-                    className="text-xs mt-1"
-                    style={{ color: 'var(--color-text-secondary)' }}
-                  >
-                    {m.description}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          <div
-            className="text-[11px] mt-3"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            下次对话立即生效，无需重启。当前：
-            <span style={{ color: 'var(--color-text-primary)' }}>
-              {' '}{currentInfo?.display_name ?? current}
-            </span>
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Basic profile section (nickname + language)
@@ -1791,9 +1624,8 @@ export default function SettingsPanel() {
       {/* v3-A — UI 风格选择，置顶 */}
       <ThemeSection />
 
-      {/* v3-G chunk 1.7 — AI 模型切换（在 capability panel 之上，让用户先
-          决定脑子用谁，再看 capability 列表）*/}
-      <ModelSection showToast={showToast} />
+      {/* bugfix-3.3: ModelSection 已下线 — LLM 列表 / 切换走 📂 能力 →
+          🧠 AI Providers (新 UI 直接管 DB ai_providers 表)。 */}
 
       {/* v3-G chunk 0 — 能力总览（spec 称"tab"，但 SettingsPanel 是单列
           Section 布局，无 tab 容器；放成顶部 Section 是与现有 UX 最一致

@@ -27,7 +27,8 @@ import AIProvidersSection from './AIProvidersSection';
  * 5 个 section(对照 bugfix-2.2 spec):
  *   - 🔌 MCP Servers       —— ExtensionsSection
  *   - 🎭 Live2D Models     —— app 级模型库 list + dropzone
- *   - 🧠 AI Providers      —— 3 个子 tab: LLM(ModelSection) / ASR-VAD / TTS
+ *   - 🧠 AI Providers      —— 3 个子 tab: LLM (vendor 卡 + DB ai_providers) /
+ *                             ASR (Faster Whisper + VAD) / TTS (CosyVoice 卡)
  *   - 📊 能力监控          —— CapabilityPanel (11 段 cap 卡片 + health badge)
  *   - 🧩 Skills .py        —— 占位 (v4.1+)
  */
