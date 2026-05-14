@@ -567,3 +567,117 @@ state)+ TopBar 入口替换。
 Audit 完成时间:2026-05-14
 git commit hash:`50b54aa`(`50b54aa4e8124566fc99bd9a4f1e62d77d4e5ce6`,
 audit 仅产文档,无源码改动,与本 commit 同 head)
+
+
+---
+
+# Fan UI 完成状态(Fan-6 ship 后追写)
+
+完成时间:2026-05-14。Fan UI 6 个 sub-stage(实际 14 个 commit,含 5 次 micro-iter)按
+audit §推荐顺序 ship 完毕,真机走查通过。
+
+## sub-stage 列表 + commit hash
+
+| stage | commit | 内容 |
+| --- | --- | --- |
+| Audit (Fan-0) | `3024d31` | Q1-Q8 候选决策 + sub-stage 拆解(本文档主体) |
+| **Fan-1** backend | `2aaa4d2` | DB migration + POST/DELETE `/api/characters/{id}/splash-art` + 34/34 测试 |
+| **Fan-2** primitive | `c5b43da` | CharacterCard + `_placeholder.png` + backdrop-blur P0 spike(实测 ≥55fps,推荐方案) |
+| **Fan-3** layout | `eccfbe3` | FanLayout Model A 圆周转盘 + 最短路径 click + spike cleanup |
+| Fan-3.1 windowed | `ee484b6` | 大 N 窗口模式 + visibleCount 参数 |
+| Fan-3.2 step unify | `b8178f8` | 统一 stepDeg = arcDeg/(W-1),删 small-N 撑满弧路径 |
+| Fan-3.2 tweak | `9963ac8` | arc 默认 60° → 72°(实测后微调) |
+| **Fan-4** Gallery | `052d615` | TopBar GalleryThumbnails 按钮 + CharacterGallery 全屏 + DetailModal + framer-motion hero |
+| Fan-4.2 dyn bg | `b69cec4` | 动态背景跟 selected 角色 splash + 交叉淡化 |
+| Fan-4.3 cy v1 | `fa94e5c` | 居中公式重推 v1 |
+| Fan-4.4 cy v2 | `64f35b6` | 诊断 root cause(_FAN_QUERY 被 retire 时误删)+ 60% sel-center 公式 + URL query 复活 + debug overlay |
+| **Fan-5** dropzone | `35e8d74` | SplashArtDropzone + CharacterPanel 集成 + refresh 链路 |
+| Fan-5.1 blur tune | `275b03a` | 背景 blur 40 → 22(留轮廓感) |
+| Fan-5.2 blur polish | `cf1df47` | blur 22 → 14 + object-position center 20%(立绘上半铺满) |
+| **Fan-6** wrap | (本 commit) | dropdown 共存 sanity + ROADMAP backlog + 完成状态 marker |
+
+## Q1-Q8 决策落地 vs audit 拍板
+
+| Q | audit 推荐 | 实际落地 | 一致 |
+| --- | --- | --- | --- |
+| Q1 动画 | A 纯 CSS;hero 时 framer-motion | Fan-3 纯 CSS transform;Fan-4 hero 引 framer-motion | ✅ |
+| Q2 弧形布局 | A `transform: rotate()` + transform-origin | Fan-3 同;Fan-3.1 加窗口模式 | ✅ |
+| Q3 立绘存储 | A 文件 + URL 字符串 | Fan-1 `splash_art_url TEXT` + `frontend/public/splash-art/<id>.<ext>` | ✅ |
+| Q4 上传方式 | A 仿 Live2D multipart | Fan-1 backend + Fan-5 frontend 同 pattern | ✅ |
+| Q5 fallback | A 首字母 avatar → C 通用占位退化 | 简化为单一 `_placeholder.png`(Fan-2 PIL 灰图)— 一档退化更可控 | ⚠ 简化 |
+| Q6 detail 字段 | name + tagline + persona + character_state + 角标 | name + persona + character_state(无 tagline / interests,DB 暂无字段) | ⚠ 缩减(留 v4.1+ backlog) |
+| Q7 CTA 位置 | B detail 内"切换" | Fan-4 同 | ✅ |
+| Q8 卡牌底图 | A splash art(无图回 fallback) | Fan-2/4.2 同(详 fallback 简化见 Q5) | ✅ |
+
+**关键偏离 1**:Q5 fallback 链从"首字母 avatar → 通用占位"两档简化成"单一 placeholder.png"。
+理由:首字母 avatar 跟主题色绑定逻辑复杂,而 placeholder 一张图覆盖所有 case 更可控,
+工程成本更低。dogfood 后若觉得"全部 placeholder 太单调",再 Fan-7+ 加首字母层。
+
+**关键偏离 2**:Q6 detail 缩减到 name + persona + character_state。tagline / interests
+DB 字段未加(audit 估时也是 "可选")。当前 detail panel 已经"够用",留 v4.1 backlog
+等用户反馈再决定加 schema 与否。
+
+## 已知 v4.1+ 改进点(写进 ROADMAP)
+
+| 项 | 工时 | 触发条件 |
+| --- | --- | --- |
+| Vitest + 视觉回归套件 | 0.5-1d | 后续 layout 数学(stepDeg / shortestDelta / fade)迭代频繁时 |
+| tagline / interests schema | 0.5-1d | 用户反馈 detail panel 信息密度不足 |
+| 立绘 batch 生产工作流 | (用户侧)| GPT Image 2 batch 跑完 → 一次性给所有 character upload |
+| 风格固化(themes 加 fan-specific token)| 0.5d | 5 主题下 fan UI 视觉验收 + 3 个 token(`--shadow-card-rest/lift` / `--gradient-card-default`)能否承载所有主题 |
+| 卡间 hover 锐化背景 | 0.3d | 用户觉得静态背景太"死",想要 hover 哪张卡背景临时去 blur 一档 |
+| Widget mode Gallery 入口 | 0.5d | TopBar 只 panel mode 渲染,widget mode 没 Gallery 入口;若用户常 widget mode 浏览角色再补(ControlBar 加按钮) |
+| Fan-7 hover 卡 | 0.3d | dogfood 后觉得静态卡太呆 |
+
+## 整体 bundle 增量(audit 预估 vs 实际)
+
+| | gzip | raw |
+| --- | --- | --- |
+| pre-Fan baseline(Fan-0 / Fan-1 backend only)| ~290 KB | ~1023 KB |
+| Fan-2(`+CharacterCard / placeholder` only) | 290.50 KB | 1023.34 KB |
+| Fan-3(`+FanLayout`,~5 KB) | ~293 KB | ~1031 KB |
+| Fan-4(`+CharacterGallery / DetailModal / framer-motion`) | 337.34 KB | 1164.38 KB |
+| Fan-5(`+SplashArtDropzone / lib/characters`)| 339.57 KB | 1172.67 KB |
+| **Fan-6 ship** | **~340 KB** | **~1175 KB** |
+| **总增量** | **+50 KB(~17%)** | **+150 KB** |
+
+audit §3.3 预估:"framer-motion ~50 KB gzipped"。**实际 +44 KB,对齐**。其余 ~6 KB
+是 4 个组件 + 1 个 lib 文件。
+
+## 总工时(audit vs 实际)
+
+audit §6 预估 6 个 sub-stage **5-7 工作日**。
+
+实际:
+- Fan-1 backend ~0.5d
+- Fan-2 primitive + spike ~0.5d
+- Fan-3 layout(3 micro-iter)~1d
+- Fan-4 Gallery + bg + 居中(4 micro-iter)~1.5d
+- Fan-5 dropzone(3 micro-iter)~0.5d
+- Fan-6 wrap ~0.3d
+
+**累计 ~4.3 工作日**,在 audit estimate 内偏低端。原因:大量复用现有 pattern(Live2DDropzone
+HTML5 drag/drop / Live2D upload backend 路径 / themes.css var system),且 spike 提前
+验证 backdrop-blur 性能让 Fan-4 直接走 overlay 方案不绕弯。
+
+## 6 个 flow 真机验收清单
+
+```
+1. TopBar 点 Gallery 按钮 → 全屏 overlay,fan 视觉 + 动态背景 + selected 标识 ✓
+2. 点边卡 → fan rotate 500ms 平滑过渡到该卡为中心,背景同时交叉淡化 600ms ✓
+3. 点中心卡 → DetailModal 开,framer-motion hero 从 browse 卡 morph 到 detail
+   位置(0.45s,cubic-bezier),persona / character_state / CTA 显示 ✓
+4. detail "切换到这个角色" CTA → setCurrentCharacterId + Gallery 关 →
+   主 UI Live2D 切换,WS character_id 同步,新对话流走该角色 ✓
+5. ESC 关 detail(回 browse)/ ESC 关 Gallery(回主 UI)/ × 按钮同效 ✓
+6. CharacterPanel 角色立绘 dropzone 拖图 → toast + refresh →
+   再开 Gallery → 该角色卡片显示真立绘 + 背景变成 blur 14px 立绘 ✓
+```
+
+任意一个 flow 出问题 → 报 micro-iter。
+
+---
+
+Fan UI 完成时间:2026-05-14
+Fan-6 commit hash:见 git log(本段追写时未知,git tag 后回填)
+

@@ -62,7 +62,7 @@ export default function CharacterSwitcher() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 px-2 py-1 rounded-md transition text-sm hover:bg-[color-mix(in_srgb,var(--color-bg-elevated)_60%,transparent)]"
+        className="flex items-center gap-2 px-2 py-1 rounded-md transition text-sm hover:bg-[color-mix(in_srgb,var(--color-bg-elevated)_70%,transparent)]"
         style={{ color: 'var(--color-text-primary)' }}
         title="切换角色"
       >
