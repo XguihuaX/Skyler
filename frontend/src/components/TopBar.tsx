@@ -1,14 +1,14 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ChevronsUp, GalleryThumbnails, Minus, X } from 'lucide-react';
+import { ChevronsUp, Minus, X } from 'lucide-react';
 import { useAppStore } from '../store';
 import { applyModeWindowProps } from '../lib/window';
 import CharacterSwitcher from './CharacterSwitcher';
 
 export default function TopBar() {
   const setMode = useAppStore((s) => s.setMode);
-  // v4-fan chunk 4: Gallery 入口。setGalleryOpen(true) → CharacterGallery
-  // 全屏 overlay 接管,主 UI 仍在底层(reactive store 同步)。
-  const setGalleryOpen = useAppStore((s) => s.setGalleryOpen);
+
+  // bugfix-2.6: Gallery 入口已挪到 Sidebar(🎴 角色图鉴),TopBar 不再有
+  // GalleryThumbnails 按钮 + setGalleryOpen 订阅。
 
   const handleCollapse = async () => {
     await applyModeWindowProps('widget');
@@ -43,20 +43,6 @@ export default function TopBar() {
           MomoOS
         </span>
       </div>
-
-      {/* v4-fan chunk 4: Character Gallery 入口。放 CharacterSwitcher 旁,
-          视觉一组"角色相关"操作。Switcher 仍是快速切角色主路径,Gallery
-          是"浏览 + 详情"路径,两者并存(spec)。 */}
-      <button
-        type="button"
-        onClick={() => setGalleryOpen(true)}
-        className="w-7 h-7 mr-1 rounded-md flex items-center justify-center transition hover:bg-[color-mix(in_srgb,var(--color-bg-elevated)_70%,transparent)]"
-        style={{ color: 'var(--color-text-secondary)' }}
-        title="角色图鉴 / Character Gallery"
-        aria-label="打开角色图鉴"
-      >
-        <GalleryThumbnails size={16} />
-      </button>
 
       {/* Character switcher — sits before the window controls so dropdown
           opens within TopBar's stacking context. */}
