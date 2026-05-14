@@ -227,6 +227,10 @@ export default function FanLayout({
     // CARD_H_CONST = 240 是 CharacterCard browse 模式硬编码尺寸;若改响
     // 应式需把这个值改成 prop / measured。
     const CARD_H_CONST = 240;
+    // bugfix-2.3: Gallery 改成中性 fan 后 selected scale 实际不再生效,但保留
+    // 这个常数让 cy 公式保持向后兼容(若日后 polish 又给中心卡加 highlight scale)。
+    // 副作用:中心卡 visual 中心比 0.6*H 高 ~18px (CARD_H*0.075), 视觉差几乎
+    // 不可见 ($1080p 上约 0.02 viewport),不修。
     const SELECTED_SCALE = 1.15;
     return {
       radius,
@@ -353,7 +357,10 @@ export default function FanLayout({
           const y = -params.radius * Math.cos(rad);
           const displayed = offset * stepDeg;
           const opacity = fadeOpacity(displayed, params.arcDegree);
-          const isSelected = offset === 0;
+          // bugfix-2.3: 不再把 "offset === 0" 翻译成 selected 视觉突出。
+          // Gallery 浏览态希望中心卡和侧卡视觉一致 (都 desaturate 0.7 /
+          // brightness 0.85 / scale 1.0), 焦点感纯靠 fan 几何 (top 位置 +
+          // 圆周 transition) 自然呈现。``selected={false}`` 见下方 JSX。
 
           // v4-fan chunk 4: detail modal 打开时,该卡 wrapper 视觉藏起,
           // 让 motion.div 的 layoutId hero 动画独占该卡的 from→to morph。
@@ -382,7 +389,7 @@ export default function FanLayout({
                   character={c}
                   variant="browse"
                   rotation={base}
-                  selected={isSelected}
+                  selected={false}
                   onClick={() => {
                     setCurrentIndex((prev) => {
                       const prevMod = posMod(prev, N);

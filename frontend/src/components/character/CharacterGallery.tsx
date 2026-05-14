@@ -92,18 +92,31 @@ export default function CharacterGallery() {
   const open  = useAppStore((s) => s.galleryOpen);
   const setOpen = useAppStore((s) => s.setGalleryOpen);
   const characters = useAppStore((s) => s.characters);
-  const currentCharacterId = useAppStore((s) => s.currentCharacterId);
   const setCurrentCharacterId = useAppStore((s) => s.setCurrentCharacterId);
 
   const [mode, setMode] = useState<GalleryMode>('browse');
   const [detailForId, setDetailForId] = useState<number | null>(null);
 
-  // open=false → reset to browse for next open(避免下次打开还停在 detail)
+  // bugfix-2.3: Gallery 浏览态不再自动选中当前角色,改为本地 "centerCharId"
+  // 跟踪 fan 中心卡。打开 Gallery 时重置为 characters[0],不读 currentCharacterId
+  // (即"我现在用的角色"在 Gallery 内部毫无视觉地位,Gallery 是中性浏览)。
+  // 点边卡 → setCenterCharId(只转 fan); 点中心卡 → 进 detail。
+  // 切换 active 仅通过 detail modal CTA(handleSwitch)显式触发。
+  const [centerCharId, setCenterCharId] = useState<number | null>(null);
+
+  // open=false → reset state for next open(下次打开仍从第一张卡, 不记忆)
   useEffect(() => {
     if (!open) {
       setMode('browse');
       setDetailForId(null);
+      setCenterCharId(null);
+    } else {
+      // On every open transition, force-reset center to first card. 故意不
+      // 把 ``characters`` 加进 deps —— Gallery 开启中 characters 列表变化
+      // (eg 后台 polling 新角色加进来)不该让 fan 跳回第一张。
+      setCenterCharId(characters[0]?.id ?? null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // ESC handler:browse → close gallery;detail → back to browse(交给 modal)
@@ -121,37 +134,33 @@ export default function CharacterGallery() {
     return () => document.removeEventListener('keydown', onKey);
   }, [open, mode, setOpen]);
 
-  // FanLayout 的 onSelectCharacter:点边卡 → 仅旋转,不进 detail。
-  // 点中心卡(已 selected)→ 进 detail。FanLayout 不区分中心 / 边卡,
-  // 都调一次 onSelectCharacter。我们在这里判:click 的卡 id 已等于
-  // currentCharacterId → 是中心卡 → 进 detail;否则只是 carousel 旋转。
+  // bugfix-2.3: 点中心卡(本地 centerCharId)→ 进 detail; 点边卡 → 仅
+  // 旋转(setCenterCharId 让 FanLayout 重新算最短路径), 不再 setCurrentCharacterId。
+  // 主 UI active 角色只在 detail modal CTA 才会被切, browse 全程不动 global state。
   const handleSelect = useCallback((id: number) => {
-    if (id === currentCharacterId) {
-      // 点中心卡 → 进 detail
+    if (id === centerCharId) {
       setDetailForId(id);
       setMode('detail');
     } else {
-      // 点边卡 → 圆周旋转切换(setCurrentCharacterId 让 FanLayout 重新算
-      // 最短路径)。不进 detail。
-      setCurrentCharacterId(id);
+      setCenterCharId(id);
     }
-  }, [currentCharacterId, setCurrentCharacterId]);
+  }, [centerCharId]);
 
   const detailChar = useMemo(
     () => (detailForId == null ? null : characters.find((c) => c.id === detailForId) ?? null),
     [detailForId, characters],
   );
 
-  // v4-fan chunk 4.2: 动态背景源 = selected 角色的 splash art。
-  // currentCharacterId 变 → bgSrc 变 → AnimatePresence key 变 → 老 img
-  // exit (opacity 1→0) + 新 img enter (opacity 0→1) = 交叉淡化 0.6s。
-  // detail mode 时也跟 selected 走 (用户在 fan 上点不同卡再进 detail 的
-  // 罕见路径会让背景同步变,符合"detail 是 selected 的详情"语义)。
-  const selectedCharacter = useMemo(
-    () => characters.find((c) => c.id === currentCharacterId) ?? null,
-    [characters, currentCharacterId],
+  // bugfix-2.3: 动态背景跟随 Gallery 本地中心卡(centerCharId),不再跟全局
+  // currentCharacterId。语义:"用户当前在浏览谁,背景就映射谁"——这本来
+  // 就是 Fan-4.2 想做的"跟随 selected 卡",只是之前 selected == 全局 active
+  // 把概念混淆了。decouple 后真正实现:fan 旋一格 → 背景跨淡到新中心卡的
+  // splash art。
+  const centerCharacter = useMemo(
+    () => characters.find((c) => c.id === centerCharId) ?? null,
+    [characters, centerCharId],
   );
-  const bgSrc = getBgSrc(selectedCharacter);
+  const bgSrc = getBgSrc(centerCharacter);
 
   const handleDetailClose = useCallback(() => {
     setMode('browse');
@@ -229,7 +238,7 @@ export default function CharacterGallery() {
       <div className="absolute inset-0" style={{ zIndex: 1 }}>
         <FanLayout
           characters={characters}
-          selectedCharId={currentCharacterId}
+          selectedCharId={centerCharId}
           onSelectCharacter={handleSelect}
           hideHeroForId={mode === 'detail' ? detailForId : null}
           layoutParams={_GALLERY_QUERY.layoutParams}
