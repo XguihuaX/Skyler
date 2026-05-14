@@ -173,11 +173,14 @@ export default function CharacterGallery() {
       style={{ background: 'var(--color-bg-base)' }}
     >
       {/* z=0:动态背景层 — splash art 模糊放大版 + 交叉淡化。
-          - filter: blur(40px) brightness(0.4) saturate(1.2)
-            blur 强烈让画面变成色块氛围;brightness 0.4 压暗给前景卡留对比度;
-            saturate 1.2 微提色彩饱和(blur 后总会偏灰,补一点)。
+          - filter: blur(22px) brightness(0.35) saturate(1.1)
+            Fan-5.1 微调:blur 40 → 22(留主体轮廓 + 纹理朦胧感, 不再
+            完全色块化);brightness 0.4 → 0.35(轮廓回来后多压一档亮度
+            防抢前景卡);saturate 1.2 → 1.1(blur 减弱后色彩自然度回归,
+            不需补这么多)。
           - object-fit: cover + scale(1.1) — cover 铺满 viewport,scale 1.1
-            防 blur 边缘 (~40px halo) 露出 viewport 边沿。
+            防 blur 边缘 (~22px halo) 露出 viewport 边沿(blur 减弱后 halo
+            也缩小, 但 1.1 仍稳妥)。
           - AnimatePresence + motion.img key={src} → 切角色时老 img exit
             opacity 1→0 / 新 img enter 0→1, 同时存在 0.6s = 交叉淡化。
             framer-motion 自动 mount/unmount + cleanup。
@@ -208,8 +211,8 @@ export default function CharacterGallery() {
             objectFit: 'cover',
             objectPosition: 'center center',
             transform: 'scale(1.1)',
-            filter:       'blur(40px) brightness(0.4) saturate(1.2)',
-            WebkitFilter: 'blur(40px) brightness(0.4) saturate(1.2)',
+            filter:       'blur(22px) brightness(0.35) saturate(1.1)',
+            WebkitFilter: 'blur(22px) brightness(0.35) saturate(1.1)',
             zIndex: 0,
             pointerEvents: 'none',
             userSelect: 'none',
