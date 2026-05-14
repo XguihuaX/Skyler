@@ -165,8 +165,11 @@ interface AppState {
   asrTimestamp: number; // 最后一次 setAsrText 的时间戳，用于 5 秒淡出
 
   // Panel 子视图
-  panelView: 'chat' | 'settings' | 'characters';
-  setPanelView: (v: 'chat' | 'settings' | 'characters') => void;
+  //
+  // bugfix-2：新增 'capabilities' + 'settings_v2'。'settings' 保留指向老
+  // SettingsPanel(降回归风险),新顶级 ⚙ 设置走 'settings_v2'。
+  panelView: 'chat' | 'settings' | 'characters' | 'capabilities' | 'settings_v2';
+  setPanelView: (v: 'chat' | 'settings' | 'characters' | 'capabilities' | 'settings_v2') => void;
 
   // ConversationList 折叠状态（持久化到 localStorage）
   conversationListCollapsed: boolean;

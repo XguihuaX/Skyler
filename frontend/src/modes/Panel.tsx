@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ChevronLeft, ChevronRight, ScrollText } from 'lucide-react';
 import { useAppStore } from '../store';
+import CapabilitiesPanel from '../components/capabilities/CapabilitiesPanel';
 import CharacterDialogueBubble from '../components/CharacterDialogueBubble';
 import CharacterPanel from '../components/CharacterPanel';
 import CharacterStatePanel from '../components/CharacterStatePanel';
@@ -9,8 +10,14 @@ import ChatHistoryDrawer from '../components/ChatHistoryDrawer';
 import ChatInput from '../components/ChatInput';
 import ConversationList from '../components/ConversationList';
 import SettingsPanel from '../components/SettingsPanel';
+import SettingsPanelV2 from '../components/settings/SettingsPanelV2';
 import Sidebar from '../components/Sidebar';
 import TopBar from '../components/TopBar';
+
+interface ToastInfo {
+  id: number;
+  text: string;
+}
 
 export default function Panel() {
   const panelView   = useAppStore((s) => s.panelView);
@@ -18,6 +25,15 @@ export default function Panel() {
   const setCollapsed = useAppStore((s) => s.setConversationListCollapsed);
 
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+
+  // bugfix-2: 共享 toast 给 CapabilitiesPanel / SettingsPanelV2(老 SettingsPanel
+  // 自己内置 toast,不接入)。
+  const [toasts, setToasts] = useState<ToastInfo[]>([]);
+  const showToast = useCallback((text: string) => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, text }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3000);
+  }, []);
 
   return (
     <div
@@ -94,12 +110,35 @@ export default function Panel() {
           <div className="flex flex-1 flex-col overflow-hidden">
             <CharacterPanel />
           </div>
+        ) : panelView === 'capabilities' ? (
+          <CapabilitiesPanel showToast={showToast} />
+        ) : panelView === 'settings_v2' ? (
+          <SettingsPanelV2 showToast={showToast} />
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">
             <SettingsPanel />
           </div>
         )}
       </div>
+
+      {/* bugfix-2: 顶层 toast surface 给 V2 panels 用 */}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              className="text-sm px-3 py-2 rounded shadow-lg pointer-events-auto"
+              style={{
+                background: 'color-mix(in srgb, var(--color-bg-surface) 90%, transparent)',
+                border: '1px solid rgba(244, 63, 94, 0.6)',
+                color: 'var(--color-text-primary)',
+              }}
+            >
+              {t.text}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

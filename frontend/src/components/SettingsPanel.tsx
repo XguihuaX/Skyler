@@ -259,7 +259,8 @@ function ModeRadio({ value, onChange }: ModeRadioProps) {
   );
 }
 
-function ProactiveSection({ showToast }: ProactiveSectionProps) {
+// bugfix-2: 导出供 SettingsPanelV2 / CapabilitiesPanel 复用,不动函数体。
+export function ProactiveSection({ showToast }: ProactiveSectionProps) {
   const proactiveEnabled        = useAppStore((s) => s.proactiveEnabled);
   const setProactiveEnabled     = useAppStore((s) => s.setProactiveEnabled);
   const proactiveMode           = useAppStore((s) => s.proactiveMode);
@@ -1101,7 +1102,8 @@ const THEME_PREVIEW: Record<ThemeKey, { base: string; accent: string }> = {
   lavender:   { base: '#231D35', accent: '#5A4878' },
 };
 
-function ThemeSection() {
+// bugfix-2: 导出供 SettingsPanelV2 复用。
+export function ThemeSection() {
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
 
