@@ -1237,6 +1237,20 @@ export function ModelSection({ showToast }: ModelSectionProps) {
         AI 模型
       </h3>
 
+      {/* bugfix-3.2: deprecation banner —— 此 section 仍读 config.yaml::available_models
+          + /api/settings/model, 写后端 DB AI Provider 路径 (Bugfix-3.1) 是
+          独立的 fallback。3.3 ship 后老 yaml 路径会删, 本 section 一并下线。 */}
+      <div
+        className="text-[11px] px-2.5 py-1.5 mb-3 rounded"
+        style={{
+          background: 'color-mix(in srgb, rgb(245,158,11) 12%, transparent)',
+          color: 'rgb(245,158,11)',
+          border: '1px solid rgba(245,158,11,0.3)',
+        }}
+      >
+        ⚠ Deprecated · 本面板将在下个 stage 移除, 请改用 📂 能力 / AI Providers
+      </div>
+
       {!loaded ? (
         <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
           加载中…

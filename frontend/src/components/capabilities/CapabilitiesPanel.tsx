@@ -15,15 +15,11 @@ import {
 import CapabilityPanel from '../CapabilityPanel';
 import ExtensionsSection from '../ExtensionsSection';
 import Live2DDropzone from '../live2d/Live2DDropzone';
-import {
-  AsrVadSection,
-  ModelSection,
-  TtsSection,
-} from '../SettingsPanelLegacy';
 import TwoPaneShell, {
   SectionPlaceholder,
   type PaneSection,
 } from '../TwoPaneShell';
+import AIProvidersSection from './AIProvidersSection';
 
 /**
  * bugfix-2.2: 📂 能力 (Capabilities) — "给 Skyler 装资源 / 接外部世界"
@@ -64,7 +60,7 @@ export default function CapabilitiesPanel({ showToast }: CapabilitiesPanelProps)
       id: 'ai',
       label: 'AI Providers',
       Icon: Brain,
-      render: () => <AiProvidersSection showToast={showToast} />,
+      render: () => <AIProvidersSection showToast={showToast} />,
     },
     {
       id: 'monitor',
@@ -99,72 +95,6 @@ export default function CapabilitiesPanel({ showToast }: CapabilitiesPanelProps)
       activeId={activeId}
       onActiveChange={setActiveId}
     />
-  );
-}
-
-// ---------------------------------------------------------------------------
-// AI Providers —— 3 个子 tab: LLM / ASR-VAD / TTS
-// ---------------------------------------------------------------------------
-
-type AiTab = 'llm' | 'asr' | 'tts';
-
-function AiProvidersSection({ showToast }: { showToast: (text: string) => void }) {
-  const [tab, setTab] = useState<AiTab>('llm');
-  const tabs: { id: AiTab; label: string }[] = [
-    { id: 'llm', label: 'LLM 模型' },
-    { id: 'asr', label: 'ASR / VAD' },
-    { id: 'tts', label: 'TTS' },
-  ];
-
-  return (
-    <div className="p-6">
-      <h2
-        className="text-lg font-medium mb-1"
-        style={{ color: 'var(--color-text-primary)' }}
-      >
-        🧠 AI Providers
-      </h2>
-      <p
-        className="text-xs mb-4"
-        style={{ color: 'var(--color-text-secondary)' }}
-      >
-        语言模型 / 语音识别 / 语音合成的 provider 与参数。
-      </p>
-
-      <div
-        className="inline-flex rounded-md p-0.5 mb-4"
-        style={{
-          background: 'var(--color-bg-input)',
-          border: '1px solid var(--color-border)',
-        }}
-      >
-        {tabs.map((t) => {
-          const active = t.id === tab;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className="px-3 py-1 text-xs rounded-md transition-colors"
-              style={
-                active
-                  ? {
-                      background: 'var(--color-accent)',
-                      color: 'var(--color-bubble-user-text)',
-                    }
-                  : { color: 'var(--color-text-primary)' }
-              }
-            >
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {tab === 'llm' && <ModelSection showToast={showToast} />}
-      {tab === 'asr' && <AsrVadSection />}
-      {tab === 'tts' && <TtsSection showToast={showToast} />}
-    </div>
   );
 }
 
