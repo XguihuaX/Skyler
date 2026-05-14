@@ -9,11 +9,10 @@
   3. ``ai_providers``          —— 具体 model 条目, FK 指 vendor。type ∈
                                   {llm, asr, tts}, per-type 至多一个 is_active
 
-Seed 4 个 builtin vendor + 7 个 LLM provider(用户拍板列表):
+Seed 4 个 builtin vendor + 2 个 LLM provider(bugfix-3.2.8 后只 Qwen):
   qwen      → Qwen 3.6 Plus / Max preview
-  openai    → GPT-4o / GPT-4o Mini
-  anthropic → Claude Sonnet 4.6 / Opus 4.7
-  deepseek  → DeepSeek Chat
+  openai / anthropic / deepseek → vendor 留, provider 由用户在 UI 自填
+  (走 AddModelModal + _normalize_model_for_vendor 自动加 LiteLLM 前缀)
 
 ASR / TTS 暂不 seed, 下一 sub-stage (3.3) 加 ASR dispatcher 时再处理。
 
@@ -79,20 +78,17 @@ _BUILTIN_VENDORS = [
     },
 ]
 
-# 7 个 builtin LLM provider (拍板)
-# bugfix-3.2.7: model 字段必须含 LiteLLM provider 前缀 (xxx/yyy)。Qwen 走
-# OpenAI-compatible 协议 → openai/。DeepSeek 用 deepseek/。原始 seed 漏写前缀
-# 导致 LiteLLM acompletion 抛 "LLM Provider NOT provided" — 由 bugfix-3.2.7
-# 的 repair migration 修补现有 DB,这里改 seed 防新 install 复发。
+# Builtin LLM provider seed —— bugfix-3.2.8 拍板:只 Qwen 2 个 (dogfood 用
+# .env 的 DASHSCOPE_API_KEY 即开即聊)。OpenAI / Anthropic / DeepSeek seed
+# 全部下线 — 用户配凭证后在 UI 里点 [+ 添加 X 模型] 自填 model 名(走
+# AddModelModal + _normalize_model_for_vendor 自动加 LiteLLM 前缀)。
+#
+# bugfix-3.2.7: model 字段必须含 LiteLLM provider 前缀。Qwen 走
+# OpenAI-compatible 协议 → openai/。
 _BUILTIN_PROVIDERS = [
     # (vendor_id, name, model)
-    ("qwen",      "Qwen 3.6 Plus",         "openai/qwen3.6-plus"),
-    ("qwen",      "Qwen 3.6 Max preview",  "openai/qwen3.6-max-preview"),
-    ("openai",    "GPT-4o",                "openai/gpt-4o"),
-    ("openai",    "GPT-4o Mini",           "openai/gpt-4o-mini"),
-    ("anthropic", "Claude Sonnet 4.6",     "anthropic/claude-sonnet-4-6"),
-    ("anthropic", "Claude Opus 4.7",       "anthropic/claude-opus-4-7"),
-    ("deepseek",  "DeepSeek Chat",         "deepseek/deepseek-chat"),
+    ("qwen", "Qwen 3.6 Plus",        "openai/qwen3.6-plus"),
+    ("qwen", "Qwen 3.6 Max preview", "openai/qwen3.6-max-preview"),
 ]
 
 
@@ -197,14 +193,15 @@ async def run_migration() -> None:
                     seeded_vendors)
 
         # ---- seed builtin LLM providers ----
+        # bugfix-3.2.8: 判重 key 从 (vendor_id, model) 改成 (vendor_id, name, type)
+        # 跟 ix_ai_providers_vendor_name_type UNIQUE 一致 — 防 model 字段升级
+        # 改写时(如 3.2.7 加 LiteLLM 前缀)旧裸名行匹配不到 → 重复 seed。
         seeded_providers = 0
         for vendor_id, name, model in _BUILTIN_PROVIDERS:
-            # Idempotent: 用 (vendor_id, model) 组合判断是否已存在。复杂的
-            # INSERT OR IGNORE 需要 UNIQUE 索引, 嫌重再加; 这里 SELECT 检查。
             row = (await conn.execute(text("""
                 SELECT id FROM ai_providers
-                WHERE vendor_id=:v AND model=:m AND provider_kind='builtin'
-            """), {"v": vendor_id, "m": model})).first()
+                WHERE vendor_id=:v AND name=:n AND type='llm'
+            """), {"v": vendor_id, "n": name})).first()
             if row is not None:
                 continue
             await conn.execute(text("""

@@ -47,6 +47,9 @@ from backend.database.migrations.bugfix_3_2_6_endpoint_env_repair import (
 from backend.database.migrations.bugfix_3_2_7_model_prefix_repair import (
     run_migration as run_migration_3_2_7,
 )
+from backend.database.migrations.bugfix_3_2_8_dedup_and_trim_seed import (
+    run_migration as run_migration_3_2_8,
+)
 from backend.utils.crypto import decrypt
 from sqlalchemy import text
 
@@ -68,10 +71,11 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 async def setup_db() -> None:
     # 顺序与 backend/main.py startup 保持一致:3.2.7 先于 3.1(table 不存在时 no-op),
-    # 防 3.1 seed dedup 在升级路径上插入重复行。
+    # 防 3.1 seed dedup 在升级路径上插入重复行。3.2.8 dedup + trim 在 3.1 之后跑。
     await run_migration_3_2_7()
     await run_migration()
     await run_migration_3_2_6()
+    await run_migration_3_2_8()
 
 
 # ---------------------------------------------------------------------------
@@ -166,24 +170,25 @@ async def test_set_vendor_credentials_encrypted():
 
 async def test_list_providers_grouped_by_vendor():
     print("\n[5] list_providers — grouped by vendor")
-    # 用 LLM seed: 应有 qwen 下 2 个, openai 下 2, anthropic 下 2, deepseek 下 1
+    # bugfix-3.2.8: builtin seed 只剩 Qwen 2 个; openai/anthropic/deepseek 被 trim,
+    # 用户在 UI 自填(走 AddModelModal)。
     rows = await svc.list_providers("llm")
     by_vendor: dict = {}
     for p in rows:
         by_vendor.setdefault(p.vendor_id, []).append(p.model)
-    check("qwen has 2 providers",
+    check("qwen has 2 builtin providers",
           len(by_vendor.get("qwen", [])) == 2,
           f"got={by_vendor.get('qwen')}")
-    check("openai has 2 providers",
-          len(by_vendor.get("openai", [])) == 2,
+    check("openai trimmed (no builtin seed)",
+          "openai" not in by_vendor,
           f"got={by_vendor.get('openai')}")
-    check("anthropic has 2 providers",
-          len(by_vendor.get("anthropic", [])) == 2,
+    check("anthropic trimmed (no builtin seed)",
+          "anthropic" not in by_vendor,
           f"got={by_vendor.get('anthropic')}")
-    check("deepseek has 1 provider",
-          len(by_vendor.get("deepseek", [])) == 1,
+    check("deepseek trimmed (no builtin seed)",
+          "deepseek" not in by_vendor,
           f"got={by_vendor.get('deepseek')}")
-    check("all builtin kind",
+    check("all are builtin kind",
           all(p.provider_kind == "builtin" for p in rows))
 
 
@@ -399,21 +404,27 @@ async def test_migration_repairs_inconsistent_state():
 
 
 async def test_activate_sets_enabled():
-    """Bugfix-3.2.6: activate_provider 强制 enabled=1, 避免自相矛盾。"""
+    """Bugfix-3.2.6: activate_provider 强制 enabled=1, 避免自相矛盾。
+    bugfix-3.2.8: openai 不再有 builtin seed,改用 svc.create_provider 临时建一行。"""
     print("\n[14] activate_provider sets enabled=1")
     # 用 settings 模拟 .env (settings.openai_api_key)
     from backend.config import settings
     saved_oai = settings.openai_api_key
     try:
         settings.openai_api_key = "sk-env-openai"  # type: ignore[assignment]
-        # plant: disabled OpenAI provider, then activate it
-        rows = await svc.list_providers("llm")
-        oai_prov = next(p for p in rows if p.vendor_id == "openai")
+        # plant: create + disable OpenAI custom provider, then activate it
+        oai_prov = await svc.create_provider(
+            vendor_id="openai", type="llm",
+            name="_test_gpt_4o", model="gpt-4o",  # raw → backend prepend openai/
+        )
         await svc.patch_provider(oai_prov.id, enabled=False)
-        # confirm disabled
+        # confirm disabled + normalized model has prefix
         p = await svc.get_provider(oai_prov.id)
         check("provider initially disabled",
               p is not None and p.enabled is False)
+        check("created provider model auto-prefixed",
+              p is not None and p.model == "openai/gpt-4o",
+              f"got={None if p is None else p.model}")
         # activate should still succeed (no longer 'not_enabled') + flip enabled
         result = await svc.activate_provider(oai_prov.id)
         check("activate ok despite disabled", result == "ok", f"got={result}")
@@ -422,15 +433,22 @@ async def test_activate_sets_enabled():
               p is not None and p.enabled is True and p.is_active is True,
               f"enabled={None if p is None else p.enabled} active={None if p is None else p.is_active}")
     finally:
+        # cleanup so dispatcher test starts clean
+        try:
+            await svc.delete_provider(oai_prov.id)  # type: ignore[name-defined]
+        except Exception:
+            pass
         settings.openai_api_key = saved_oai
 
 
 async def test_dispatcher_via_vendor_credentials():
     print("\n[8] dispatcher_via_vendor_credentials")
-    # 给 openai vendor 设 DB credential
+    # bugfix-3.2.8: openai builtin 不再 seed, 测试自己 create_provider 一行
     await svc.set_vendor_credential("openai", "sk-openai-from-db")
-    rows = await svc.list_providers("llm")
-    openai_prov = next(p for p in rows if p.vendor_id == "openai")
+    openai_prov = await svc.create_provider(
+        vendor_id="openai", type="llm",
+        name="_test_dispatcher_gpt4o", model="openai/gpt-4o",
+    )
     result = await svc.activate_provider(openai_prov.id)
     check("openai activated", result == "ok", f"got={result}")
     # 直接调 dispatcher 的 resolver
@@ -525,6 +543,157 @@ async def test_migration_repair_qwen_model_prefix():
     )
 
 
+async def test_dedup_keeps_active():
+    """Bugfix-3.2.8: dedup migration 保留 active 优先;同 (vendor_id, name) 多行,
+    is_active=1 的胜出。模拟 dedup 之前的"已有重复"状态需先 drop UNIQUE 才能 plant。"""
+    print("\n[18] dedup_keeps_active")
+    # 先 drop UNIQUE → plant 3 行同 (vendor_id, name) → 跑 dedup → 再次 ensure UNIQUE
+    async with TEST_ENGINE.begin() as conn:
+        await conn.execute(text("DROP INDEX IF EXISTS ix_ai_providers_vendor_name_type"))
+        await conn.execute(text("""
+            INSERT INTO ai_providers
+                (vendor_id, type, name, model, provider_kind, enabled, is_active)
+            VALUES
+                ('qwen', 'llm', '_dup_test', 'openai/m1', 'custom', 1, 0),
+                ('qwen', 'llm', '_dup_test', 'openai/m2', 'custom', 1, 1),
+                ('qwen', 'llm', '_dup_test', 'openai/m3', 'custom', 1, 0)
+        """))
+    # 跑 dedup
+    await run_migration_3_2_8()
+    async with TEST_ENGINE.begin() as conn:
+        rows = (await conn.execute(text(
+            "SELECT id, model, is_active FROM ai_providers "
+            "WHERE vendor_id='qwen' AND name='_dup_test' AND type='llm'"
+        ))).fetchall()
+    check("dedup left exactly 1 row",
+          len(rows) == 1, f"got count={len(rows)}, rows={rows}")
+    if rows:
+        check("kept the is_active=1 row",
+              rows[0][2] == 1 and rows[0][1] == "openai/m2",
+              f"got={rows[0]}")
+
+
+async def test_trim_non_qwen_builtin():
+    """Bugfix-3.2.8: trim 把 openai/anthropic/deepseek vendor 下所有 LLM provider
+    清掉(不论 builtin/custom),只留 Qwen 2 个。"""
+    print("\n[19] trim_non_qwen_builtin")
+    # setup_db 后状态:Qwen 下 2 builtin, 其他 vendor 下 0 (因为 trim 已跑过)
+    rows = await svc.list_providers("llm")
+    by_vendor: dict = {}
+    for p in rows:
+        by_vendor.setdefault(p.vendor_id, []).append(p.name)
+    check("openai trimmed", "openai" not in by_vendor,
+          f"got={by_vendor.get('openai')}")
+    check("anthropic trimmed", "anthropic" not in by_vendor,
+          f"got={by_vendor.get('anthropic')}")
+    check("deepseek trimmed", "deepseek" not in by_vendor,
+          f"got={by_vendor.get('deepseek')}")
+    # Qwen 下原 2 个 builtin (Plus + Max preview) 必须仍在;别的测试可能注入了
+    # 同名/不同名的额外行,这里只断言 seed 的 2 个原 builtin 都在。
+    qwen_names = {p.name for p in rows if p.vendor_id == "qwen"}
+    check("qwen seed Plus kept",
+          "Qwen 3.6 Plus" in qwen_names, f"got names={qwen_names}")
+    check("qwen seed Max preview kept",
+          "Qwen 3.6 Max preview" in qwen_names, f"got names={qwen_names}")
+    # 跑两次 → 没新增 trim 行
+    await run_migration_3_2_8()
+    rows2 = await svc.list_providers("llm")
+    check("migration idempotent (no extra rows after 2nd run)",
+          len(rows2) == len(rows), f"before={len(rows)} after={len(rows2)}")
+
+
+async def test_unique_constraint_blocks_duplicate_insert():
+    """Bugfix-3.2.8: ix_ai_providers_vendor_name_type UNIQUE 拦截重复 INSERT。"""
+    print("\n[20] unique_constraint_blocks_duplicate_insert")
+    # 用 svc.create_provider 跑两次 (vendor, name) 相同 — 第 2 次应抛 IntegrityError
+    p1 = await svc.create_provider(
+        vendor_id="openai", type="llm",
+        name="_unique_test_dup", model="openai/foo",
+    )
+    check("first insert ok", p1.id > 0)
+    try:
+        await svc.create_provider(
+            vendor_id="openai", type="llm",
+            name="_unique_test_dup", model="openai/bar",
+        )
+        check("UNIQUE index blocks duplicate insert", False,
+              "second insert succeeded — UNIQUE index missing or wrong")
+    except Exception as e:
+        check("UNIQUE index blocks duplicate insert",
+              "UNIQUE" in str(e) or "unique" in str(e).lower(),
+              f"got={type(e).__name__}: {e}")
+    # cleanup
+    await svc.delete_provider(p1.id)
+
+
+async def test_normalize_model_qwen_prepend_openai():
+    """Bugfix-3.2.8: Qwen vendor 接 OpenAI-compatible 协议 → prepend openai/。"""
+    print("\n[21] normalize_model_qwen_prepend_openai")
+    from backend.database.ai_providers import _normalize_model_for_vendor
+    check("qwen + raw 'qwen-turbo' → 'openai/qwen-turbo'",
+          _normalize_model_for_vendor("qwen", "qwen-turbo") == "openai/qwen-turbo",
+          f"got={_normalize_model_for_vendor('qwen', 'qwen-turbo')!r}")
+    check("openai + raw 'gpt-4o' → 'openai/gpt-4o'",
+          _normalize_model_for_vendor("openai", "gpt-4o") == "openai/gpt-4o",
+          f"got={_normalize_model_for_vendor('openai', 'gpt-4o')!r}")
+    check("anthropic + raw 'claude-opus-5' → 'anthropic/claude-opus-5'",
+          _normalize_model_for_vendor("anthropic", "claude-opus-5")
+              == "anthropic/claude-opus-5",
+          f"got={_normalize_model_for_vendor('anthropic', 'claude-opus-5')!r}")
+    check("deepseek + raw 'deepseek-reasoner' → 'deepseek/deepseek-reasoner'",
+          _normalize_model_for_vendor("deepseek", "deepseek-reasoner")
+              == "deepseek/deepseek-reasoner",
+          f"got={_normalize_model_for_vendor('deepseek', 'deepseek-reasoner')!r}")
+
+
+async def test_normalize_model_already_prefixed_keep():
+    """Bugfix-3.2.8: 已含 '/' 的 raw 名不二次前缀。"""
+    print("\n[22] normalize_model_already_prefixed_keep")
+    from backend.database.ai_providers import _normalize_model_for_vendor
+    check("已 'openai/gpt-4o' → 不变",
+          _normalize_model_for_vendor("openai", "openai/gpt-4o") == "openai/gpt-4o")
+    check("user 误填 anthropic 'openai/foo' → 不动 (尊重用户)",
+          _normalize_model_for_vendor("anthropic", "openai/foo") == "openai/foo",
+          "user prefix wins over vendor mapping — explicit override")
+
+
+async def test_normalize_model_custom_vendor_no_prefix():
+    """Bugfix-3.2.8: custom vendor / vendor_id 不在白名单 → 原样。"""
+    print("\n[23] normalize_model_custom_vendor_no_prefix")
+    from backend.database.ai_providers import _normalize_model_for_vendor
+    check("custom vendor 'my-vllm' + 'mymodel' → 不变",
+          _normalize_model_for_vendor("my-vllm", "mymodel") == "mymodel")
+    check("vendor_id=None + 'mymodel' → 不变",
+          _normalize_model_for_vendor(None, "mymodel") == "mymodel")
+    check("空 model → 空",
+          _normalize_model_for_vendor("qwen", "") == "")
+
+
+async def test_delete_builtin_provider_now_allowed():
+    """Bugfix-3.2.8: builtin provider 允许删 (svc.delete_provider 不再 'builtin')。"""
+    print("\n[24] delete_builtin_provider_now_allowed")
+    rows = await svc.list_providers("llm")
+    qwen_builtin = next(
+        (p for p in rows if p.vendor_id == "qwen" and p.provider_kind == "builtin"),
+        None,
+    )
+    if qwen_builtin is None:
+        check("setup_db left a builtin Qwen provider", False,
+              f"no builtin Qwen found in {rows}")
+        return
+    result = await svc.delete_provider(qwen_builtin.id)
+    check("delete builtin returns 'ok' (not 'builtin')",
+          result == "ok", f"got={result}")
+    fetched = await svc.get_provider(qwen_builtin.id)
+    check("provider actually deleted", fetched is None,
+          f"got={fetched}")
+    # 回填(让后续 test 不受影响)
+    await svc.create_provider(
+        vendor_id="qwen", type="llm",
+        name=qwen_builtin.name, model=qwen_builtin.model,
+    )
+
+
 async def test_migration_repair_deepseek_model_prefix():
     """Bugfix-3.2.7: 老 DB 含裸 deepseek-chat 行 → 修补成 deepseek/deepseek-chat。"""
     print("\n[17] migration_repair_deepseek_model_prefix")
@@ -580,6 +749,13 @@ async def _main():
     await test_dispatcher_via_vendor_credentials()
     await test_seed_models_have_litellm_prefix()
     await test_migration_repair_qwen_model_prefix()
+    await test_dedup_keeps_active()
+    await test_trim_non_qwen_builtin()
+    await test_unique_constraint_blocks_duplicate_insert()
+    await test_normalize_model_qwen_prepend_openai()
+    await test_normalize_model_already_prefixed_keep()
+    await test_normalize_model_custom_vendor_no_prefix()
+    await test_delete_builtin_provider_now_allowed()
     await test_migration_repair_deepseek_model_prefix()
 
 

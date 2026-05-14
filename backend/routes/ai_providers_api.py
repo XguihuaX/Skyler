@@ -301,14 +301,10 @@ async def patch_provider_endpoint(provider_id: int, body: ProviderPatchBody) -> 
 
 @router.delete("/ai-providers/{provider_id}", status_code=204)
 async def delete_provider_endpoint(provider_id: int) -> None:
+    # bugfix-3.2.8: builtin / custom 都允许删 (svc 已下线 builtin 拦截)。
     result = await svc.delete_provider(provider_id)
     if result == "not_found":
         raise HTTPException(status_code=404, detail=f"provider {provider_id} not found")
-    if result == "builtin":
-        raise HTTPException(
-            status_code=403,
-            detail="cannot delete builtin provider; PATCH enabled=false to disable",
-        )
 
 
 @router.post("/ai-providers/{provider_id}/activate", response_model=ProviderOut)

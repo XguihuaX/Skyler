@@ -98,6 +98,10 @@ from backend.database.migrations.bugfix_3_2_6_endpoint_env_repair import (
 from backend.database.migrations.bugfix_3_2_7_model_prefix_repair import (
     run_migration as migrate_bugfix_3_2_7_model_prefix_repair,
 )
+# bugfix-3.2.8: dedup + trim non-Qwen builtin + UNIQUE (vendor_id,name,type)
+from backend.database.migrations.bugfix_3_2_8_dedup_and_trim_seed import (
+    run_migration as migrate_bugfix_3_2_8_dedup_and_trim_seed,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -272,6 +276,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 回填 DASHSCOPE_BASE_URL / OPENAI_BASE_URL 等)+ 一次性扫表修补 is_active=1
     # AND enabled=0 自相矛盾的 DB state。幂等。必须在 3.1 后跑。
     await migrate_bugfix_3_2_6_endpoint_env_repair()
+
+    # ── 1b24. Bugfix-3.2.8: dedup + trim non-Qwen builtin + UNIQUE index ───
+    # 3.1 老 seed 用 (vendor_id, model) 判重,3.2.7 改前缀后导致重插。这里
+    # ROW_NUMBER 去重 + 只保留 Qwen 2 个 builtin(其他 vendor seed 行 trim,
+    # 用户自填)+ CREATE UNIQUE INDEX 防未来重复。必须在 3.1 seed 后跑。
+    await migrate_bugfix_3_2_8_dedup_and_trim_seed()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

@@ -33,6 +33,40 @@ _ENDPOINT_ENV_ALIASES = {
 }
 
 
+# bugfix-3.2.8: builtin vendor → LiteLLM provider prefix。AddModelModal 让
+# 用户填 raw model 名(eg "gpt-5-turbo-2026-04"),提交时 backend 按 vendor.id
+# 自动 prepend。Qwen 走 OpenAI-compatible 协议 → openai/。custom vendor 无前缀
+# (用户填啥就啥,因为可能用自己 protocol)。
+_VENDOR_LITELLM_PREFIX = {
+    "qwen":      "openai/",
+    "openai":    "openai/",
+    "anthropic": "anthropic/",
+    "deepseek":  "deepseek/",
+}
+
+
+def _normalize_model_for_vendor(
+    vendor_id: Optional[str], raw_model: str,
+) -> str:
+    """按 vendor.id 自动 prepend LiteLLM provider 前缀。
+
+    规则:
+      - vendor_id 在 ``_VENDOR_LITELLM_PREFIX`` 内 → prepend 前缀
+      - raw_model 已含 '/'(用户自己加了前缀) → 原样返回(不二次前缀)
+      - custom vendor / vendor_id=None → 原样返回(用户填啥就啥)
+    """
+    if not raw_model:
+        return raw_model
+    if "/" in raw_model:
+        return raw_model
+    if not vendor_id:
+        return raw_model
+    prefix = _VENDOR_LITELLM_PREFIX.get(vendor_id)
+    if not prefix:
+        return raw_model
+    return prefix + raw_model
+
+
 def _env_lookup(env_name: str) -> Optional[str]:
     """Settings (.env 文件) → os.environ (shell export) 两层 lookup。
 
@@ -383,6 +417,10 @@ async def create_provider(
     *, vendor_id: Optional[str], type: str, name: str, model: str,
     endpoint: Optional[str] = None, extra_json: Optional[str] = None,
 ) -> Provider:
+    # bugfix-3.2.8: backend 主动 normalize model 名加 LiteLLM provider 前缀。
+    # 让前端 AddModelModal 收 raw 名(eg "gpt-4o" / "claude-opus-5"), 后端按
+    # vendor.id 自动 prepend。已含 '/' 或 custom vendor → 原样。
+    normalized_model = _normalize_model_for_vendor(vendor_id, model)
     async with engine.begin() as conn:
         await conn.execute(text("PRAGMA foreign_keys = ON"))
         result = await conn.execute(text("""
@@ -391,7 +429,7 @@ async def create_provider(
                  provider_kind, enabled, is_active)
             VALUES (:v, :t, :n, :m, :e, :x, 'custom', 1, 0)
         """), {
-            "v": vendor_id, "t": type, "n": name, "m": model,
+            "v": vendor_id, "t": type, "n": name, "m": normalized_model,
             "e": endpoint, "x": extra_json,
         })
         new_id = result.lastrowid  # type: ignore[attr-defined]
@@ -434,12 +472,15 @@ async def patch_provider(
 
 
 async def delete_provider(provider_id: int) -> str:
-    """删 provider。builtin 不允许删(只能 disable 用 patch enabled=false)。"""
+    """删 provider。返回 'ok' / 'not_found'。
+
+    bugfix-3.2.8: builtin 也允许删 (老逻辑禁止 → return 'builtin' 已下线)。
+    用户拍板:builtin 极少 (Qwen 2 行),误删了重新 add 回来即可,UI 概念
+    比"禁止删 builtin"更清爽。前端 [-] 按钮对 builtin/custom 都显示。
+    """
     p = await get_provider(provider_id)
     if p is None:
         return "not_found"
-    if p.provider_kind == "builtin":
-        return "builtin"
     async with engine.begin() as conn:
         await conn.execute(text("PRAGMA foreign_keys = ON"))
         await conn.execute(

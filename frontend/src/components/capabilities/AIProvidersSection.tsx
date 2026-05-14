@@ -17,14 +17,14 @@ import {
   deleteProvider,
   deleteVendor,
   listProvidersByType,
-  listVendors,
   updateProvider,
 } from '../../lib/ai_providers';
 import {
   AsrVadSection,
   TtsSection,
 } from '../SettingsPanelLegacy';
-import AddProviderForm from './AddProviderForm';
+import AddModelModal from './AddModelModal';
+import AddVendorModal from './AddVendorModal';
 import VendorCredentialsModal from './VendorCredentialsModal';
 
 /**
@@ -56,25 +56,26 @@ const TABS: { id: ProviderType; label: string }[] = [
 
 export default function AIProvidersSection({ showToast }: AIProvidersSectionProps) {
   const [tab, setTab] = useState<ProviderType>('llm');
-  const [allVendors, setAllVendors] = useState<AIVendor[]>([]);
   const [grouped, setGrouped] = useState<GroupedProvidersResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
+
+  // bugfix-3.2.8: "+ 添加 X 模型" 在某个 vendor card 内触发; 记目标 vendor。
+  const [addModelForVendor, setAddModelForVendor] = useState<AIVendor | null>(null);
+  // 独立"+ 添加自定义 Vendor"按钮触发。
+  const [addVendorOpen, setAddVendorOpen] = useState(false);
 
   // 凭证 modal 状态:打开时记目标 vendor;关闭 reset null
   const [credentialsForVendor, setCredentialsForVendor] = useState<AIVendor | null>(null);
 
   // 删 vendor 确认 (二段:先 confirm 后 delete)
   const [pendingDeleteVendor, setPendingDeleteVendor] = useState<AIVendor | null>(null);
+  // bugfix-3.2.8: 删 provider 二段确认 (代替原 confirm() 浏览器弹窗)
+  const [pendingDeleteProvider, setPendingDeleteProvider] = useState<AIProvider | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [vList, group] = await Promise.all([
-        listVendors(),
-        listProvidersByType(tab),
-      ]);
-      setAllVendors(vList);
+      const group = await listProvidersByType(tab);
       setGrouped(group);
     } catch (e) {
       showToast(`加载失败：${(e as Error).message}`);
@@ -116,16 +117,20 @@ export default function AIProvidersSection({ showToast }: AIProvidersSectionProp
     }
   }, [showToast, refresh]);
 
-  const onDeleteProvider = useCallback(async (provider: AIProvider) => {
-    if (!confirm(`删除 Provider ${provider.name}? 不可撤销。`)) return;
+  // bugfix-3.2.8: 删 provider 走自定义 ConfirmDialog (而不是 confirm()),与
+  // 删 vendor 走同一个 UI pattern。
+  const onConfirmDeleteProvider = useCallback(async () => {
+    if (!pendingDeleteProvider) return;
+    const p = pendingDeleteProvider;
+    setPendingDeleteProvider(null);
     try {
-      await deleteProvider(provider.id);
-      showToast(`已删除 ${provider.name}`);
+      await deleteProvider(p.id);
+      showToast(`已删除 ${p.name}`);
       await refresh();
     } catch (e) {
       showToast(`删除失败：${(e as Error).message}`);
     }
-  }, [showToast, refresh]);
+  }, [pendingDeleteProvider, showToast, refresh]);
 
   const onConfirmDeleteVendor = useCallback(async () => {
     if (!pendingDeleteVendor) return;
@@ -240,64 +245,72 @@ export default function AIProvidersSection({ showToast }: AIProvidersSectionProp
         </div>
       ) : (
         <div className="space-y-3">
-          {vendorGroups
-            .filter((v) => v.providers.length > 0 || v.vendor_kind === 'custom')
-            .map((v) => (
-              <VendorCard
-                key={v.id}
-                vendor={v}
-                onConfigureCredentials={() => setCredentialsForVendor(v)}
-                onDeleteVendor={() => setPendingDeleteVendor(v)}
-                onActivate={(p) => onActivate(p, v)}
-                onToggleEnabled={onToggleEnabled}
-                onDeleteProvider={onDeleteProvider}
-              />
-            ))}
+          {/* bugfix-3.2.8: 4 个 builtin vendor 始终显示 (不再 filter providers.length>0
+              的卡 — 即使 provider 列表空, 也露 "+ 添加 X 模型" 按钮诱导用户加 model)。
+              custom vendor 自然也都显示。 */}
+          {vendorGroups.map((v) => (
+            <VendorCard
+              key={v.id}
+              vendor={v}
+              tab={tab}
+              onConfigureCredentials={() => setCredentialsForVendor(v)}
+              onDeleteVendor={() => setPendingDeleteVendor(v)}
+              onAddModel={() => setAddModelForVendor(v)}
+              onActivate={(p) => onActivate(p, v)}
+              onToggleEnabled={onToggleEnabled}
+              onDeleteProvider={(p) => setPendingDeleteProvider(p)}
+            />
+          ))}
 
           {ungrouped.length > 0 && (
             <UngroupedCard
               providers={ungrouped}
               onActivate={(p) => onActivate(p, null)}
               onToggleEnabled={onToggleEnabled}
-              onDeleteProvider={onDeleteProvider}
+              onDeleteProvider={(p) => setPendingDeleteProvider(p)}
             />
           )}
         </div>
       )}
 
-      {/* Add provider */}
-      <div className="mt-4 flex gap-2">
-        <button
-          type="button"
-          onClick={() => setAddOpen(true)}
-          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition"
-          style={{
-            background: 'var(--color-accent)',
-            color: 'var(--color-bubble-user-text)',
-          }}
-        >
-          <Plus size={14} /> 新增 {tab.toUpperCase()} Provider
-        </button>
-      </div>
+      {/* bugfix-3.2.8: 顶层"添加自定义 Vendor" — 跟 vendor card 内"添加模型"
+          概念分开。仅 llm tab 显示 (ASR/TTS 还在 3.3 时再加)。 */}
+      {tab === 'llm' && (
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setAddVendorOpen(true)}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition"
+            style={{
+              background: 'var(--color-bg-input)',
+              border: '1px solid var(--color-border)',
+              color: 'var(--color-text-primary)',
+            }}
+          >
+            <Plus size={14} /> 添加自定义 Vendor
+          </button>
+        </div>
+      )}
 
       {/* Modals */}
-      {addOpen && (
-        <AddProviderForm
+      {addModelForVendor && (
+        <AddModelModal
+          vendor={addModelForVendor}
           type={tab}
-          vendors={allVendors}
-          onClose={() => setAddOpen(false)}
-          onSaved={(created) => {
-            setAddOpen(false);
+          onClose={() => setAddModelForVendor(null)}
+          onSaved={() => {
+            setAddModelForVendor(null);
             void refresh();
-            // 若新 vendor 没凭证, 打开凭证 modal 引导用户配
-            if (created.vendorIsNew && created.vendorId) {
-              // refresh 后 vendor 是新的 has_credential=false, 找出来弹 modal
-              void (async () => {
-                const fresh = await listVendors();
-                const v = fresh.find((x) => x.id === created.vendorId);
-                if (v) setCredentialsForVendor(v);
-              })();
-            }
+          }}
+          showToast={showToast}
+        />
+      )}
+      {addVendorOpen && (
+        <AddVendorModal
+          onClose={() => setAddVendorOpen(false)}
+          onSaved={() => {
+            setAddVendorOpen(false);
+            void refresh();
           }}
           showToast={showToast}
         />
@@ -322,6 +335,15 @@ export default function AIProvidersSection({ showToast }: AIProvidersSectionProp
           onConfirm={onConfirmDeleteVendor}
         />
       )}
+      {pendingDeleteProvider && (
+        <ConfirmDialog
+          title={`删除 ${pendingDeleteProvider.name}?`}
+          body={`Model: ${pendingDeleteProvider.model}\n不可撤销。`}
+          danger
+          onCancel={() => setPendingDeleteProvider(null)}
+          onConfirm={onConfirmDeleteProvider}
+        />
+      )}
     </div>
   );
 }
@@ -332,8 +354,10 @@ export default function AIProvidersSection({ showToast }: AIProvidersSectionProp
 
 interface VendorCardProps {
   vendor: VendorGroup;
+  tab: ProviderType;
   onConfigureCredentials: () => void;
   onDeleteVendor: () => void;
+  onAddModel: () => void;
   onActivate: (provider: AIProvider) => void;
   onToggleEnabled: (provider: AIProvider) => void;
   onDeleteProvider: (provider: AIProvider) => void;
@@ -341,8 +365,10 @@ interface VendorCardProps {
 
 function VendorCard({
   vendor,
+  tab,
   onConfigureCredentials,
   onDeleteVendor,
+  onAddModel,
   onActivate,
   onToggleEnabled,
   onDeleteProvider,
@@ -446,7 +472,9 @@ function VendorCard({
           className="text-xs italic px-2 py-3"
           style={{ color: 'var(--color-text-secondary)' }}
         >
-          (此 Vendor 下还没有 Provider, 点下方 [+ 新增] 添加)
+          {vendor.has_credential
+            ? '凭证已配,点下方 [+ 添加模型] 加一个 model 即可启用。'
+            : '凭证未配置,先点 [配置凭证]; 然后点下方 [+ 添加模型] 加 model。'}
         </div>
       ) : (
         <ul className="space-y-1.5">
@@ -460,6 +488,24 @@ function VendorCard({
             />
           ))}
         </ul>
+      )}
+
+      {/* bugfix-3.2.8: vendor card 内独立"+ 添加 X 模型"按钮。仅 llm tab 显示。 */}
+      {tab === 'llm' && (
+        <div className="mt-2.5">
+          <button
+            type="button"
+            onClick={onAddModel}
+            className="flex items-center gap-1 text-[11px] px-2 py-1 rounded transition"
+            style={{
+              background: 'transparent',
+              border: '1px dashed var(--color-border)',
+              color: 'var(--color-text-secondary)',
+            }}
+          >
+            <Plus size={11} /> 添加 {vendor.name} 模型
+          </button>
+        </div>
       )}
     </div>
   );
@@ -477,8 +523,7 @@ interface ProviderRowProps {
 }
 
 function ProviderRow({ provider, onActivate, onToggleEnabled, onDelete }: ProviderRowProps) {
-  const isBuiltin = provider.provider_kind === 'builtin';
-
+  // bugfix-3.2.8: builtin / custom 都允许删 — 按钮总显示 (老逻辑 hide builtin)。
   return (
     <li
       className="rounded-md px-3 py-2 flex items-center gap-3"
@@ -548,17 +593,15 @@ function ProviderRow({ provider, onActivate, onToggleEnabled, onDelete }: Provid
         启用
       </label>
 
-      {!isBuiltin && (
-        <button
-          type="button"
-          onClick={onDelete}
-          className="p-1 rounded transition shrink-0"
-          style={{ color: 'rgb(244,63,94)' }}
-          title="删除"
-        >
-          <Trash2 size={12} />
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={onDelete}
+        className="p-1 rounded transition shrink-0"
+        style={{ color: 'rgb(244,63,94)' }}
+        title="删除"
+      >
+        <Trash2 size={12} />
+      </button>
     </li>
   );
 }
