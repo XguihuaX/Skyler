@@ -263,14 +263,31 @@ async def list_cloned_voices(force: bool = False) -> Any:
 @router.post("/tts/voice/preview", response_model=VoicePreviewResponse)
 async def preview_voice(body: VoicePreviewBody) -> Any:
     """合成一段 ``body.text`` 试听 (默认 '你好,我是测试音色。')。返回 base64 wav。"""
+    # bugfix-4: 标 source='preview' + 显式记 tts_call_log (preview 不走 CosyVoiceTTS
+    # 的 synthesize 路径,所以观测不到自动埋点;这里手动 INSERT)
+    from backend.observability.tts_log import (
+        set_tts_call_context, log_tts_call,
+    )
+    from backend.config import get_cosyvoice_config
+    set_tts_call_context(source="preview")
+    _model = get_cosyvoice_config().get("model", "cosyvoice-v3-flash")
     try:
         audio = await asyncio.to_thread(
             _blocking_preview, body.voice, body.text,
+        )
+        await log_tts_call(
+            success=True, voice=body.voice, model=_model,
+            input_chars=len(body.text), input_preview=body.text,
         )
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("[tts.voice.preview] failed voice=%s", body.voice)
+        await log_tts_call(
+            success=False, voice=body.voice, model=_model,
+            input_chars=len(body.text), input_preview=body.text,
+            error_message=str(exc)[:500],
+        )
         raise HTTPException(
             status_code=502,
             detail=f"voice preview failed: {exc}",

@@ -4,13 +4,21 @@ export default function VadBar() {
   const recording = useAppStore((s) => s.recording);
   const vadState  = useAppStore((s) => s.vadState);
 
-  // 录音中 → 强调色；VAD active → 弱亮；其他 → 边框色
+  // bugfix-4 (4.3): idle 时不渲染 — 老逻辑用 border-40% 作 idle 色,在小窗模式
+  // 显示成一道横线,用户视觉上误以为是 chrome / 分割线。只有 recording / VAD
+  // active 时才显示反馈条。
+  const isActive = recording
+    || vadState === 'recording'
+    || vadState === 'active';
+  if (!isActive) {
+    return null;
+  }
+
+  // 录音中 → 强调色;VAD active → 弱亮
   const fillColor =
-    vadState === 'recording' || recording
+    recording || vadState === 'recording'
       ? 'color-mix(in srgb, var(--color-accent) 80%, transparent)'
-      : vadState === 'active'
-      ? 'color-mix(in srgb, var(--color-text-secondary) 40%, transparent)'
-      : 'color-mix(in srgb, var(--color-border) 40%, transparent)';
+      : 'color-mix(in srgb, var(--color-text-secondary) 40%, transparent)';
 
   return (
     <div

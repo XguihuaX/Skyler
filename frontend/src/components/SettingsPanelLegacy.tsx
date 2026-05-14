@@ -188,6 +188,33 @@ function Section({ title, children }: SectionProps) {
   );
 }
 
+
+// bugfix-4 (4.4): 折叠"进阶设置"块,把不常改的字段藏起来减视觉噪。
+function CollapsibleAdvanced({
+  label, children,
+}: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="py-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between text-xs py-1"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        <span>⚙ {label}</span>
+        <span>{open ? '▼' : '▶'}</span>
+      </button>
+      {open && (
+        <div className="pl-3"
+          style={{ borderLeft: '2px solid var(--color-border-subtle)' }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ToastInfo {
   id: number;
   text: string;
@@ -398,28 +425,37 @@ export function ProactiveSection({ showToast }: ProactiveSectionProps) {
 
       {proactiveMode === 'wake_call' && (
         <>
+          {/* bugfix-4 (4.4): 术语 polish — 英文 jargon (Pending TTL / Snooze) 改
+              友好中文,加 "进阶设置" 折叠分组减视觉噪。 */}
           <div className="py-2">
             <div className="flex items-center justify-between mb-1.5">
-              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>叫醒 Cron</span>
+              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>叫醒时间</span>
               <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                {wakeCallCron === '0 8 * * *' ? '每天 8:00' : '自定义'}
+                {wakeCallCron === '0 8 * * *' ? '每天 8:00' : 'cron 自定义'}
               </span>
             </div>
             <input
-              type="text" value={wakeCronDraft} placeholder="0 8 * * *"
+              type="text" value={wakeCronDraft} placeholder="0 8 * * * (cron 表达式)"
               onChange={(e) => setWakeCronDraft(e.target.value)}
               onBlur={() => commitTextField(
                 wakeCronDraft, wakeCallCron, setWakeCallCron, setWakeCronDraft,
-                'proactive.wake_call_briefing.cron', '叫醒 Cron',
+                'proactive.wake_call_briefing.cron', '叫醒时间',
               )}
               onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
               className={inputCls} style={inputStyle}
             />
+            <div className="text-[10px] mt-0.5"
+              style={{ color: 'var(--color-text-secondary)' }}>
+              cron 5 字段:分 时 日 月 星期。eg ``0 8 * * *`` = 每天 8:00。
+            </div>
           </div>
           <div className="py-2">
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-                城市（stage 2 天气查询）
+                所在城市
+              </span>
+              <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                天气查询用
               </span>
             </div>
             <input
@@ -433,48 +469,51 @@ export function ProactiveSection({ showToast }: ProactiveSectionProps) {
               className="w-full px-2 py-1.5 text-xs rounded" style={inputStyle}
             />
           </div>
-          <div className="py-2">
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-                Pending TTL（分钟）
-              </span>
-              <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                叫醒后多久内回应触发简报
-              </span>
+          {/* bugfix-4 (4.4): 进阶设置折叠 — TTL / Snooze 默认不暴露 */}
+          <CollapsibleAdvanced label="进阶设置 (等待时长 / 稍后提醒)">
+            <div className="py-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
+                  等待响应时长 (分钟)
+                </span>
+                <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                  叫醒后多久内回应触发简报
+                </span>
+              </div>
+              <input
+                type="text" value={wakeTtlDraft} placeholder="30"
+                onChange={(e) => setWakeTtlDraft(e.target.value)}
+                onBlur={() => commitIntField(
+                  wakeTtlDraft, wakeCallPendingTtl, 5, 240,
+                  setWakeCallPendingTtl, setWakeTtlDraft,
+                  'proactive.wake_call_briefing.pending_ttl_minutes', '等待响应时长',
+                )}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                className={inputCls} style={inputStyle}
+              />
             </div>
-            <input
-              type="text" value={wakeTtlDraft} placeholder="30"
-              onChange={(e) => setWakeTtlDraft(e.target.value)}
-              onBlur={() => commitIntField(
-                wakeTtlDraft, wakeCallPendingTtl, 5, 240,
-                setWakeCallPendingTtl, setWakeTtlDraft,
-                'proactive.wake_call_briefing.pending_ttl_minutes', 'Pending TTL',
-              )}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-              className={inputCls} style={inputStyle}
-            />
-          </div>
-          <div className="py-2">
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-                Snooze 默认（分钟）
-              </span>
-              <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                用户说"再睡"未指定时长时
-              </span>
+            <div className="py-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
+                  稍后提醒默认 (分钟)
+                </span>
+                <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                  用户说"再睡"未指定时长时
+                </span>
+              </div>
+              <input
+                type="text" value={wakeSnoozeDraft} placeholder="30"
+                onChange={(e) => setWakeSnoozeDraft(e.target.value)}
+                onBlur={() => commitIntField(
+                  wakeSnoozeDraft, wakeCallSnoozeMin, 5, 120,
+                  setWakeCallSnoozeMin, setWakeSnoozeDraft,
+                  'proactive.wake_call_briefing.default_snooze_minutes', '稍后提醒默认',
+                )}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                className={inputCls} style={inputStyle}
+              />
             </div>
-            <input
-              type="text" value={wakeSnoozeDraft} placeholder="30"
-              onChange={(e) => setWakeSnoozeDraft(e.target.value)}
-              onBlur={() => commitIntField(
-                wakeSnoozeDraft, wakeCallSnoozeMin, 5, 120,
-                setWakeCallSnoozeMin, setWakeSnoozeDraft,
-                'proactive.wake_call_briefing.default_snooze_minutes', 'Snooze 默认',
-              )}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-              className={inputCls} style={inputStyle}
-            />
-          </div>
+          </CollapsibleAdvanced>
         </>
       )}
 
@@ -482,22 +521,26 @@ export function ProactiveSection({ showToast }: ProactiveSectionProps) {
         <>
           <div className="py-2">
             <div className="flex items-center justify-between mb-1.5">
-              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>简报 Cron</span>
+              <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>简报时间</span>
               <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                {morningBriefingCron === '0 9 * * *' ? '每天 9:00' : '自定义'}
+                {morningBriefingCron === '0 9 * * *' ? '每天 9:00' : 'cron 自定义'}
               </span>
             </div>
             <input
-              type="text" value={morningCronDraft} placeholder="0 9 * * *"
+              type="text" value={morningCronDraft} placeholder="0 9 * * * (cron 表达式)"
               onChange={(e) => setMorningCronDraft(e.target.value)}
               onBlur={() => commitTextField(
                 morningCronDraft, morningBriefingCron,
                 setMorningBriefingCron, setMorningCronDraft,
-                'proactive.morning_briefing.cron', '简报 Cron',
+                'proactive.morning_briefing.cron', '简报时间',
               )}
               onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
               className={inputCls} style={inputStyle}
             />
+            <div className="text-[10px] mt-0.5"
+              style={{ color: 'var(--color-text-secondary)' }}>
+              cron 5 字段:分 时 日 月 星期。eg ``0 9 * * *`` = 每天 9:00。
+            </div>
           </div>
           <div className="py-2">
             <div className="flex items-center justify-between mb-1.5">
@@ -1107,6 +1150,127 @@ const THEME_PREVIEW: Record<ThemeKey, { base: string; accent: string }> = {
   lavender:   { base: '#231D35', accent: '#5A4878' },
 };
 
+// ---------------------------------------------------------------------------
+// Bugfix-4 (4.2) — SystemStatusSection: backend RAM/CPU/Whisper/网络监控
+// ---------------------------------------------------------------------------
+
+export function SystemStatusSection() {
+  const [data, setData] = useState<import('../lib/observability').SystemResources | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const { fetchSystemResources } = await import('../lib/observability');
+        const r = await fetchSystemResources();
+        if (!cancelled) setData(r);
+      } catch {/* ignore */}
+    };
+    void tick();
+    if (!autoRefresh) return () => { cancelled = true; };
+    const h = setInterval(tick, 3000);  // 3s 刷一次
+    return () => { cancelled = true; clearInterval(h); };
+  }, [autoRefresh]);
+
+  if (!data) {
+    return (
+      <Section title="系统状态">
+        <div className="text-xs"
+          style={{ color: 'var(--color-text-secondary)' }}>
+          加载中…
+        </div>
+      </Section>
+    );
+  }
+
+  if (!data.has_psutil) {
+    return (
+      <Section title="系统状态">
+        <div className="text-xs"
+          style={{ color: 'var(--color-text-secondary)' }}>
+          psutil 未安装,无法采集系统资源。
+        </div>
+      </Section>
+    );
+  }
+
+  const rss = data.backend_rss_mb ?? 0;
+  const totalRam = data.system_total_ram_mb ?? 0;
+  const ramPct = totalRam > 0 ? (rss / totalRam) * 100 : 0;
+  const cpu = data.backend_cpu_percent ?? 0;
+
+  const bar = (pct: number, color: string) => (
+    <div className="h-1.5 rounded-full overflow-hidden flex-1"
+      style={{ background: 'var(--color-bg-elevated)' }}>
+      <div className="h-full rounded-full transition-all"
+        style={{ width: `${Math.min(100, pct).toFixed(1)}%`, background: color }} />
+    </div>
+  );
+
+  return (
+    <Section title="系统状态">
+      <div className="space-y-2 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="w-28 shrink-0"
+            style={{ color: 'var(--color-text-secondary)' }}>Backend RAM</span>
+          {bar(ramPct, 'var(--color-accent)')}
+          <span className="font-mono shrink-0 text-right w-32"
+            style={{ color: 'var(--color-text-primary)' }}>
+            {rss.toFixed(0)} MB / {(totalRam / 1024).toFixed(1)} GB
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-28 shrink-0"
+            style={{ color: 'var(--color-text-secondary)' }}>Backend CPU</span>
+          {bar(cpu, cpu > 50 ? 'rgb(245,158,11)' : 'var(--color-accent)')}
+          <span className="font-mono shrink-0 text-right w-32"
+            style={{ color: 'var(--color-text-primary)' }}>
+            {cpu.toFixed(1)} %
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-28 shrink-0"
+            style={{ color: 'var(--color-text-secondary)' }}>Whisper 模型</span>
+          <span className="font-mono"
+            style={{ color: 'var(--color-text-primary)' }}>
+            {data.whisper_size ?? '?'} {data.whisper_disk_mb ? `· ${data.whisper_disk_mb} MB` : ''}
+            {' · '}
+            <span style={{
+              color: data.whisper_loaded
+                ? 'var(--color-text-accent)' : 'var(--color-text-secondary)',
+            }}>
+              {data.whisper_loaded ? '已加载' : '未加载 (lazy)'}
+            </span>
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-28 shrink-0"
+            style={{ color: 'var(--color-text-secondary)' }}>系统总 RAM</span>
+          {bar(data.system_ram_percent ?? 0, 'var(--color-text-secondary)')}
+          <span className="font-mono shrink-0 text-right w-32"
+            style={{ color: 'var(--color-text-primary)' }}>
+            {(data.system_ram_percent ?? 0).toFixed(0)}% 使用
+          </span>
+        </div>
+        {(data.net_recv_kbps !== null || data.net_sent_kbps !== null) && (
+          <div className="flex items-center gap-3 pt-1"
+            style={{ color: 'var(--color-text-secondary)' }}>
+            <span>⬇ {(data.net_recv_kbps ?? 0).toFixed(1)} KB/s</span>
+            <span>⬆ {(data.net_sent_kbps ?? 0).toFixed(1)} KB/s</span>
+          </div>
+        )}
+        <Toggle
+          label="3 秒自动刷新"
+          value={autoRefresh}
+          onChange={setAutoRefresh}
+        />
+      </div>
+    </Section>
+  );
+}
+
+
 // bugfix-2: 导出供 SettingsPanelV2 复用。
 export function ThemeSection() {
   const theme = useAppStore((s) => s.theme);
@@ -1623,6 +1787,9 @@ export default function SettingsPanel() {
     <div className="flex-1 overflow-y-auto px-6 py-4 relative">
       {/* v3-A — UI 风格选择，置顶 */}
       <ThemeSection />
+
+      {/* bugfix-4 (4.2): 系统资源监控 — backend RAM/CPU/Whisper/网络 */}
+      <SystemStatusSection />
 
       {/* bugfix-3.3: ModelSection 已下线 — LLM 列表 / 切换走 📂 能力 →
           🧠 AI Providers (新 UI 直接管 DB ai_providers 表)。 */}

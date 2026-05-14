@@ -212,17 +212,46 @@ class CosyVoiceTTS(TTSBase):
     async def synthesize(
         self, text: str, emotion: str = "默认",
     ) -> Optional[bytes]:
-        """合成单句；任何异常都吞掉，返回 None 由上层静默跳过。"""
+        """合成单句；任何异常都吞掉，返回 None 由上层静默跳过。
+
+        bugfix-4: 每次合成 (成功 / 失败) INSERT 一行 tts_call_log。source /
+        character_id 通过 ContextVar 拿,caller (ws.py / proactive / preview)
+        在调 synth 前 ``set_tts_call_context(source=...)`` 设置。log_tts_call
+        永不抛,即便表不存在 / DB 错也只是少一条记录。
+        """
         if not text or not text.strip():
             return None
         emotion_en = _normalise_emotion(emotion)
+        # bugfix-4: 延迟导入避免循环 (observability 依赖 backend.database;
+        # tts.cosyvoice 在 backend 启动早期 import)
+        from backend.observability.tts_log import log_tts_call
+        input_chars = len(text)
         try:
-            return await asyncio.to_thread(
+            audio = await asyncio.to_thread(
                 self._blocking_synthesize, text, emotion_en,
             )
+            # 成功 / 返回 None 都记 (None 是 SDK 返回空音频, 我们当 success=True
+            # 因为没抛异常;实际成功的 audio 字节数也记不下来,保 input_chars 主)
+            await log_tts_call(
+                success=audio is not None,
+                voice=self.voice,
+                model=self.model,
+                input_chars=input_chars,
+                input_preview=text,
+                error_message=None if audio is not None else "SDK returned empty audio",
+            )
+            return audio
         except Exception as exc:
             logger.error(
                 "CosyVoice 合成失败 voice=%s emotion=%s err=%s",
                 self.voice, emotion_en, exc,
+            )
+            await log_tts_call(
+                success=False,
+                voice=self.voice,
+                model=self.model,
+                input_chars=input_chars,
+                input_preview=text,
+                error_message=str(exc)[:500],
             )
             return None

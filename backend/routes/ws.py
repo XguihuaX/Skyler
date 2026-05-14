@@ -851,6 +851,12 @@ async def _handle_message(
                 )
 
         tts_engine = get_tts_engine(voice_model)
+        # bugfix-4: 设 TTS context — 主聊天 source='chat',让 tts_call_log 能
+        # 区分用量来源 (chat / proactive / activity / preview)。ContextVar 在
+        # asyncio task 内 propagate, _tts_synth_with_timeout / engine.synthesize
+        # 都看到这个值。
+        from backend.observability.tts_log import set_tts_call_context
+        set_tts_call_context(source="chat", character_id=char_id, user_id=user_id)
         # 同一轮对话用同一情感（由第一句的 <emotion> 标签决定）
         turn_emotion = "默认"
         emotion_resolved = False

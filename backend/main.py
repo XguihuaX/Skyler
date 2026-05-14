@@ -110,6 +110,10 @@ from backend.database.migrations.bugfix_3_3_1_seed_cloned_voices import (
 from backend.database.migrations.bugfix_3_4_voice_aliases import (
     run_migration as migrate_bugfix_3_4_voice_aliases,
 )
+# bugfix-4: tts_call_log 表 (observability)
+from backend.database.migrations.bugfix_4_observability import (
+    run_migration as migrate_bugfix_4_observability,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -132,6 +136,7 @@ from backend.routes.memory_api import router as memory_router
 # bugfix-3.3: settings_api 仅 GET/POST /api/settings/model — DB ai_providers
 # 已是新唯一 LLM 路由,该路由整文件删除。yaml available_models 字段一并删。
 from backend.routes.tts_api import router as tts_router
+from backend.routes.observability_api import router as observability_router
 from backend.routes.users_api import router as users_router
 from backend.routes.webhooks_api import router as webhooks_router
 from backend.routes.ws import router as ws_router
@@ -302,6 +307,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # voice 的角色 seed ``<角色名> voice`` 友好名。幂等 (INSERT OR IGNORE)。
     # 必须在 3.3.1 之后跑 — 不然反查不到 char→voice 映射。
     await migrate_bugfix_3_4_voice_aliases()
+
+    # ── 1b27. Bugfix-4: tts_call_log 表 (observability) ────────────────────
+    # 给每次 CosyVoice synthesize 调用埋点 (source, voice, model, input_chars,
+    # cost_estimate, success)。前端 TTS tab 用量 panel + 异常 call 诊断走这张表。
+    await migrate_bugfix_4_observability()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
@@ -781,6 +791,7 @@ app.include_router(users_router,         prefix="/api", tags=["users"])
 app.include_router(live2d_router,        prefix="/api", tags=["live2d"])
 app.include_router(backgrounds_router,    prefix="/api", tags=["backgrounds"])
 app.include_router(tts_router,           prefix="/api", tags=["tts"])
+app.include_router(observability_router, prefix="/api", tags=["observability"])
 app.include_router(capabilities_router,  prefix="/api", tags=["capabilities"])
 app.include_router(integrations_router,  prefix="/api", tags=["integrations"])
 app.include_router(webhooks_router,      prefix="/api", tags=["webhooks"])

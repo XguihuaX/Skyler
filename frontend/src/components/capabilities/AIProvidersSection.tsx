@@ -12,6 +12,10 @@ import {
 import { setConfigField } from '../../lib/window';
 import { fetchVoiceAliases, setVoiceAlias, resolveVoiceName } from '../../lib/voiceAliases';
 import {
+  fetchTtsUsage, fetchRecentCalls, sourceLabel,
+  type TtsUsage, type RecentCall, type UsageRange,
+} from '../../lib/observability';
+import {
   type AIProvider,
   type AIVendor,
   type GroupedProvidersResponse,
@@ -884,18 +888,19 @@ interface CosyVoiceTTSCardProps {
 
 function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardProps) {
   const [qwenVendor, setQwenVendor] = useState<AIVendor | null>(null);
-  const [defaultVoice, setDefaultVoice] = useState<string>('');
   const [systemVoices, setSystemVoices] = useState<SystemVoiceRow[]>([]);
   const [clonedVoices, setClonedVoices] = useState<ClonedVoiceRow[]>([]);
   const [usage, setUsage] = useState<UsageMap>({});
   const [loadingCloned, setLoadingCloned] = useState(false);
-  const [busyVoice, setBusyVoice] = useState<string | null>(null);
   // bugfix-3.4: aliases map (voice_id → display_name) + inline rename state
   const [aliases, setAliases] = useState<Record<string, string>>({});
   const [renamingVoice, setRenamingVoice] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState<string>('');
   // 试听播放状态:正在播的 voice id;null = 无播放
   const [playingId, setPlayingId] = useState<string | null>(null);
+  // bugfix-4 (4.2): TTS 用量 panel state
+  const [usagePanelOpen, setUsagePanelOpen] = useState(false);
+  const [recentModalOpen, setRecentModalOpen] = useState(false);
   // ref to current Audio so toggling 暂停 / 切歌 都能停老的
   const audioRef = (typeof window !== 'undefined')
     ? (window as unknown as { _ttsAudio?: HTMLAudioElement | null })
@@ -979,12 +984,7 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
             setSystemVoices(cosy?.voices ?? []);
           }
         }
-        // 3. default voice (从 /api/config 取 — 不返 tts 内部字段, 这里读不到
-        //    全局 default; 改成不显示 active marker, 而是按 [设为全局默认] 按钮
-        //    操作)。预留 — 等下个 stage 暴露 tts.cosyvoice.default_voice 字段。
-        if (!cancelled) {
-          setDefaultVoice('');  // 不显示 default 高亮
-        }
+        // 3. (bugfix-4 4.5) 删除 default voice 状态 — UI 不再暴露 [设为全局默认]
         // 4. usage 反向索引
         await refreshUsage();
         // 5. 复刻 voice (走缓存)
@@ -1044,21 +1044,9 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
     }
   }, [playingId, audioRef, showToast]);
 
-  const onSetGlobalDefault = useCallback(async (voiceId: string) => {
-    if (busyVoice) return;
-    setBusyVoice(voiceId);
-    const prev = defaultVoice;
-    setDefaultVoice(voiceId);
-    try {
-      await setConfigField('tts.cosyvoice.default_voice', voiceId);
-      showToast(`全局默认 voice → ${voiceId.slice(0, 40)}…`);
-    } catch (e) {
-      setDefaultVoice(prev);
-      showToast(`设为默认失败:${(e as Error).message}`);
-    } finally {
-      setBusyVoice(null);
-    }
-  }, [busyVoice, defaultVoice, showToast]);
+  // bugfix-4 (4.5): 删除 [设为全局默认] — per-character voice 已 work,全局
+  // fallback 字段 tts.cosyvoice.default_voice 仍保留 yaml 兜底,只是不暴露 UI
+  // 控件 (用户拍板:per-character 都配后,全局无人改)。
 
   return (
     <div
@@ -1154,12 +1142,9 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
               label={v.label}
               sub={v.traits + (v.instruct ? ' · 支持情感' : '')}
               kindLabel="系统"
-              isDefault={defaultVoice === v.id}
               playing={playingId === v.id}
-              busy={busyVoice === v.id}
               usage={usage[v.id]}
               onPreview={() => void onPreview(v.id)}
-              onSetDefault={() => void onSetGlobalDefault(v.id)}
             />
           ))}
         </ul>
@@ -1190,12 +1175,9 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
                 label={friendly}
                 sub={`复刻 · cosyvoice-v3.5-plus · ${v.status ?? '?'}${v.update_time ? ' · ' + v.update_time : ''}`}
                 kindLabel="复刻"
-                isDefault={defaultVoice === v.voice_id}
                 playing={playingId === v.voice_id}
-                busy={busyVoice === v.voice_id}
                 usage={usage[v.voice_id]}
                 onPreview={() => void onPreview(v.voice_id)}
-                onSetDefault={() => void onSetGlobalDefault(v.voice_id)}
                 // bugfix-3.4: 重命名相关
                 isRenaming={isRenaming}
                 renameDraft={renameDraft}
@@ -1216,8 +1198,320 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
 
       <div className="text-[10px] mt-3"
         style={{ color: 'var(--color-text-secondary)' }}>
-        角色级 voice 在 ⚙ 设置 → 角色管理 内单独配; 此处的 [设为全局默认] 仅用于
-        ``voice_model`` 为空的角色 (作为兜底)。
+        角色级 voice 在 ⚙ 设置 → 角色管理 内单独配; gallery 仅用于试听 + 反向
+        查看哪个角色用了哪个 voice。
+      </div>
+
+      {/* bugfix-4 (4.2): TTS 用量 panel — 折叠面板 */}
+      <div className="mt-4 pt-3"
+        style={{ borderTop: '1px solid var(--color-border-subtle)' }}>
+        <button
+          type="button"
+          onClick={() => setUsagePanelOpen((v) => !v)}
+          className="flex items-center justify-between w-full text-xs"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          <span>📊 今日 TTS 用量 (CosyVoice)</span>
+          <span style={{ color: 'var(--color-text-secondary)' }}>
+            {usagePanelOpen ? '▼ 收起' : '▶ 展开'}
+          </span>
+        </button>
+        {usagePanelOpen && (
+          <TtsUsagePanel
+            showToast={showToast}
+            onOpenRecent={() => setRecentModalOpen(true)}
+          />
+        )}
+      </div>
+
+      {recentModalOpen && (
+        <RecentCallsModal
+          onClose={() => setRecentModalOpen(false)}
+          showToast={showToast}
+        />
+      )}
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Bugfix-4 (4.2) — TtsUsagePanel: 今日/本月用量 + by_source + anomaly hint
+// ---------------------------------------------------------------------------
+
+interface TtsUsagePanelProps {
+  showToast: (text: string) => void;
+  onOpenRecent: () => void;
+}
+
+function TtsUsagePanel({ showToast, onOpenRecent }: TtsUsagePanelProps) {
+  const [range, setRange] = useState<UsageRange>('today');
+  const [usage, setUsage] = useState<TtsUsage | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const u = await fetchTtsUsage(range);
+      setUsage(u);
+    } catch (e) {
+      showToast(`加载用量失败:${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [range, showToast]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  if (loading && !usage) {
+    return <div className="text-[11px] mt-2"
+      style={{ color: 'var(--color-text-secondary)' }}>加载中…</div>;
+  }
+  if (!usage) return null;
+
+  const sources = Object.entries(usage.by_source);
+  return (
+    <div className="mt-2 text-[11px]">
+      {/* range selector */}
+      <div className="flex items-center gap-1 mb-2">
+        {(['today', 'month'] as const).map((r) => (
+          <button
+            key={r}
+            type="button"
+            onClick={() => setRange(r)}
+            className="text-[10px] px-2 py-0.5 rounded"
+            style={{
+              background: range === r
+                ? 'var(--color-accent)'
+                : 'var(--color-bg-input)',
+              color: range === r
+                ? 'var(--color-bubble-user-text)'
+                : 'var(--color-text-primary)',
+              border: '1px solid var(--color-border-subtle)',
+            }}
+          >
+            {r === 'today' ? '今日' : '本月'}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={loading}
+          className="text-[10px] px-2 py-0.5 rounded ml-auto"
+          style={{
+            background: 'var(--color-bg-input)',
+            border: '1px solid var(--color-border-subtle)',
+            color: 'var(--color-text-secondary)',
+          }}
+          title="刷新"
+        >
+          🔄 刷新
+        </button>
+        <button
+          type="button"
+          onClick={onOpenRecent}
+          className="text-[10px] px-2 py-0.5 rounded"
+          style={{
+            background: 'var(--color-bg-input)',
+            border: '1px solid var(--color-border-subtle)',
+            color: 'var(--color-text-secondary)',
+          }}
+        >
+          详细记录
+        </button>
+      </div>
+
+      {sources.length === 0 ? (
+        <div style={{ color: 'var(--color-text-secondary)' }}>
+          {range === 'today' ? '今日' : '本月'}还没有 TTS 调用记录。
+        </div>
+      ) : (
+        <table className="w-full">
+          <tbody>
+            {sources.map(([k, v]) => (
+              <tr key={k}>
+                <td className="py-0.5"
+                  style={{ color: 'var(--color-text-primary)' }}>
+                  {sourceLabel(k)}
+                </td>
+                <td className="py-0.5 text-right font-mono"
+                  style={{ color: 'var(--color-text-secondary)' }}>
+                  {v.chars.toLocaleString()} chars
+                </td>
+                <td className="py-0.5 text-right font-mono pl-2"
+                  style={{ color: 'var(--color-text-secondary)' }}>
+                  ¥{v.cost.toFixed(3)}
+                </td>
+              </tr>
+            ))}
+            <tr style={{ borderTop: '1px solid var(--color-border-subtle)' }}>
+              <td className="py-0.5 pt-1.5"
+                style={{ color: 'var(--color-text-primary)' }}>
+                总计 ({usage.total_calls} 次调用)
+              </td>
+              <td className="py-0.5 pt-1.5 text-right font-mono"
+                style={{ color: 'var(--color-text-accent)' }}>
+                {usage.total_chars.toLocaleString()} chars
+              </td>
+              <td className="py-0.5 pt-1.5 text-right font-mono pl-2"
+                style={{ color: 'var(--color-text-accent)' }}>
+                ¥{usage.total_cost_yuan.toFixed(3)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+
+      {usage.anomaly_calls.length > 0 && (
+        <div className="mt-2 px-2 py-1.5 rounded"
+          style={{
+            background: 'color-mix(in srgb, rgb(245,158,11) 12%, transparent)',
+            color: 'rgb(245,158,11)',
+            border: '1px solid rgba(245,158,11,0.3)',
+          }}>
+          ⚠ 检测到 {usage.anomaly_calls.length} 次异常长 call (input_chars &gt; 500),
+          可能 thinking/state tag 漏进 TTS。点 [详细记录] 抓样诊断。
+        </div>
+      )}
+      {usage.avg_chars_per_call !== null && (
+        <div className="mt-1.5 text-[10px]"
+          style={{ color: 'var(--color-text-secondary)' }}>
+          平均每次 {usage.avg_chars_per_call} chars · 估算非精确账单
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Bugfix-4 (4.2) — RecentCallsModal: 抓样查 input_preview
+// ---------------------------------------------------------------------------
+
+interface RecentCallsModalProps {
+  onClose: () => void;
+  showToast: (text: string) => void;
+}
+
+function RecentCallsModal({ onClose, showToast }: RecentCallsModalProps) {
+  const [calls, setCalls] = useState<RecentCall[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const c = await fetchRecentCalls(50);
+        if (!cancelled) setCalls(c);
+      } catch (e) {
+        if (!cancelled) showToast(`加载 recent calls 失败:${(e as Error).message}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showToast]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[55] flex items-center justify-center"
+      style={{ background: 'color-mix(in srgb, var(--color-bg-base) 60%, transparent)' }}
+      onClick={onClose}
+    >
+      <div
+        className="rounded-lg p-5 w-[640px] max-h-[80vh] overflow-y-auto shadow-2xl"
+        style={{
+          background: 'var(--color-bg-surface)',
+          border: '1px solid var(--color-border)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-semibold"
+            style={{ color: 'var(--color-text-primary)' }}>
+            最近 TTS 调用 ({calls.length})
+          </h4>
+          <button onClick={onClose}
+            className="text-xs px-2 py-1 rounded"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              color: 'var(--color-text-primary)',
+            }}>关闭</button>
+        </div>
+        {loading && (
+          <div className="text-xs"
+            style={{ color: 'var(--color-text-secondary)' }}>加载中…</div>
+        )}
+        <ul className="space-y-1">
+          {calls.map((c) => {
+            const isAnomaly = c.input_chars > 500;
+            const isExpanded = expandedId === c.id;
+            return (
+              <li key={c.id}
+                className="rounded px-2 py-1.5 text-[11px]"
+                style={{
+                  background: isAnomaly
+                    ? 'color-mix(in srgb, rgb(245,158,11) 8%, transparent)'
+                    : 'var(--color-bg-input)',
+                  border: '1px solid var(--color-border-subtle)',
+                }}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono shrink-0"
+                    style={{ color: 'var(--color-text-secondary)' }}>
+                    {(c.timestamp ?? '').slice(0, 19)}
+                  </span>
+                  <span className="px-1 rounded shrink-0"
+                    style={{
+                      background: 'var(--color-bg-elevated)',
+                      color: 'var(--color-text-primary)',
+                    }}>
+                    {sourceLabel(c.source)}
+                  </span>
+                  {!c.success && (
+                    <span className="px-1 rounded shrink-0"
+                      style={{
+                        background: 'rgb(244,63,94)',
+                        color: 'white',
+                      }}>FAIL</span>
+                  )}
+                  <span className="font-mono shrink-0"
+                    style={{
+                      color: isAnomaly ? 'rgb(245,158,11)'
+                                       : 'var(--color-text-secondary)',
+                    }}>
+                    {c.input_chars} chars · ¥{(c.cost_estimate ?? 0).toFixed(4)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedId(isExpanded ? null : c.id)}
+                    className="text-[10px] ml-auto shrink-0"
+                    style={{ color: 'var(--color-text-accent)' }}>
+                    {isExpanded ? '收起' : '▶ 抓样查看'}
+                  </button>
+                </div>
+                {isExpanded && c.input_preview && (
+                  <div className="mt-1 px-2 py-1 rounded font-mono whitespace-pre-wrap break-words"
+                    style={{
+                      background: 'var(--color-bg-elevated)',
+                      color: 'var(--color-text-primary)',
+                      maxHeight: '200px',
+                      overflow: 'auto',
+                    }}>
+                    {c.input_preview}
+                  </div>
+                )}
+                {isExpanded && c.error_message && (
+                  <div className="mt-1 text-[10px]"
+                    style={{ color: 'rgb(244,63,94)' }}>
+                    ERR: {c.error_message}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       </div>
     </div>
   );
@@ -1233,12 +1527,9 @@ interface TtsGalleryRowProps {
   label: string;
   sub: string;
   kindLabel: string;
-  isDefault: boolean;
   playing: boolean;
-  busy: boolean;
   usage?: Array<{ id: number; name: string }>;
   onPreview: () => void;
-  onSetDefault: () => void;
   // bugfix-3.4: 重命名相关 (仅复刻 voice 显示按钮)
   isRenaming?: boolean;
   renameDraft?: string;
@@ -1250,8 +1541,8 @@ interface TtsGalleryRowProps {
 }
 
 function TtsGalleryRow({
-  voiceId, label, sub, kindLabel, isDefault, playing, busy,
-  usage, onPreview, onSetDefault,
+  voiceId, label, sub, kindLabel, playing,
+  usage, onPreview,
   isRenaming, renameDraft, onStartRename, onChangeRenameDraft,
   onSubmitRename, onCancelRename, noteText,
 }: TtsGalleryRowProps) {
@@ -1260,12 +1551,8 @@ function TtsGalleryRow({
     <li
       className="rounded-md px-3 py-2 flex flex-col gap-1"
       style={{
-        background: isDefault
-          ? 'color-mix(in srgb, var(--color-accent) 12%, transparent)'
-          : 'var(--color-bg-input)',
-        border: isDefault
-          ? '1px solid var(--color-accent)'
-          : '1px solid var(--color-border-subtle)',
+        background: 'var(--color-bg-input)',
+        border: '1px solid var(--color-border-subtle)',
       }}
     >
       <div className="flex items-center gap-3">
@@ -1328,15 +1615,6 @@ function TtsGalleryRow({
                   }}>
                   {kindLabel}
                 </span>
-                {isDefault && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                    style={{
-                      background: 'var(--color-accent)',
-                      color: 'var(--color-bubble-user-text)',
-                    }}>
-                    全局默认
-                  </span>
-                )}
                 {canRename && (
                   <button
                     type="button"
@@ -1373,20 +1651,6 @@ function TtsGalleryRow({
           aria-label={playing ? '暂停' : '试听'}
         >
           {playing ? '⏸' : '▶'}
-        </button>
-        <button
-          type="button"
-          onClick={onSetDefault}
-          disabled={busy || isDefault}
-          className="text-[11px] px-2 py-1 rounded transition disabled:opacity-50 shrink-0"
-          style={{
-            background: isDefault ? 'transparent' : 'var(--color-bg-elevated)',
-            border: '1px solid var(--color-border)',
-            color: 'var(--color-text-primary)',
-          }}
-          title={isDefault ? '已是全局默认' : '设为全局默认 voice'}
-        >
-          {isDefault ? '✓ 默认' : '设为默认'}
         </button>
       </div>
       {noteText && (

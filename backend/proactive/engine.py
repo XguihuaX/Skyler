@@ -345,6 +345,15 @@ async def run_trigger(
     tts_engine = get_tts_engine(voice_model)
     tts_enabled = get_tts_enabled()
 
+    # bugfix-4: 设 TTS source — activity_smart 单独标记,其他 proactive trigger
+    # (wake_call / morning_briefing / lunch_call / dinner_call / bedtime_chat /
+    # long_idle) 都归到 'proactive'。UI 用量 panel 按这两个 bucket 显示。
+    from backend.observability.tts_log import set_tts_call_context
+    _tts_source = "activity_smart" if "activity" in trigger.name else "proactive"
+    set_tts_call_context(
+        source=_tts_source, character_id=target_char_id, user_id=user_id,
+    )
+
     # ── WS push helpers ─────────────────────────────────────────────────
     connection_manager = _ws.connection_manager
     proactive_meta = {
@@ -699,6 +708,13 @@ async def run_wake_call_trigger(
     voice_model: Optional[str] = character.voice_model
     tts_engine = get_tts_engine(voice_model)
     tts_enabled = get_tts_enabled()
+
+    # bugfix-4: 同 upper proactive path — 设 TTS source for log
+    from backend.observability.tts_log import set_tts_call_context
+    _tts_source = "activity_smart" if "activity" in trigger.name else "proactive"
+    set_tts_call_context(
+        source=_tts_source, character_id=target_char_id, user_id=user_id,
+    )
 
     connection_manager = _ws.connection_manager
     proactive_meta = {
