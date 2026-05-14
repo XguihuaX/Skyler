@@ -44,6 +44,9 @@ from backend.database.migrations.bugfix_3_1_ai_providers import run_migration
 from backend.database.migrations.bugfix_3_2_6_endpoint_env_repair import (
     run_migration as run_migration_3_2_6,
 )
+from backend.database.migrations.bugfix_3_2_7_model_prefix_repair import (
+    run_migration as run_migration_3_2_7,
+)
 from backend.utils.crypto import decrypt
 from sqlalchemy import text
 
@@ -64,6 +67,9 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 async def setup_db() -> None:
+    # 顺序与 backend/main.py startup 保持一致:3.2.7 先于 3.1(table 不存在时 no-op),
+    # 防 3.1 seed dedup 在升级路径上插入重复行。
+    await run_migration_3_2_7()
     await run_migration()
     await run_migration_3_2_6()
 
@@ -444,6 +450,113 @@ async def test_dispatcher_via_vendor_credentials():
           model2 is None and kwargs2 == {})
 
 
+async def test_seed_models_have_litellm_prefix():
+    """Bugfix-3.2.7: 所有 builtin LLM provider 的 model 字段必须含 LiteLLM
+    provider 前缀 ('xxx/yyy'),否则 LiteLLM acompletion 会抛
+    BadRequestError('LLM Provider NOT provided')。防未来 add builtin 漏写。"""
+    print("\n[15] seed_models_have_litellm_prefix")
+    rows = await svc.list_providers("llm")
+    bad = [(p.id, p.vendor_id, p.name, p.model)
+           for p in rows
+           if p.provider_kind == "builtin" and (not p.model or "/" not in p.model)]
+    check(
+        "all builtin LLM models have LiteLLM provider prefix",
+        not bad,
+        f"model 缺少 LiteLLM provider 前缀: {bad}" if bad else "",
+    )
+
+
+async def test_migration_repair_qwen_model_prefix():
+    """Bugfix-3.2.7: 老 DB 含裸 qwen3.6-* 行 → migration 修补成 openai/qwen3.6-*。
+    幂等:再跑一次不变,且不影响已带前缀的行。"""
+    print("\n[16] migration_repair_qwen_model_prefix")
+    # 在 ai_providers 注入裸名行(模拟老 install)
+    async with TEST_ENGINE.begin() as conn:
+        await conn.execute(text("""
+            INSERT INTO ai_providers
+                (vendor_id, type, name, model, provider_kind, enabled, is_active)
+            VALUES
+                ('qwen', 'llm', '_legacy_plus', 'qwen3.6-plus',
+                 'builtin', 1, 0),
+                ('qwen', 'llm', '_legacy_max', 'qwen3.6-max-preview',
+                 'builtin', 1, 0)
+        """))
+    # 跑修补
+    await run_migration_3_2_7()
+    async with TEST_ENGINE.begin() as conn:
+        bare = (await conn.execute(text(
+            "SELECT COUNT(*) FROM ai_providers "
+            "WHERE model IN ('qwen3.6-plus', 'qwen3.6-max-preview')"
+        ))).first()
+        prefixed_plus = (await conn.execute(text(
+            "SELECT COUNT(*) FROM ai_providers "
+            "WHERE name='_legacy_plus' AND model='openai/qwen3.6-plus'"
+        ))).first()
+        prefixed_max = (await conn.execute(text(
+            "SELECT COUNT(*) FROM ai_providers "
+            "WHERE name='_legacy_max' AND model='openai/qwen3.6-max-preview'"
+        ))).first()
+    check(
+        "no bare qwen3.6-* model rows after repair",
+        bare is not None and bare[0] == 0,
+        f"remaining bare count={None if bare is None else bare[0]}",
+    )
+    check(
+        "_legacy_plus row repaired to openai/qwen3.6-plus",
+        prefixed_plus is not None and prefixed_plus[0] == 1,
+        f"got count={None if prefixed_plus is None else prefixed_plus[0]}",
+    )
+    check(
+        "_legacy_max row repaired to openai/qwen3.6-max-preview",
+        prefixed_max is not None and prefixed_max[0] == 1,
+        f"got count={None if prefixed_max is None else prefixed_max[0]}",
+    )
+    # 幂等:再跑一次不应再动行
+    await run_migration_3_2_7()
+    async with TEST_ENGINE.begin() as conn:
+        still_prefixed = (await conn.execute(text(
+            "SELECT COUNT(*) FROM ai_providers "
+            "WHERE model IN ('openai/qwen3.6-plus', 'openai/qwen3.6-max-preview')"
+        ))).first()
+    check(
+        "migration idempotent on already-prefixed rows",
+        still_prefixed is not None and still_prefixed[0] >= 2,
+        f"count={None if still_prefixed is None else still_prefixed[0]}",
+    )
+
+
+async def test_migration_repair_deepseek_model_prefix():
+    """Bugfix-3.2.7: 老 DB 含裸 deepseek-chat 行 → 修补成 deepseek/deepseek-chat。"""
+    print("\n[17] migration_repair_deepseek_model_prefix")
+    async with TEST_ENGINE.begin() as conn:
+        await conn.execute(text("""
+            INSERT INTO ai_providers
+                (vendor_id, type, name, model, provider_kind, enabled, is_active)
+            VALUES
+                ('deepseek', 'llm', '_legacy_ds', 'deepseek-chat',
+                 'builtin', 1, 0)
+        """))
+    await run_migration_3_2_7()
+    async with TEST_ENGINE.begin() as conn:
+        bare = (await conn.execute(text(
+            "SELECT COUNT(*) FROM ai_providers WHERE model='deepseek-chat'"
+        ))).first()
+        prefixed = (await conn.execute(text(
+            "SELECT COUNT(*) FROM ai_providers "
+            "WHERE name='_legacy_ds' AND model='deepseek/deepseek-chat'"
+        ))).first()
+    check(
+        "no bare deepseek-chat rows after repair",
+        bare is not None and bare[0] == 0,
+        f"remaining count={None if bare is None else bare[0]}",
+    )
+    check(
+        "_legacy_ds repaired to deepseek/deepseek-chat",
+        prefixed is not None and prefixed[0] == 1,
+        f"got count={None if prefixed is None else prefixed[0]}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
@@ -465,6 +578,9 @@ async def _main():
     await test_migration_repairs_inconsistent_state()
     await test_activate_sets_enabled()
     await test_dispatcher_via_vendor_credentials()
+    await test_seed_models_have_litellm_prefix()
+    await test_migration_repair_qwen_model_prefix()
+    await test_migration_repair_deepseek_model_prefix()
 
 
 if __name__ == "__main__":

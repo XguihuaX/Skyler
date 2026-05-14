@@ -80,15 +80,19 @@ _BUILTIN_VENDORS = [
 ]
 
 # 7 个 builtin LLM provider (拍板)
+# bugfix-3.2.7: model 字段必须含 LiteLLM provider 前缀 (xxx/yyy)。Qwen 走
+# OpenAI-compatible 协议 → openai/。DeepSeek 用 deepseek/。原始 seed 漏写前缀
+# 导致 LiteLLM acompletion 抛 "LLM Provider NOT provided" — 由 bugfix-3.2.7
+# 的 repair migration 修补现有 DB,这里改 seed 防新 install 复发。
 _BUILTIN_PROVIDERS = [
     # (vendor_id, name, model)
-    ("qwen",      "Qwen 3.6 Plus",         "qwen3.6-plus"),
-    ("qwen",      "Qwen 3.6 Max preview",  "qwen3.6-max-preview"),
+    ("qwen",      "Qwen 3.6 Plus",         "openai/qwen3.6-plus"),
+    ("qwen",      "Qwen 3.6 Max preview",  "openai/qwen3.6-max-preview"),
     ("openai",    "GPT-4o",                "openai/gpt-4o"),
     ("openai",    "GPT-4o Mini",           "openai/gpt-4o-mini"),
     ("anthropic", "Claude Sonnet 4.6",     "anthropic/claude-sonnet-4-6"),
     ("anthropic", "Claude Opus 4.7",       "anthropic/claude-opus-4-7"),
-    ("deepseek",  "DeepSeek Chat",         "deepseek-chat"),
+    ("deepseek",  "DeepSeek Chat",         "deepseek/deepseek-chat"),
 ]
 
 

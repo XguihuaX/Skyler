@@ -94,6 +94,10 @@ from backend.database.migrations.bugfix_3_1_ai_providers import (
 from backend.database.migrations.bugfix_3_2_6_endpoint_env_repair import (
     run_migration as migrate_bugfix_3_2_6_endpoint_env_repair,
 )
+# bugfix-3.2.7: 修补 DB seed Qwen/DeepSeek model 缺 LiteLLM provider 前缀
+from backend.database.migrations.bugfix_3_2_7_model_prefix_repair import (
+    run_migration as migrate_bugfix_3_2_7_model_prefix_repair,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -249,6 +253,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # backend/services/activity_timeline.py 的 poll-listener 写入。
     # 跑前自动备份 momoos.db → .backup-before-chunk14（已存在则跳过）。
     await migrate_v3_5_chunk14_activity_sessions()
+
+    # ── 1b22a. Bugfix-3.2.7: 修补老 DB seed Qwen/DeepSeek model 缺 LiteLLM 前缀 ──
+    # 旧 3.1 seed 把 qwen3.6-* / deepseek-chat 写成裸名,LiteLLM acompletion
+    # 抛 "LLM Provider NOT provided" → 主聊天 500。一次性 UPDATE 加 openai/ /
+    # deepseek/ 前缀。**必须在 3.1 之前跑** — 否则 3.1 的 seed dedup 用新前缀
+    # SELECT 匹配不到旧裸名,会插重复 builtin。table 不存在(fresh install)→ 跳过。
+    await migrate_bugfix_3_2_7_model_prefix_repair()
 
     # ── 1b22. Bugfix-3.1: ai_vendors + ai_vendor_credentials + ai_providers ─
     # 4 个 builtin vendor (qwen/openai/anthropic/deepseek) + 7 个 LLM provider

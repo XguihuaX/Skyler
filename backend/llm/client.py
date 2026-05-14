@@ -154,6 +154,16 @@ async def call_llm(
         elif "deepseek" in model_lower:
             merged["tools"] = [{"type": "web_search_preview"}]
 
+    # bugfix-3.2.7: defensive guard — LiteLLM 要求 'provider/model' 格式。
+    # 裸 model 名(无 '/')会直接 BadRequestError('LLM Provider NOT provided')。
+    # 此处 warn 让真机走查一眼看到根因,不抢救 (让 LiteLLM 报真错保 trace 清晰)。
+    if "/" not in resolved_model:
+        logger.warning(
+            "[llm.dispatcher] model=%r lacks LiteLLM provider prefix "
+            "(expected 'provider/model'); LiteLLM will likely reject this call",
+            resolved_model,
+        )
+
     try:
         response = await acompletion(
             model=resolved_model,
