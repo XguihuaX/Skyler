@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -23,6 +24,32 @@ from backend.database import engine
 from backend.utils.crypto import encrypt, try_decrypt
 
 logger = logging.getLogger(__name__)
+
+
+# bugfix-3.2.6: 已知 env var 别名(litellm 等老 SDK 用过这些名字)。
+# vendor.endpoint_env_name 是 primary; 若 primary 未设, 按这里 alias list 顺序尝试。
+_ENDPOINT_ENV_ALIASES = {
+    "DASHSCOPE_BASE_URL": ["DASHSCOPE_API_BASE"],
+}
+
+
+def _env_lookup(env_name: str) -> Optional[str]:
+    """Settings (.env 文件) → os.environ (shell export) 两层 lookup。
+
+    pydantic_settings 把 .env 加载到 Settings 对象的小写字段 (eg
+    ``DASHSCOPE_API_KEY`` → ``settings.dashscope_api_key``), 但**不**注入到
+    os.environ。所以两边都查:
+      1. ``getattr(settings, name.lower())`` —— pydantic 字段 (有则用)
+      2. ``os.environ.get(name)`` —— shell export 兜底
+    """
+    field = env_name.lower()
+    val = getattr(settings, field, None)
+    if isinstance(val, str) and val.strip():
+        return val
+    val = os.environ.get(env_name)
+    if val and val.strip():
+        return val
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -37,9 +64,11 @@ class Vendor:
     vendor_kind: str  # 'builtin' | 'custom'
     default_endpoint: Optional[str]
     credential_key_name: str
+    endpoint_env_name: Optional[str]   # bugfix-3.2.6
     color: Optional[str]
     icon: Optional[str]
-    has_credential: bool
+    has_credential: bool               # True iff DB or env has credential
+    credential_source: str             # 'db' | 'env' | 'none'  bugfix-3.2.6
 
 
 @dataclass
@@ -61,51 +90,63 @@ class Provider:
 # ---------------------------------------------------------------------------
 
 
+_VENDOR_COLS = (
+    "v.id, v.name, v.vendor_kind, v.default_endpoint, "
+    "v.credential_key_name, v.endpoint_env_name, v.color, v.icon, "
+    "CASE WHEN c.vendor_id IS NULL THEN 0 ELSE 1 END AS has_db_cred"
+)
+
+
+def _row_to_vendor(r) -> Vendor:
+    """bugfix-3.2.6: build Vendor from row; resolve credential_source via env
+    lookup when DB column says no DB credential."""
+    has_db_cred = bool(r[8])
+    credential_key_name = r[4]
+    if has_db_cred:
+        credential_source = "db"
+    else:
+        env_val = _env_lookup(credential_key_name) if credential_key_name else None
+        credential_source = "env" if env_val else "none"
+    return Vendor(
+        id=r[0], name=r[1], vendor_kind=r[2],
+        default_endpoint=r[3], credential_key_name=credential_key_name,
+        endpoint_env_name=r[5],
+        color=r[6], icon=r[7],
+        has_credential=(credential_source != "none"),
+        credential_source=credential_source,
+    )
+
+
 async def list_vendors() -> list[Vendor]:
     async with engine.begin() as conn:
         await conn.execute(text("PRAGMA foreign_keys = ON"))
-        rows = (await conn.execute(text("""
-            SELECT v.id, v.name, v.vendor_kind, v.default_endpoint,
-                   v.credential_key_name, v.color, v.icon,
-                   CASE WHEN c.vendor_id IS NULL THEN 0 ELSE 1 END AS has_cred
+        rows = (await conn.execute(text(f"""
+            SELECT {_VENDOR_COLS}
             FROM ai_vendors v
             LEFT JOIN ai_vendor_credentials c ON c.vendor_id = v.id
             ORDER BY v.vendor_kind, v.id
         """))).fetchall()
-    return [
-        Vendor(
-            id=r[0], name=r[1], vendor_kind=r[2],
-            default_endpoint=r[3], credential_key_name=r[4],
-            color=r[5], icon=r[6], has_credential=bool(r[7]),
-        )
-        for r in rows
-    ]
+    return [_row_to_vendor(r) for r in rows]
 
 
 async def get_vendor(vendor_id: str) -> Optional[Vendor]:
     async with engine.begin() as conn:
         await conn.execute(text("PRAGMA foreign_keys = ON"))
-        row = (await conn.execute(text("""
-            SELECT v.id, v.name, v.vendor_kind, v.default_endpoint,
-                   v.credential_key_name, v.color, v.icon,
-                   CASE WHEN c.vendor_id IS NULL THEN 0 ELSE 1 END AS has_cred
+        row = (await conn.execute(text(f"""
+            SELECT {_VENDOR_COLS}
             FROM ai_vendors v
             LEFT JOIN ai_vendor_credentials c ON c.vendor_id = v.id
             WHERE v.id = :id
         """), {"id": vendor_id})).first()
     if row is None:
         return None
-    return Vendor(
-        id=row[0], name=row[1], vendor_kind=row[2],
-        default_endpoint=row[3], credential_key_name=row[4],
-        color=row[5], icon=row[6], has_credential=bool(row[7]),
-    )
+    return _row_to_vendor(row)
 
 
 async def create_vendor(
     *, id: str, name: str, default_endpoint: Optional[str],
-    credential_key_name: str, color: Optional[str] = None,
-    icon: Optional[str] = None,
+    credential_key_name: str, endpoint_env_name: Optional[str] = None,
+    color: Optional[str] = None, icon: Optional[str] = None,
 ) -> Vendor:
     """Create custom vendor (vendor_kind='custom')。pk 冲突时抛 IntegrityError。"""
     async with engine.begin() as conn:
@@ -113,11 +154,12 @@ async def create_vendor(
         await conn.execute(text("""
             INSERT INTO ai_vendors
                 (id, name, vendor_kind, default_endpoint,
-                 credential_key_name, color, icon)
-            VALUES (:id, :name, 'custom', :ep, :cred, :color, :icon)
+                 credential_key_name, endpoint_env_name, color, icon)
+            VALUES (:id, :name, 'custom', :ep, :cred, :env_ep, :color, :icon)
         """), {
             "id": id, "name": name, "ep": default_endpoint,
-            "cred": credential_key_name, "color": color, "icon": icon,
+            "cred": credential_key_name, "env_ep": endpoint_env_name,
+            "color": color, "icon": icon,
         })
     fetched = await get_vendor(id)
     assert fetched is not None
@@ -129,6 +171,7 @@ async def patch_vendor(
     *, name: Optional[str] = None,
     default_endpoint: Optional[str] = None,
     credential_key_name: Optional[str] = None,
+    endpoint_env_name: Optional[str] = None,
     color: Optional[str] = None,
     icon: Optional[str] = None,
 ) -> Optional[Vendor]:
@@ -141,6 +184,8 @@ async def patch_vendor(
         fields.append("default_endpoint = :ep"); params["ep"] = default_endpoint
     if credential_key_name is not None:
         fields.append("credential_key_name = :cred"); params["cred"] = credential_key_name
+    if endpoint_env_name is not None:
+        fields.append("endpoint_env_name = :env_ep"); params["env_ep"] = endpoint_env_name
     if color is not None:
         fields.append("color = :color"); params["color"] = color
     if icon is not None:
@@ -238,12 +283,43 @@ async def resolve_vendor_credential(vendor_id: str) -> Optional[str]:
     v = await get_vendor(vendor_id)
     if v is None:
         return None
-    # .env 兜底 —— pydantic Settings 把 ENV_VAR 名 lower-case 映射到字段名
-    env_field = v.credential_key_name.lower()
-    val = getattr(settings, env_field, None)
-    if isinstance(val, str) and val.strip():
-        return val
-    return None
+    return _env_lookup(v.credential_key_name)
+
+
+async def resolve_vendor_endpoint(
+    vendor_id: str,
+    provider_endpoint_override: Optional[str] = None,
+) -> tuple[Optional[str], str]:
+    """bugfix-3.2.6: endpoint 解析链 + 来源标识。
+
+    Order (按 Skyler 拍板 + 实用主义):
+      1. ``provider.endpoint`` (UI override per provider)       → 'provider'
+      2. ``vendor.endpoint_env_name`` → os env / .env           → 'env'
+         (含 alias: DASHSCOPE_BASE_URL ↔ DASHSCOPE_API_BASE)
+      3. ``vendor.default_endpoint`` (builtin seed default)     → 'vendor'
+      4. None                                                    → 'none'
+
+    将 env 置于 vendor.default 之上 —— 老用户 .env 自定义 base_url 必须能
+    覆盖 builtin default, 否则 endpoint_env_name 对 builtin vendor 永远死的。
+    """
+    if provider_endpoint_override:
+        return provider_endpoint_override, "provider"
+    v = await get_vendor(vendor_id)
+    if v is None:
+        return None, "none"
+    # env (primary + aliases)
+    if v.endpoint_env_name:
+        env_val = _env_lookup(v.endpoint_env_name)
+        if env_val:
+            return env_val, "env"
+        for alias in _ENDPOINT_ENV_ALIASES.get(v.endpoint_env_name, []):
+            env_val = _env_lookup(alias)
+            if env_val:
+                return env_val, "env"
+    # vendor default
+    if v.default_endpoint:
+        return v.default_endpoint, "vendor"
+    return None, "none"
 
 
 # ---------------------------------------------------------------------------
@@ -377,14 +453,16 @@ async def activate_provider(provider_id: int) -> str:
     """切 provider 为 active。返回:
         'ok'                    成功(同 type 其他 provider deactivate)
         'not_found'             provider 不存在
-        'not_enabled'           provider.enabled=False
         'no_credential'         vendor 凭证 (DB or env) 都没有
+
+    bugfix-3.2.6:
+      - 移除 'not_enabled' 返回 —— activate 时强制 enabled=1, 避免 UI 操作
+        留下 active=1+enabled=0 自相矛盾的 DB state(dispatcher 视为 no_db_active)
+      - vendor 凭证检查走 has_credential(DB OR env), env 也算
     """
     p = await get_provider(provider_id)
     if p is None:
         return "not_found"
-    if not p.enabled:
-        return "not_enabled"
     # vendor 必须有可用凭证(DB or env)
     if p.vendor_id:
         cred = await resolve_vendor_credential(p.vendor_id)
@@ -398,9 +476,9 @@ async def activate_provider(provider_id: int) -> str:
             "updated_at = CURRENT_TIMESTAMP "
             "WHERE type = :t AND id != :id"
         ), {"t": p.type, "id": provider_id})
-        # 当前 activate
+        # 当前 activate + 强制 enabled=1(bugfix-3.2.6 一致性 invariant)
         await conn.execute(text(
-            "UPDATE ai_providers SET is_active = 1, "
+            "UPDATE ai_providers SET is_active = 1, enabled = 1, "
             "updated_at = CURRENT_TIMESTAMP WHERE id = :id"
         ), {"id": provider_id})
     return "ok"

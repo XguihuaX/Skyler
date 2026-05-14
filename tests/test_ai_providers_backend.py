@@ -41,6 +41,9 @@ _db_module.AsyncSessionLocal = TEST_SESSION
 
 from backend.database import ai_providers as svc
 from backend.database.migrations.bugfix_3_1_ai_providers import run_migration
+from backend.database.migrations.bugfix_3_2_6_endpoint_env_repair import (
+    run_migration as run_migration_3_2_6,
+)
 from backend.utils.crypto import decrypt
 from sqlalchemy import text
 
@@ -62,6 +65,7 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 async def setup_db() -> None:
     await run_migration()
+    await run_migration_3_2_6()
 
 
 # ---------------------------------------------------------------------------
@@ -71,17 +75,35 @@ async def setup_db() -> None:
 
 async def test_list_vendors():
     print("\n[1] list_vendors — 4 builtin seed visible")
-    rows = await svc.list_vendors()
-    ids = {v.id for v in rows}
-    check("4 builtins present",
-          {"qwen", "openai", "anthropic", "deepseek"}.issubset(ids),
-          f"got={ids}")
-    check("all builtin kind",
-          all(v.vendor_kind == "builtin" for v in rows if v.id in ids),
-          f"kinds={[v.vendor_kind for v in rows]}")
-    check("has_credential=False initially",
-          all(not v.has_credential for v in rows),
-          f"has_cred={[v.has_credential for v in rows]}")
+    # bugfix-3.2.6: 测试环境清空所有 vendor env keys 以保证 has_credential=False
+    # 是初始 invariant (真实 .env 可能含 DASHSCOPE_API_KEY → env fallback 触发)
+    from backend.config import settings
+    saved = (
+        settings.dashscope_api_key, settings.openai_api_key,
+        settings.anthropic_api_key, settings.deepseek_api_key,
+    )
+    settings.dashscope_api_key = ""  # type: ignore[assignment]
+    settings.openai_api_key = ""  # type: ignore[assignment]
+    settings.anthropic_api_key = ""  # type: ignore[assignment]
+    settings.deepseek_api_key = ""  # type: ignore[assignment]
+    for key in ("DASHSCOPE_API_KEY", "OPENAI_API_KEY",
+                "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"):
+        os.environ.pop(key, None)
+    try:
+        rows = await svc.list_vendors()
+        ids = {v.id for v in rows}
+        check("4 builtins present",
+              {"qwen", "openai", "anthropic", "deepseek"}.issubset(ids),
+              f"got={ids}")
+        check("all builtin kind",
+              all(v.vendor_kind == "builtin" for v in rows if v.id in ids),
+              f"kinds={[v.vendor_kind for v in rows]}")
+        check("has_credential=False initially (DB and env both empty)",
+              all(not v.has_credential for v in rows),
+              f"has_cred={[v.has_credential for v in rows]}")
+    finally:
+        (settings.dashscope_api_key, settings.openai_api_key,
+         settings.anthropic_api_key, settings.deepseek_api_key) = saved
 
 
 async def test_create_custom_vendor():
@@ -245,6 +267,158 @@ async def test_auto_activate_on_env_credential():
         settings.dashscope_api_key = saved
 
 
+async def test_has_credential_env_fallback():
+    """Bugfix-3.2.6: has_credential 检测 .env fallback。"""
+    print("\n[10] has_credential reads .env fallback")
+    # Clean DB creds
+    async with TEST_ENGINE.begin() as conn:
+        await conn.execute(text("DELETE FROM ai_vendor_credentials"))
+    from backend.config import settings
+    saved_dash = settings.dashscope_api_key
+    saved_oai = settings.openai_api_key
+    try:
+        # Set only DASHSCOPE_API_KEY in env, OpenAI key empty
+        settings.dashscope_api_key = "sk-env-dashscope"  # type: ignore[assignment]
+        settings.openai_api_key = ""  # type: ignore[assignment]
+        # Also remove from os.environ for OpenAI to guarantee no value
+        os.environ.pop("OPENAI_API_KEY", None)
+        rows = await svc.list_vendors()
+        by_id = {v.id: v for v in rows}
+        check("qwen credential_source == 'env'",
+              by_id["qwen"].credential_source == "env",
+              f"got={by_id['qwen'].credential_source}")
+        check("qwen has_credential = True",
+              by_id["qwen"].has_credential is True)
+        check("openai credential_source == 'none'",
+              by_id["openai"].credential_source == "none",
+              f"got={by_id['openai'].credential_source}")
+        check("openai has_credential = False",
+              by_id["openai"].has_credential is False)
+    finally:
+        settings.dashscope_api_key = saved_dash
+        settings.openai_api_key = saved_oai
+
+
+async def test_has_credential_db_priority():
+    """DB credential 优先 over .env."""
+    print("\n[11] has_credential DB priority over env")
+    from backend.config import settings
+    saved = settings.dashscope_api_key
+    try:
+        settings.dashscope_api_key = "sk-env-value"  # type: ignore[assignment]
+        await svc.set_vendor_credential("qwen", "sk-db-value")
+        v = await svc.get_vendor("qwen")
+        check("source == 'db' when both set",
+              v is not None and v.credential_source == "db",
+              f"got={None if v is None else v.credential_source}")
+        # resolve_vendor_credential should return DB value
+        resolved = await svc.resolve_vendor_credential("qwen")
+        check("resolve returns DB value", resolved == "sk-db-value",
+              f"got={resolved}")
+    finally:
+        await svc.clear_vendor_credential("qwen")
+        settings.dashscope_api_key = saved
+
+
+async def test_endpoint_resolution_chain():
+    """Bugfix-3.2.6: endpoint 4-tier chain — provider > env > vendor.default > none."""
+    print("\n[12] endpoint resolution chain")
+    from backend.config import settings
+    # Ensure clean env state
+    saved_dbu = getattr(settings, "dashscope_base_url", "")
+    os.environ.pop("DASHSCOPE_BASE_URL", None)
+    os.environ.pop("DASHSCOPE_API_BASE", None)
+    settings.dashscope_base_url = ""  # type: ignore[assignment]
+    try:
+        # 1. Pure vendor default (no override, no env)
+        ep, src = await svc.resolve_vendor_endpoint("qwen")
+        check("vendor default endpoint",
+              ep == "https://dashscope.aliyuncs.com/compatible-mode/v1" and src == "vendor",
+              f"got=({ep}, {src})")
+
+        # 2. Env override via settings
+        settings.dashscope_base_url = "https://my-custom-dashscope"  # type: ignore[assignment]
+        ep, src = await svc.resolve_vendor_endpoint("qwen")
+        check("env settings override",
+              ep == "https://my-custom-dashscope" and src == "env",
+              f"got=({ep}, {src})")
+        settings.dashscope_base_url = ""  # reset
+
+        # 3. Provider override beats env + vendor
+        os.environ["DASHSCOPE_BASE_URL"] = "https://env-dashscope"
+        ep, src = await svc.resolve_vendor_endpoint(
+            "qwen", provider_endpoint_override="https://provider-override",
+        )
+        check("provider override wins",
+              ep == "https://provider-override" and src == "provider",
+              f"got=({ep}, {src})")
+
+        # 4. Alias DASHSCOPE_API_BASE works when DASHSCOPE_BASE_URL missing
+        os.environ.pop("DASHSCOPE_BASE_URL", None)
+        os.environ["DASHSCOPE_API_BASE"] = "https://alias-base"
+        ep, src = await svc.resolve_vendor_endpoint("qwen")
+        check("alias DASHSCOPE_API_BASE resolves",
+              ep == "https://alias-base" and src == "env",
+              f"got=({ep}, {src})")
+    finally:
+        settings.dashscope_base_url = saved_dbu
+        os.environ.pop("DASHSCOPE_BASE_URL", None)
+        os.environ.pop("DASHSCOPE_API_BASE", None)
+
+
+async def test_migration_repairs_inconsistent_state():
+    """Bugfix-3.2.6: migration 修补 is_active=1 AND enabled=0 → enabled=1。"""
+    print("\n[13] migration repairs inconsistent state")
+    # Manually plant inconsistent row
+    async with TEST_ENGINE.begin() as conn:
+        await conn.execute(text(
+            "UPDATE ai_providers SET enabled=0, is_active=1 "
+            "WHERE id = (SELECT id FROM ai_providers WHERE type='llm' LIMIT 1)"
+        ))
+    # Verify planted
+    async with TEST_ENGINE.begin() as conn:
+        row = (await conn.execute(text(
+            "SELECT COUNT(*) FROM ai_providers WHERE is_active=1 AND enabled=0"
+        ))).first()
+    check("planted inconsistent row exists",
+          row is not None and row[0] >= 1, f"count={None if row is None else row[0]}")
+    # Run repair
+    await run_migration_3_2_6()
+    async with TEST_ENGINE.begin() as conn:
+        row = (await conn.execute(text(
+            "SELECT COUNT(*) FROM ai_providers WHERE is_active=1 AND enabled=0"
+        ))).first()
+    check("after repair, no inconsistent rows",
+          row is not None and row[0] == 0, f"count={None if row is None else row[0]}")
+
+
+async def test_activate_sets_enabled():
+    """Bugfix-3.2.6: activate_provider 强制 enabled=1, 避免自相矛盾。"""
+    print("\n[14] activate_provider sets enabled=1")
+    # 用 settings 模拟 .env (settings.openai_api_key)
+    from backend.config import settings
+    saved_oai = settings.openai_api_key
+    try:
+        settings.openai_api_key = "sk-env-openai"  # type: ignore[assignment]
+        # plant: disabled OpenAI provider, then activate it
+        rows = await svc.list_providers("llm")
+        oai_prov = next(p for p in rows if p.vendor_id == "openai")
+        await svc.patch_provider(oai_prov.id, enabled=False)
+        # confirm disabled
+        p = await svc.get_provider(oai_prov.id)
+        check("provider initially disabled",
+              p is not None and p.enabled is False)
+        # activate should still succeed (no longer 'not_enabled') + flip enabled
+        result = await svc.activate_provider(oai_prov.id)
+        check("activate ok despite disabled", result == "ok", f"got={result}")
+        p = await svc.get_provider(oai_prov.id)
+        check("provider now enabled + active",
+              p is not None and p.enabled is True and p.is_active is True,
+              f"enabled={None if p is None else p.enabled} active={None if p is None else p.is_active}")
+    finally:
+        settings.openai_api_key = saved_oai
+
+
 async def test_dispatcher_via_vendor_credentials():
     print("\n[8] dispatcher_via_vendor_credentials")
     # 给 openai vendor 设 DB credential
@@ -285,6 +459,11 @@ async def _main():
     await test_activate_requires_credential()
     await test_activate_uses_env_fallback()
     await test_auto_activate_on_env_credential()
+    await test_has_credential_env_fallback()
+    await test_has_credential_db_priority()
+    await test_endpoint_resolution_chain()
+    await test_migration_repairs_inconsistent_state()
+    await test_activate_sets_enabled()
     await test_dispatcher_via_vendor_credentials()
 
 

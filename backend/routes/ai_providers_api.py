@@ -49,9 +49,11 @@ class VendorOut(BaseModel):
     vendor_kind: str
     default_endpoint: Optional[str] = None
     credential_key_name: str
+    endpoint_env_name: Optional[str] = None  # bugfix-3.2.6
     color: Optional[str] = None
     icon: Optional[str] = None
     has_credential: bool
+    credential_source: str  # 'db' | 'env' | 'none'  bugfix-3.2.6
 
 
 class VendorCreateBody(BaseModel):
@@ -59,6 +61,7 @@ class VendorCreateBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
     default_endpoint: Optional[str] = None
     credential_key_name: str = Field(..., min_length=1, max_length=64)
+    endpoint_env_name: Optional[str] = None  # bugfix-3.2.6
     color: Optional[str] = None
     icon: Optional[str] = None
 
@@ -67,6 +70,7 @@ class VendorPatchBody(BaseModel):
     name: Optional[str] = None
     default_endpoint: Optional[str] = None
     credential_key_name: Optional[str] = None
+    endpoint_env_name: Optional[str] = None  # bugfix-3.2.6
     color: Optional[str] = None
     icon: Optional[str] = None
 
@@ -92,7 +96,11 @@ class VendorGroupOut(BaseModel):
     id: str
     name: str
     vendor_kind: str
+    default_endpoint: Optional[str] = None      # bugfix-3.2.6 for modal use
+    credential_key_name: str                     # bugfix-3.2.6 for modal use
+    endpoint_env_name: Optional[str] = None     # bugfix-3.2.6
     has_credential: bool
+    credential_source: str
     color: Optional[str] = None
     icon: Optional[str] = None
     providers: List[ProviderOut]
@@ -131,7 +139,10 @@ def _to_vendor_out(v: svc.Vendor) -> VendorOut:
         id=v.id, name=v.name, vendor_kind=v.vendor_kind,
         default_endpoint=v.default_endpoint,
         credential_key_name=v.credential_key_name,
-        color=v.color, icon=v.icon, has_credential=v.has_credential,
+        endpoint_env_name=v.endpoint_env_name,
+        color=v.color, icon=v.icon,
+        has_credential=v.has_credential,
+        credential_source=v.credential_source,
     )
 
 
@@ -167,6 +178,7 @@ async def create_vendor_endpoint(body: VendorCreateBody) -> Any:
         id=body.id, name=body.name,
         default_endpoint=body.default_endpoint,
         credential_key_name=body.credential_key_name,
+        endpoint_env_name=body.endpoint_env_name,
         color=body.color, icon=body.icon,
     )
     return _to_vendor_out(v)
@@ -179,6 +191,7 @@ async def patch_vendor_endpoint(vendor_id: str, body: VendorPatchBody) -> Any:
         name=body.name,
         default_endpoint=body.default_endpoint,
         credential_key_name=body.credential_key_name,
+        endpoint_env_name=body.endpoint_env_name,
         color=body.color, icon=body.icon,
     )
     if v is None:
@@ -240,7 +253,12 @@ async def list_providers_grouped_endpoint(
         vendors=[
             VendorGroupOut(
                 id=v.id, name=v.name, vendor_kind=v.vendor_kind,
-                has_credential=v.has_credential, color=v.color, icon=v.icon,
+                default_endpoint=v.default_endpoint,
+                credential_key_name=v.credential_key_name,
+                endpoint_env_name=v.endpoint_env_name,
+                has_credential=v.has_credential,
+                credential_source=v.credential_source,
+                color=v.color, icon=v.icon,
                 providers=[_to_provider_out(p) for p in vendor_map[v.id]],
             )
             for v in vendors
@@ -298,11 +316,6 @@ async def activate_provider_endpoint(provider_id: int) -> Any:
     result = await svc.activate_provider(provider_id)
     if result == "not_found":
         raise HTTPException(status_code=404, detail=f"provider {provider_id} not found")
-    if result == "not_enabled":
-        raise HTTPException(
-            status_code=400,
-            detail="provider is disabled; enable it before activate",
-        )
     if result == "no_credential":
         raise HTTPException(
             status_code=400,

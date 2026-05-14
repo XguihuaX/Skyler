@@ -25,15 +25,19 @@ export type ProviderType = 'llm' | 'asr' | 'tts';
 export type VendorKind = 'builtin' | 'custom';
 export type ProviderKind = 'builtin' | 'custom';
 
+export type CredentialSource = 'db' | 'env' | 'none';
+
 export interface AIVendor {
   id: string;
   name: string;
   vendor_kind: VendorKind;
   default_endpoint: string | null;
   credential_key_name: string;
+  endpoint_env_name: string | null;  // bugfix-3.2.6
   color: string | null;
   icon: string | null;
   has_credential: boolean;
+  credential_source: CredentialSource;  // bugfix-3.2.6
 }
 
 export interface AIProvider {
@@ -49,6 +53,8 @@ export interface AIProvider {
   is_active: boolean;
 }
 
+// VendorGroup is grouped response —— bugfix-3.2.6 起 backend 回全套 AIVendor
+// 字段(credentials modal 需要 credential_key_name / endpoint_env_name)。
 export interface VendorGroup extends AIVendor {
   providers: AIProvider[];
 }
@@ -98,6 +104,7 @@ export interface CreateVendorBody {
   name: string;
   default_endpoint?: string | null;
   credential_key_name: string;
+  endpoint_env_name?: string | null;  // bugfix-3.2.6
   color?: string | null;
   icon?: string | null;
 }
@@ -113,6 +120,7 @@ export interface UpdateVendorBody {
   name?: string;
   default_endpoint?: string | null;
   credential_key_name?: string;
+  endpoint_env_name?: string | null;  // bugfix-3.2.6
   color?: string | null;
   icon?: string | null;
 }

@@ -379,12 +379,21 @@ function VendorCard({
           >
             {vendor.vendor_kind}
           </span>
-          {vendor.has_credential ? (
+          {vendor.credential_source === 'db' ? (
             <span
               className="text-[11px] flex items-center gap-1 shrink-0"
               style={{ color: 'var(--color-text-accent)' }}
+              title="凭证存于本地 SQLite (Fernet 加密)"
             >
               <CheckCircle2 size={12} /> 凭证已配置
+            </span>
+          ) : vendor.credential_source === 'env' ? (
+            <span
+              className="text-[11px] flex items-center gap-1 shrink-0"
+              style={{ color: 'var(--color-text-accent)' }}
+              title=".env 文件提供的凭证 — 进程启动时读取"
+            >
+              <CheckCircle2 size={12} /> 凭证已配置 (.env)
             </span>
           ) : (
             <span
@@ -405,8 +414,17 @@ function VendorCard({
               border: '1px solid var(--color-border)',
               color: 'var(--color-text-primary)',
             }}
+            title={
+              vendor.credential_source === 'env'
+                ? '当前用 .env 凭证; 点此改用 DB 凭证 (优先级更高)'
+                : undefined
+            }
           >
-            <KeyRound size={12} /> {vendor.has_credential ? '更新凭证' : '配置凭证'}
+            <KeyRound size={12} /> {
+              vendor.credential_source === 'db' ? '更新凭证'
+                : vendor.credential_source === 'env' ? '改用 DB 凭证'
+                  : '配置凭证'
+            }
           </button>
           {!isBuiltin && (
             <button

@@ -39,13 +39,14 @@ async def _table_exists(conn, table: str) -> bool:
     return len(rows) > 0
 
 
-# 4 个 builtin vendor (拍板)
+# 4 个 builtin vendor (拍板)。bugfix-3.2.6: endpoint_env_name 给老用户 .env 兜底。
 _BUILTIN_VENDORS = [
     {
         "id": "qwen",
         "name": "Qwen",
         "default_endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "credential_key_name": "DASHSCOPE_API_KEY",
+        "endpoint_env_name": "DASHSCOPE_BASE_URL",
         "color": "#615CED",
         "icon": "Sparkles",
     },
@@ -54,6 +55,7 @@ _BUILTIN_VENDORS = [
         "name": "OpenAI",
         "default_endpoint": "https://api.openai.com/v1",
         "credential_key_name": "OPENAI_API_KEY",
+        "endpoint_env_name": "OPENAI_BASE_URL",
         "color": "#10A37F",
         "icon": "Brain",
     },
@@ -62,6 +64,7 @@ _BUILTIN_VENDORS = [
         "name": "Anthropic",
         "default_endpoint": "https://api.anthropic.com",
         "credential_key_name": "ANTHROPIC_API_KEY",
+        "endpoint_env_name": "ANTHROPIC_BASE_URL",
         "color": "#CC785C",
         "icon": "Brain",
     },
@@ -70,6 +73,7 @@ _BUILTIN_VENDORS = [
         "name": "DeepSeek",
         "default_endpoint": "https://api.deepseek.com",
         "credential_key_name": "DEEPSEEK_API_KEY",
+        "endpoint_env_name": "DEEPSEEK_BASE_URL",
         "color": "#4D6BFE",
         "icon": "Brain",
     },
@@ -101,6 +105,9 @@ async def run_migration() -> None:
         await conn.execute(text("PRAGMA foreign_keys = ON"))
 
         # ---- ai_vendors ----
+        # bugfix-3.2.6: ``endpoint_env_name`` 字段加入 CREATE TABLE 让 fresh
+        # 安装就有此列; 旧 DB 由 bugfix_3_2_6_endpoint_env_repair.py 的 ALTER
+        # TABLE 追加该列(幂等)。
         if not await _table_exists(conn, "ai_vendors"):
             await conn.execute(text("""
                 CREATE TABLE ai_vendors (
@@ -110,13 +117,14 @@ async def run_migration() -> None:
                         CHECK(vendor_kind IN ('builtin', 'custom')),
                     default_endpoint TEXT,
                     credential_key_name TEXT NOT NULL,
+                    endpoint_env_name TEXT,
                     color TEXT,
                     icon TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))
-            logger.info("[bugfix-3.1] ai_vendors table created")
+            logger.info("[bugfix-3.1] ai_vendors table created (with endpoint_env_name)")
         else:
             logger.info("[bugfix-3.1] ai_vendors exists, skip")
 
@@ -175,9 +183,10 @@ async def run_migration() -> None:
             result = await conn.execute(text("""
                 INSERT OR IGNORE INTO ai_vendors
                     (id, name, vendor_kind, default_endpoint,
-                     credential_key_name, color, icon)
+                     credential_key_name, endpoint_env_name, color, icon)
                 VALUES (:id, :name, 'builtin', :default_endpoint,
-                        :credential_key_name, :color, :icon)
+                        :credential_key_name, :endpoint_env_name,
+                        :color, :icon)
             """), v)
             seeded_vendors += getattr(result, "rowcount", 0) or 0
         logger.info("[bugfix-3.1] seeded %d builtin vendors (existing kept)",
@@ -251,6 +260,7 @@ async def _auto_activate_if_none(engine_obj) -> None:
             continue
         result = await svc.activate_provider(p.id)
         if result == "ok":
+            # bugfix-3.2.6: activate_provider 已强制 enabled=1, 这里仅 log
             logger.info(
                 "[bugfix-3.2.5] auto-activated provider id=%s name=%r model=%s "
                 "(matched yaml_default=%r)",

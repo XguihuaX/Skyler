@@ -68,6 +68,7 @@ async def _resolve_db_provider_kwargs(
             return None, {}
         kwargs: dict = {}
         credential_source = "none"
+        endpoint_source = "none"
         if active.vendor_id:
             # 拆开 DB / env 两步以便 log 准确 credential_source
             db_cred = await svc.get_vendor_credential(active.vendor_id)
@@ -79,17 +80,18 @@ async def _resolve_db_provider_kwargs(
                 if env_cred:
                     kwargs["api_key"] = env_cred
                     credential_source = "env"
-            # endpoint: provider.endpoint 优先于 vendor.default_endpoint
-            endpoint = active.endpoint
-            if not endpoint:
-                v = await svc.get_vendor(active.vendor_id)
-                if v is not None:
-                    endpoint = v.default_endpoint
+            # bugfix-3.2.6: 3-tier endpoint chain via service helper
+            #   provider.endpoint > env (vendor.endpoint_env_name + aliases) > vendor.default
+            endpoint, endpoint_source = await svc.resolve_vendor_endpoint(
+                active.vendor_id,
+                provider_endpoint_override=active.endpoint,
+            )
             if endpoint:
                 kwargs["api_base"] = endpoint
         logger.info(
-            "[llm.dispatcher] db_active model=%s vendor=%s credential_source=%s",
-            active.model, active.vendor_id, credential_source,
+            "[llm.dispatcher] db_active model=%s vendor=%s "
+            "credential_source=%s endpoint_source=%s",
+            active.model, active.vendor_id, credential_source, endpoint_source,
         )
         return active.model, kwargs
     except Exception:

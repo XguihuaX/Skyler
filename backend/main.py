@@ -90,6 +90,10 @@ from backend.database.migrations.v3_5_chunk14_activity_sessions import (
 from backend.database.migrations.bugfix_3_1_ai_providers import (
     run_migration as migrate_bugfix_3_1_ai_providers,
 )
+# bugfix-3.2.6: endpoint_env_name column + enabled/active 一致性修补
+from backend.database.migrations.bugfix_3_2_6_endpoint_env_repair import (
+    run_migration as migrate_bugfix_3_2_6_endpoint_env_repair,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -251,6 +255,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 一次性 seed。fernet 加密 vendor credentials。LLM dispatcher 优先查 DB
     # active provider,无则兜底回 config.yaml::default_model + .env。幂等。
     await migrate_bugfix_3_1_ai_providers()
+
+    # ── 1b23. Bugfix-3.2.6: endpoint_env_name + enabled/active 一致性修补 ──
+    # ALTER TABLE ai_vendors ADD COLUMN endpoint_env_name(给 4 个 builtin
+    # 回填 DASHSCOPE_BASE_URL / OPENAI_BASE_URL 等)+ 一次性扫表修补 is_active=1
+    # AND enabled=0 自相矛盾的 DB state。幂等。必须在 3.1 后跑。
+    await migrate_bugfix_3_2_6_endpoint_env_repair()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
