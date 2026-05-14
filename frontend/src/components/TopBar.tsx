@@ -1,7 +1,8 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ChevronsUp, Minus, X } from 'lucide-react';
+import { ChevronsUp, Maximize2, Minimize2, Minus, X } from 'lucide-react';
 import { useAppStore } from '../store';
 import { applyModeWindowProps } from '../lib/window';
+import { useFullscreen } from '../hooks/useFullscreen';
 import CharacterSwitcher from './CharacterSwitcher';
 
 export default function TopBar() {
@@ -9,6 +10,9 @@ export default function TopBar() {
 
   // bugfix-2.6: Gallery 入口已挪到 Sidebar(🎴 角色图鉴),TopBar 不再有
   // GalleryThumbnails 按钮 + setGalleryOpen 订阅。
+  // bugfix-extra: 加全屏 / 退出全屏切换按钮(Maximize2 / Minimize2),
+  // 状态自动跟随 Tauri window onResized + 系统 fullscreenchange 事件。
+  const { isFullscreen, toggle: toggleFullscreen } = useFullscreen();
 
   const handleCollapse = async () => {
     await applyModeWindowProps('widget');
@@ -67,6 +71,15 @@ export default function TopBar() {
           title="最小化"
         >
           <Minus size={16} />
+        </button>
+        <button
+          className="w-7 h-7 rounded-md flex items-center justify-center transition hover:bg-[color-mix(in_srgb,var(--color-bg-elevated)_70%,transparent)]"
+          style={{ color: 'var(--color-text-secondary)' }}
+          onClick={() => void toggleFullscreen()}
+          title={isFullscreen ? '退出全屏' : '进入全屏'}
+          aria-label={isFullscreen ? '退出全屏' : '进入全屏'}
+        >
+          {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
         </button>
         <button
           className="w-7 h-7 rounded-md flex items-center justify-center transition hover:bg-rose-500/80 hover:text-white"
