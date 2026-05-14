@@ -337,13 +337,65 @@ _SENT_END = frozenset("。！？!?")
 _VALID_MEMORY_TYPES = {"fact", "instruction", "emotion", "activity", "daily"}
 
 
+#: bugfix-1.1: meta tag paired form。``<state_update>X</state_update>`` 容错
+#: 形态、``<emotion>happy</emotion>`` / ``<thinking>...</thinking>`` 等内
+#: 部含句末标点时整段跳过, 等 ``</tag>`` 出现才考虑切句。普通 HTML
+#: ``<a>`` ``<div>`` 不在此列 —— 仅跳开 opening tag 即可。
+_BOUNDARY_PAIRED_TAGS = frozenset({
+    "thinking", "emotion", "state_update", "motion",
+    "tool_call", "function_calls", "invoke",
+})
+
+_BOUNDARY_TAG_NAME_RE = re.compile(r"<([a-zA-Z_][a-zA-Z_0-9]*)\b")
+
+
 def _find_boundary(text: str) -> int:
-    """Return the index of the first sentence-ending character, or -1."""
-    for i, ch in enumerate(text):
+    """Return the index of the first sentence-ending character, or -1.
+
+    bugfix-1.1: 忽略 ``<tagname...>`` 标签内的句末标点。LLM 偶发输出
+    ``<state_update thought="...粗心了, 赶紧补救。" />`` 这种 thought 属性
+    含全角 ``。`` 的自闭合标签。旧实现按字符扫到 ``。`` 就切句 —— 把
+    ``<state_update>`` 在中间劈成两半, 前半 ``<state_update mood="..."
+    thought="...赶紧补救。`` 没有 ``/>`` 闭合, 下游 strip_state_update /
+    SUSPICIOUS_TAG_RE 都要求闭合, 全漏 → 字面文本进 FE text_chunk + TTS
+    念出"小于号 state update mood..."。
+
+    修法：state machine 跳过 ``<...>`` 范围。
+      * ``<`` 后跟字母 / ``_`` 才进 tag 检测 (``<3``/``2 < 3`` 不触发)
+      * 自闭合 (``/>`` 结尾) 或非 paired-tag → 仅跳过 opening tag 段
+      * paired-tag (``thinking`` / ``state_update`` / 等 meta tag) → 跳到
+        对应 ``</tag>`` 之后
+      * 任何 open 找不到 ``>`` 或 ``</tag>`` → 返回 -1 让 sentence stream
+        等下个 chunk 把闭合带进来 (与 ``has_partial_open_tag`` 同语义)
+    """
+    n = len(text)
+    i = 0
+    while i < n:
+        ch = text[i]
+        if ch == "<" and i + 1 < n and (text[i + 1].isalpha() or text[i + 1] == "_"):
+            m = _BOUNDARY_TAG_NAME_RE.match(text, i)
+            if m is None:
+                i += 1
+                continue
+            tag_name = m.group(1).lower()
+            end_open = text.find(">", m.end())
+            if end_open == -1:
+                return -1  # unclosed opening — wait for next chunk
+            is_self_close = end_open > 0 and text[end_open - 1] == "/"
+            if is_self_close or tag_name not in _BOUNDARY_PAIRED_TAGS:
+                i = end_open + 1
+                continue
+            close_pat = f"</{tag_name}>"
+            end_close = text.lower().find(close_pat, end_open + 1)
+            if end_close == -1:
+                return -1  # unclosed paired — wait
+            i = end_close + len(close_pat)
+            continue
         if ch in _SENT_END:
             return i
-        if ch == "." and i + 1 < len(text) and text[i + 1] in (" ", "\n"):
+        if ch == "." and i + 1 < n and text[i + 1] in (" ", "\n"):
             return i
+        i += 1
     return -1
 
 
