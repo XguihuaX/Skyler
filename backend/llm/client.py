@@ -21,13 +21,57 @@ logger = logging.getLogger(__name__)
 
 
 def _dashscope_kwargs() -> dict:
-    """Return api_base/api_key kwargs when DashScope is configured."""
+    """Return api_base/api_key kwargs when DashScope is configured.
+
+    bugfix-3.1: 仅作为 fallback when DB-driven AI Provider 路径未命中。
+    DB 路径优先, 这里只为兼容旧 yaml default_model。
+    """
     if settings.dashscope_base_url and settings.dashscope_api_key:
         return {
             "api_base": settings.dashscope_base_url,
             "api_key":  settings.dashscope_api_key,
         }
     return {}
+
+
+async def _resolve_db_provider_kwargs(
+    model_override: Optional[str],
+) -> tuple[Optional[str], dict]:
+    """Bugfix-3.1: 从 DB 取 LLM active provider + vendor credential。
+
+    Returns:
+        ``(resolved_model, kwargs_dict)``。
+        - 命中 DB active provider → ``(provider.model, {api_base, api_key})``
+        - DB 无 active 或 caller 显式 model_override → ``(None, {})`` 表示
+          让 caller 走老路径(yaml default_model + dashscope env)
+
+    永不抛: DB 异常 / vendor 凭证缺失 → 静默返回 (None, {}), caller 兜底。
+    """
+    # caller 显式传 model → 尊重不动, 让老路径处理(不要被 DB active 抢)
+    if model_override:
+        return None, {}
+    try:
+        from backend.database import ai_providers as svc
+        active = await svc.get_active_provider("llm")
+        if active is None or not active.enabled:
+            return None, {}
+        kwargs: dict = {}
+        if active.vendor_id:
+            cred = await svc.resolve_vendor_credential(active.vendor_id)
+            if cred:
+                kwargs["api_key"] = cred
+            # endpoint: provider.endpoint 优先于 vendor.default_endpoint
+            endpoint = active.endpoint
+            if not endpoint:
+                v = await svc.get_vendor(active.vendor_id)
+                if v is not None:
+                    endpoint = v.default_endpoint
+            if endpoint:
+                kwargs["api_base"] = endpoint
+        return active.model, kwargs
+    except Exception:
+        logger.exception("[bugfix-3.1] DB provider resolve failed, falling back to yaml")
+        return None, {}
 
 
 async def call_llm(
@@ -60,8 +104,15 @@ async def call_llm(
         LLMAuthError, LLMRateLimitError, LLMContextError, LLMServiceError,
         LLMError — all subclass ``LLMError`` for easy catch-all handling.
     """
-    resolved_model = model or get_default_model()
-    merged = {**_dashscope_kwargs(), **kwargs}
+    # bugfix-3.1: 优先 DB AI Provider 路径, 失败兜底回 yaml + dashscope env。
+    db_model, db_kwargs = await _resolve_db_provider_kwargs(model)
+    if db_model is not None:
+        resolved_model = db_model
+        # caller 显式 kwargs > DB > nothing
+        merged = {**db_kwargs, **kwargs}
+    else:
+        resolved_model = model or get_default_model()
+        merged = {**_dashscope_kwargs(), **kwargs}
 
     if enable_search:
         model_lower = resolved_model.lower()

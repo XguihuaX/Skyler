@@ -86,6 +86,10 @@ from backend.database.migrations.v3_5_chunk10_memory_structured import (
 from backend.database.migrations.v3_5_chunk14_activity_sessions import (
     run_migration as migrate_v3_5_chunk14_activity_sessions,
 )
+# bugfix-3.1: AI Providers backend foundation
+from backend.database.migrations.bugfix_3_1_ai_providers import (
+    run_migration as migrate_bugfix_3_1_ai_providers,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -241,6 +245,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # backend/services/activity_timeline.py 的 poll-listener 写入。
     # 跑前自动备份 momoos.db → .backup-before-chunk14（已存在则跳过）。
     await migrate_v3_5_chunk14_activity_sessions()
+
+    # ── 1b22. Bugfix-3.1: ai_vendors + ai_vendor_credentials + ai_providers ─
+    # 4 个 builtin vendor (qwen/openai/anthropic/deepseek) + 7 个 LLM provider
+    # 一次性 seed。fernet 加密 vendor credentials。LLM dispatcher 优先查 DB
+    # active provider,无则兜底回 config.yaml::default_model + .env。幂等。
+    await migrate_bugfix_3_1_ai_providers()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
@@ -726,6 +736,9 @@ app.include_router(briefing_router,      prefix="/api", tags=["briefing"])
 app.include_router(character_state_router, prefix="/api", tags=["character_state"])
 app.include_router(activity_router,      prefix="/api", tags=["activity"])
 app.include_router(mcp_router,           prefix="/api", tags=["mcp"])
+# bugfix-3.1: AI Providers REST API (vendors + providers + credentials + activate)
+from backend.routes.ai_providers_api import router as ai_providers_router
+app.include_router(ai_providers_router,  prefix="/api", tags=["ai-providers"])
 app.include_router(ws_router,                            tags=["websocket"])
 
 # v3-G chunk 1.5 — MCP streamable HTTP endpoint。挂在根路径下（不加 /api
