@@ -864,6 +864,70 @@ _TOOL_HANDLERS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# 修法 B(audit_input_tokens_bloat.md #4)── tool result 字符截断
+#
+# 单 turn 多 round tool calling 下,prior round 的 tool result 会以
+# ``{"role":"tool","content":json.dumps(result)}`` 形式附加到 messages,
+# 下一 round LLM 看到全部历史 → 单次最贵 68k tokens 调用根因之一。
+#
+# 策略:
+#   * 4000 chars 上限(中文 ~2k tokens / 英文 ~1k tokens),保留**尾部**
+#     (大多数 tool 把结论 / summary 放尾部:eg list_memories 返回 newest-first
+#      已逆序,daily_recommend 把 top picks 放后)
+#   * 加 "[...truncated, N chars omitted from head]" 显式提示 LLM 数据被截断
+#   * tool 真值不动,仅截 prompt 注入字符串
+#   * DEBUG log 帮 dogfood 定位经常超长的 tool(后期可针对性优化 tool 返回)
+# ---------------------------------------------------------------------------
+
+#: 单条 tool result 进 messages 时的字符上限。4000 chars 实测覆盖:
+#:   - apple_calendar.today_events:~20 events × ~150 chars/event ≈ 3000 chars
+#:   - list_memories(top 30 ≈ 2000 chars)
+#:   - bilibili.get_subtitles 短视频字幕(>30 min 视频会超 — 接受截断)
+#:   - netease.daily_recommend(30 首歌 × ~100 chars/song ≈ 3000 chars)
+#: 4000 是经验值,可按 dogfood 反馈调整(尾部保留 + 显式 marker 让 LLM 知情)。
+TOOL_RESULT_MAX_CHARS: int = 4000
+
+
+def truncate_tool_result(
+    result: Any,
+    *,
+    max_chars: int = TOOL_RESULT_MAX_CHARS,
+    tool_name: str = "",
+) -> str:
+    """Serialize ``result`` to JSON string and truncate head if over ``max_chars``。
+
+    Truncation 策略:**保留尾部**(大多数 tool 把 conclusion / summary 放尾,
+    head 是 metadata / less critical info)。截断时插入 marker 让 LLM 知道
+    数据被裁过,可避免 LLM 当全量数据用。
+
+    Args:
+        result: tool 返回值(dict / list / str / 其他 json-serializable)
+        max_chars: 上限字符数(默认 ``TOOL_RESULT_MAX_CHARS=4000``)
+        tool_name: 仅 log 用,标识哪个 tool 触发截断(便于 dogfood 调优)
+
+    Returns:
+        str 形式,可直接作 ``messages.append({...,"content": ...})`` 的 content。
+        若已是 ``str`` 类型则**不**再 json.dumps(避免 ``"raw string"`` 多一层引号)。
+    """
+    result_str = (
+        result if isinstance(result, str)
+        else json.dumps(result, ensure_ascii=False)
+    )
+    if len(result_str) <= max_chars:
+        return result_str
+    omitted = len(result_str) - max_chars
+    truncated = (
+        f"[...truncated, {omitted} chars omitted from head]\n"
+        + result_str[-max_chars:]
+    )
+    logger.debug(
+        "[tool_truncate] %s: %d -> %d chars (-%d)",
+        tool_name or "<unnamed>", len(result_str), max_chars, omitted,
+    )
+    return truncated
+
+
 async def _execute_tool(
     user_id: str,
     name: str,
@@ -1656,10 +1720,11 @@ class ChatAgent(IAgent):
                         "tool_name": name,
                         "duration_ms": duration_ms,
                     }
+                    # 修法 B:tool result 截断防 multi-round input 膨胀
                     messages.append({
                         "role": "tool",
                         "tool_call_id": v["id"] or f"call_{i}",
-                        "content": json.dumps(result, ensure_ascii=False),
+                        "content": truncate_tool_result(result, tool_name=name),
                     })
                 # Re-call LLM to let it produce the final response
                 continue
