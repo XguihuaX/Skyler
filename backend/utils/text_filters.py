@@ -305,26 +305,30 @@ def extract_tts_text(raw_text: str, tts_language: str) -> str:
     Returns:
         送 TTS 的字符串。
           * zh / default:走 ``strip_all_for_tts``(原行为)
-          * ja:取第一个 ``<ja>...</ja>`` 内容(剥 meta tag 后);无 tag → fallback
+          * ja:取**所有** ``<ja>...</ja>`` 内容拼接(剥 meta tag 后);无 tag → fallback
             ``strip_all_for_tts(raw_text)`` + log warning
-          * en:同上,取 ``<en>...</en>``
+          * en:同上,取所有 ``<en>...</en>``
+
+    Bugfix-segment2-3:从 ``.search`` 改成 ``.findall`` —— ``merge_short_sentences``
+    会把多个短意群 sentence 合并成一个 buffer,该 buffer 可含 2+ ``<ja>`` tag。
+    旧实现只取第一个 tag,会丢掉后续意群的日语翻译;新实现 findall + 顺序拼接。
     """
     if not raw_text:
         return raw_text or ""
     lang = (tts_language or "zh").lower()
     if lang == "ja":
-        m = _JA_TAG_RE.search(raw_text)
-        if m:
-            return strip_all_for_tts(m.group(1)).strip()
+        matches = _JA_TAG_RE.findall(raw_text)
+        if matches:
+            return "".join(strip_all_for_tts(m).strip() for m in matches if m)
         logger.warning(
             "[tts] tts_language=ja but no <ja> tag found; "
             "falling back to raw sentence(LLM 漏标 ja)"
         )
         return strip_all_for_tts(raw_text)
     if lang == "en":
-        m = _EN_TAG_RE.search(raw_text)
-        if m:
-            return strip_all_for_tts(m.group(1)).strip()
+        matches = _EN_TAG_RE.findall(raw_text)
+        if matches:
+            return "".join(strip_all_for_tts(m).strip() for m in matches if m)
         logger.warning(
             "[tts] tts_language=en but no <en> tag found; "
             "falling back to raw sentence(LLM 漏标 en)"

@@ -408,7 +408,13 @@ async def run_trigger(
     audio_total_bytes = 0
 
     try:
-        async for sentence in chat_agent.stream(chat_msg):
+        # Bugfix-segment2-3:ja/en 模式 wrap short-sentence merge,与 ws.py
+        # 主路径同语义。zh 模式 pass-through 保留原逐句流式。
+        _agent_stream = chat_agent.stream(chat_msg)
+        if tts_language in ("ja", "en"):
+            from backend.agents.sentence_merge import merge_short_sentences
+            _agent_stream = merge_short_sentences(_agent_stream)
+        async for sentence in _agent_stream:
             # 第一句锁 emotion + 推送 emotion 事件（与 ws.py 主路径同结构）
             if not emotion_resolved:
                 parsed_emotion, sentence = _parse_emotion(sentence)
@@ -780,7 +786,12 @@ async def run_wake_call_trigger(
     emotion_resolved = False
 
     try:
-        async for sentence in chat_agent.stream(chat_msg):
+        # Bugfix-segment2-3:wake_call 路径同 run_trigger,ja/en wrap short-merge。
+        _agent_stream = chat_agent.stream(chat_msg)
+        if tts_language in ("ja", "en"):
+            from backend.agents.sentence_merge import merge_short_sentences
+            _agent_stream = merge_short_sentences(_agent_stream)
+        async for sentence in _agent_stream:
             if not emotion_resolved:
                 parsed_emotion, sentence = _parse_emotion(sentence)
                 turn_emotion = parsed_emotion

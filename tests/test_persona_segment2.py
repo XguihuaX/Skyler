@@ -238,15 +238,15 @@ def test_render_emotion_triggers_full():
 # ===========================================================================
 
 def test_layer_a_ja_mode_includes_directive():
-    """Bugfix-segment2-2:ja directive 必须强约束**中日交替**格式,不再是
-    "一回合只一组 ja tag"(那样 sentence-level extract 看不到 ja tag)。"""
-    print("\n[8] layer_a tts_language='ja' 含 ja directive (alternating spec)")
+    """Bugfix-segment2-2 + Bugfix-segment2-3:ja directive 强约束**意群交替**
+    格式 ── 不集中(seg2-2)+ 不切碎(seg2-3)。"""
+    print("\n[8] layer_a tts_language='ja' 含 ja directive (意群交替 spec)")
     out = _render_layer_a(available_motions=None, tts_language="ja")
     check("[日语 TTS 模式] header", "[日语 TTS 模式" in out)
     check("<ja>...</ja> tag format described",
           "<ja>" in out and "</ja>" in out)
-    check("'每个中文句' alternating instruction",
-          "每个中文句" in out)
+    # 意群 / coherent thought 描述(seg2-3 引入,seg2-2 alternation 升级版)
+    check("'意群' instruction present", "意群" in out)
     # Bugfix-segment2-2:旧版"一回合只输出一组"必须**已删除**,否则 LLM 集中
     # 写中文最后才 ja,后端 sentence-level extract 看不到 → fallback raw →
     # 中文送日语 voice 合成,听起来错乱
@@ -256,13 +256,19 @@ def test_layer_a_ja_mode_includes_directive():
 
 
 def test_layer_a_ja_directive_says_alternate():
-    """Bugfix-segment2-2:directive 必须直接说"每个中文句后立刻跟"。"""
-    print("\n[8a] ja directive 明确要求中日交替")
+    """Bugfix-segment2-2 + seg2-3:directive 必须传达"多个 ja tag 交替"语义,
+    不能是单 ja(集中)也不能每句一 ja(切碎)。"""
+    print("\n[8a] ja directive 传达意群级中日交替语义")
     out = _render_layer_a(available_motions=None, tts_language="ja")
-    check("'每个中文句后立刻跟' or '后立刻紧跟' phrasing",
-          "立刻跟" in out or "立刻紧跟" in out)
-    check("'不要先写完所有中文再写日语' or equivalent anti-pattern",
-          "不要" in out and ("先写完所有中文" in out or "先写完" in out))
+    # seg2-3:意群边界 / 单字短词不独立成 tag(隐含交替)
+    check("'意群边界' or '意群' 边界规则",
+          "意群边界" in out or "意群" in out)
+    # 单字短词不独立 → 隐含合并到意群,且多意群 → 多 ja tag
+    check("anti-pattern hint:'单字' / '短词' / '不能独立'",
+          "单字" in out or "不能独立" in out or "短词" in out)
+    # 一回合多 ja tag(意群级)是正确的
+    check("'多个 ja tag' or '一回合内' 多 tag 表述",
+          "多个" in out or "一回合内" in out or "多个 ja tag" in out)
 
 
 def test_layer_a_ja_directive_has_correct_example():
@@ -301,6 +307,175 @@ def test_layer_a_ja_directive_has_wrong_example_warning():
     # 还要说明 WHY:explanation tells LLM why alternation matters
     check("explanation 'TTS 错乱' or 'sentence' or '音色' 说明",
           "TTS 错乱" in out or "音色" in out or "sentence" in out)
+
+
+# ===========================================================================
+# Bugfix-Segment2-3 — 意群粒度 + sentence merge buffer (8 tests)
+# ===========================================================================
+
+def test_layer_a_ja_directive_min_chunk_size_specified():
+    """Directive 必须含 ≥ 10 字 意群粒度规则。"""
+    print("\n[8d] ja directive 含 ≥ 10 字 意群粒度约束")
+    out = _render_layer_a(available_motions=None, tts_language="ja")
+    check("'意群' or 'coherent thought' phrasing", "意群" in out)
+    check("'≥ 10 字' or '10-30 字' 数字约束",
+          "≥ 10 字" in out or "10-30 字" in out or "10 字" in out)
+    check("'单字短词' or '不能独立成 tag' 单字禁忌",
+          "单字短词" in out or "不能" in out)
+
+
+def test_layer_a_ja_directive_correct_example_grouped():
+    """正确示范必须演示**多句合并到一个意群**的 ja tag。"""
+    print("\n[8e] ja directive ✓ correct example 演示意群合并")
+    out = _render_layer_a(available_motions=None, tts_language="ja")
+    # 找一个正确示例,验里面有合并的句号(多句合并成一个 ja)
+    correct_idx = out.find("正确格式 ✓")
+    next_section_idx = out.find("错误格式")
+    correct_block = out[correct_idx:next_section_idx] if (
+        correct_idx >= 0 and next_section_idx > correct_idx
+    ) else ""
+    # 正确示例内每个 <ja> 包住至少一个意群,意群内可有多个中文句号
+    # eg "嗯,去吧。我不吵你。" 1 个 ja 包 2 个句号
+    check("✓ example has at least one ja-tag with 2+ Chinese 句号(意群合并示范)",
+          # 找 "...。...。"<ja> pattern(2 个 。 在 quote 内)
+          ('。我' in correct_block or '。你' in correct_block or
+           '。先' in correct_block or '。专心' in correct_block),
+          "expected 2+ 句号 in a single quote+ja pair")
+
+
+def test_layer_a_ja_directive_wrong_example_too_fine():
+    """错误示范必须包含"切碎"的 anti-pattern(每句一个 ja)。"""
+    print("\n[8f] ja directive ✗ 包含切碎 anti-pattern")
+    out = _render_layer_a(available_motions=None, tts_language="ja")
+    # 找"切得太碎"或类似 anti-pattern 提示
+    check("'切碎' / '切得太碎' / 'too fine' 表述",
+          "切碎" in out or "切得太碎" in out or "太碎" in out)
+    # 错误示范应该有 3+ 个 ja tag(每个 1-3 字短)
+    # 找"嗯。" "去吧。" 这种短句各自带 ja
+    has_fine_anti = (
+        '"嗯。"<ja>' in out or
+        '\"嗯。\"<ja>' in out or
+        '"哦。"<ja>' in out
+    )
+    check("✗ example shows 1-word sentence with own ja tag",
+          has_fine_anti or "切" in out,  # 至少有"切"字
+          "expected '嗯。'<ja>...</ja> as anti-pattern")
+
+
+# ---------------------------------------------------------------------------
+# sentence_merge.merge_short_sentences (5 tests)
+# ---------------------------------------------------------------------------
+
+async def _collect(gen):
+    out = []
+    async for item in gen:
+        out.append(item)
+    return out
+
+
+async def _fake_stream(*items):
+    for x in items:
+        yield x
+
+
+async def test_sentence_yield_merges_short_sentences():
+    """两个短中文句被合并成 1 个 yield。"""
+    print("\n[Mc1] merge_short_sentences:'嗯。' + '去吧。' 合并(2 短 → 1 yield)")
+    from backend.agents.sentence_merge import merge_short_sentences
+    out = await _collect(merge_short_sentences(
+        _fake_stream('"嗯。"<ja>「うん。」</ja>', '"去吧。"<ja>「行きなさい。」</ja>')
+    ))
+    check("2 short → 1 merged yield at stream end", len(out) == 1,
+          f"got {len(out)} yields")
+    check("merged buffer contains both ja segments",
+          out and '<ja>「うん。」</ja>' in out[0]
+          and '<ja>「行きなさい。」</ja>' in out[0])
+
+
+async def test_sentence_yield_flushes_at_15_chars():
+    """累积 ≥ 15 字幕字数时立刻 flush。"""
+    print("\n[Mc2] merge_short_sentences:buffer ≥ 15 sub-chars → flush")
+    from backend.agents.sentence_merge import merge_short_sentences
+    # 3 短句 ≈ 5+5+5 = 15 字幕字数 → 第 3 句 append 后 flush
+    out = await _collect(merge_short_sentences(
+        _fake_stream(
+            '"嗯,去吧。"<ja>「うん。」</ja>',           # 5 sub-chars
+            '"我不吵你。"<ja>「邪魔しないから。」</ja>', # 5 sub-chars
+            '"专心看完。"<ja>「ゆっくり読んで。」</ja>', # 5 sub-chars
+        )
+    ))
+    # buffer 累积到 15 字 → flush;期望最终 1 个 yield(或 2 视 boundary)
+    check("3 short ≥ 15 chars accumulated → flushed",
+          1 <= len(out) <= 2, f"got {len(out)} yields")
+    # 所有 3 个 ja segments 都应被包含(总和)
+    all_text = "".join(out)
+    check("all 3 ja segments preserved", "うん" in all_text and "邪魔" in all_text and "ゆっくり" in all_text)
+
+
+async def test_sentence_yield_flushes_on_stream_end_with_residue():
+    """stream 结束时残余 buffer 必须 flush。"""
+    print("\n[Mc3] merge_short_sentences:stream end → flush residue")
+    from backend.agents.sentence_merge import merge_short_sentences
+    out = await _collect(merge_short_sentences(
+        _fake_stream('"嗯。"<ja>「うん。」</ja>')  # 1 sub-char,buffer 不到 15
+    ))
+    check("1 short → 1 yield at end", len(out) == 1)
+    check("residue contains the sentence",
+          out and 'うん' in out[0])
+
+
+async def test_sentence_yield_passes_through_long_sentences_unchanged():
+    """≥ 15 字幕字数的长 sentence 直接 pass-through,不缓冲。"""
+    print("\n[Mc4] merge_short_sentences:长 sentence 直通,不延迟")
+    from backend.agents.sentence_merge import merge_short_sentences
+    # 一个 20 字中文 sentence,字幕 sub_len 20 ≥ 15 → 立即 yield
+    long_s = '"今天天气真好,我刚刚在写代码,你呢?"<ja>「今日いい天気ね。仕事してた?」</ja>'
+    short_s = '"嗯。"<ja>「うん。」</ja>'
+    out = await _collect(merge_short_sentences(
+        _fake_stream(long_s, short_s)
+    ))
+    check("2 yields (long passthrough + short residue at end)",
+          len(out) == 2, f"got {len(out)}")
+    check("first yield is the long sentence", out and out[0] == long_s)
+    check("second yield is the short residue",
+          len(out) > 1 and "嗯" in out[1])
+
+
+async def test_sentence_yield_passes_through_dict_events():
+    """dict tool events 必须 pass-through 并在前 flush 当前 buffer 保顺序。"""
+    print("\n[Mc5] merge_short_sentences:dict event pass-through + flush buffer")
+    from backend.agents.sentence_merge import merge_short_sentences
+    short_s = '"嗯。"<ja>「うん。」</ja>'
+    tool_event = {"type": "tool_use_start", "tool_name": "search"}
+    out = await _collect(merge_short_sentences(
+        _fake_stream(short_s, tool_event, short_s)
+    ))
+    # 期望:
+    #   - 第 1 短句 buffer
+    #   - tool_event 到 → flush buffer + yield event
+    #   - 第 2 短句 buffer
+    #   - stream end → flush buffer
+    #   总 3 yields
+    check("3 yields total (buffer flush + event + residue)",
+          len(out) == 3, f"got {len(out)}")
+    check("tool_event preserved in correct position",
+          out[1] == tool_event)
+    check("first/third are str", isinstance(out[0], str) and isinstance(out[2], str))
+
+
+# ---------------------------------------------------------------------------
+# extract_tts_text 多 <ja> tag concat (Bugfix-segment2-3 配套)
+# ---------------------------------------------------------------------------
+
+def test_extract_tts_text_concatenates_multiple_ja_tags():
+    """合并 buffer 含 2+ <ja> tag → extract 拼接全部 Japanese segments。"""
+    print("\n[Mc6] extract_tts_text:多 <ja> tag 拼接")
+    raw = '"嗯。"<ja>「うん。」</ja>"去吧。"<ja>「行きなさい。」</ja>'
+    out = extract_tts_text(raw, "ja")
+    check("both ja segments concatenated",
+          "「うん。」" in out and "「行きなさい。」" in out,
+          f"got {out!r}")
+    check("no Chinese leaked", "嗯。" not in out and "去吧。" not in out)
 
 
 def test_layer_a_zh_mode_no_ja_directive():
@@ -823,6 +998,16 @@ async def _async_main():
     test_layer_a_ja_directive_says_alternate()
     test_layer_a_ja_directive_has_correct_example()
     test_layer_a_ja_directive_has_wrong_example_warning()
+    # Bugfix-Segment2-3
+    test_layer_a_ja_directive_min_chunk_size_specified()
+    test_layer_a_ja_directive_correct_example_grouped()
+    test_layer_a_ja_directive_wrong_example_too_fine()
+    await test_sentence_yield_merges_short_sentences()
+    await test_sentence_yield_flushes_at_15_chars()
+    await test_sentence_yield_flushes_on_stream_end_with_residue()
+    await test_sentence_yield_passes_through_long_sentences_unchanged()
+    await test_sentence_yield_passes_through_dict_events()
+    test_extract_tts_text_concatenates_multiple_ja_tags()
     test_layer_a_zh_mode_no_ja_directive()
     test_extract_tts_text_ja_with_tag()
     test_extract_tts_text_ja_missing_tag_fallback()

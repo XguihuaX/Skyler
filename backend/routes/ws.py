@@ -921,7 +921,14 @@ async def _handle_message(
                     _tts_audio_consumer(audio_queue, _send_audio)
                 )
 
-                async for sentence in _chat_agent.stream(chat_msg):
+                # Bugfix-segment2-3:ja/en 模式 wrap merge_short_sentences,
+                # 把 <10 字短意群 sentence 合并到下一句一起 yield。zh 模式 不
+                # 包,保留原逐句流式体验。
+                _agent_stream = _chat_agent.stream(chat_msg)
+                if tts_language in ("ja", "en"):
+                    from backend.agents.sentence_merge import merge_short_sentences
+                    _agent_stream = merge_short_sentences(_agent_stream)
+                async for sentence in _agent_stream:
                     # UX-004: chat.py 现在 yield Union[str, dict] —— dict 是 typed
                     # WS event(tool_use_start / tool_use_done),直接透传不经文本
                     # 处理(emotion/thinking parse + TTS 等都不适用)。
