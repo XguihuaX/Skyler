@@ -19,6 +19,7 @@ import {
   PatchPersonaBody,
   VoiceSample,
   createPersona,
+  getPersona,
   patchPersona,
 } from '../lib/personas';
 
@@ -107,47 +108,68 @@ const EMPTY_FORM: FormState = {
   rel_initial_intimacy: 50,
 };
 
-// CSV 工具:逗号 / 中文逗号 / 换行均算分隔
-const csvToArr = (s: string): string[] =>
+// CSV 工具:逗号 / 中文逗号 / 换行均算分隔。
+// **Exported** for bugfix-segment2-1 transform smoke test。
+export const csvToArr = (s: string): string[] =>
   s.split(/[,，\n]/).map((x) => x.trim()).filter(Boolean);
 
-const arrToCsv = (a: string[] | undefined): string =>
+export const arrToCsv = (a: string[] | undefined | null): string =>
   (a ?? []).join(', ');
 
-function _existingToForm(p: CharacterPersonaRow): FormState {
+/**
+ * Convert API CharacterPersonaRow → modal-internal FormState。
+ *
+ * Bugfix-segment2-1:加防御性 ``?? {}`` 兜底所有 Tier-1 嵌套 dict 字段。
+ * 旧版直接 ``p.identity.name`` 在 ``p.identity`` 是 ``null``(server 异常
+ * 数据 / 字段半坏)时抛 TypeError → React 整段 render 中断 → 部分字段空白
+ * (用户实测症状)。本版用 ``identity = p.identity ?? {}`` 让每个字段独立
+ * 读 default,不会因前面字段缺失带塌后面。
+ *
+ * **Exported** for backend test 验真实 API JSON 转后字段非空。
+ */
+export function _existingToForm(p: CharacterPersonaRow): FormState {
+  const identity = p.identity ?? ({} as Partial<typeof p.identity>);
+  const personality_core = p.personality_core
+    ?? ({} as Partial<typeof p.personality_core>);
+  const speech_style = p.speech_style
+    ?? ({} as Partial<typeof p.speech_style>);
+  const forbidden_phrases = p.forbidden_phrases
+    ?? ({} as Partial<typeof p.forbidden_phrases>);
+  const relationship_to_user = p.relationship_to_user
+    ?? ({} as Partial<typeof p.relationship_to_user>);
   return {
     variant_name: p.variant_name,
     description: p.description ?? '',
     style_preset: p.style_preset ?? 'anime_classic',
-    identity_name: p.identity.name ?? '',
-    identity_aliases_csv: arrToCsv(p.identity.aliases),
-    identity_self_reference: p.identity.self_reference ?? '我',
-    identity_age: p.identity.age != null ? String(p.identity.age) : '',
-    identity_occupation: p.identity.occupation ?? '',
-    identity_origin: p.identity.origin ?? '',
-    identity_self_intro_0_69: p.identity.self_intro?.['0-69'] ?? '',
-    identity_self_intro_70_100: p.identity.self_intro?.['70-100'] ?? '',
-    pc_core_traits_csv: arrToCsv(p.personality_core.core_traits),
-    pc_contrasts: (p.personality_core.contrasts ?? []).join('\n'),
-    pc_energy_level: (p.personality_core.energy_level ?? 'medium') as
+    identity_name: identity.name ?? '',
+    identity_aliases_csv: arrToCsv(identity.aliases),
+    identity_self_reference: identity.self_reference ?? '我',
+    identity_age: identity.age != null ? String(identity.age) : '',
+    identity_occupation: identity.occupation ?? '',
+    identity_origin: identity.origin ?? '',
+    identity_self_intro_0_69: identity.self_intro?.['0-69'] ?? '',
+    identity_self_intro_70_100: identity.self_intro?.['70-100'] ?? '',
+    pc_core_traits_csv: arrToCsv(personality_core.core_traits),
+    pc_contrasts: (personality_core.contrasts ?? []).join('\n'),
+    pc_energy_level: (personality_core.energy_level ?? 'medium') as
       'low' | 'medium' | 'high',
-    pc_default_emotion: p.personality_core.default_emotion ?? 'calm',
-    pc_anger_style: p.personality_core.anger_style ?? '',
-    ss_vocabulary: p.speech_style.vocabulary ?? 'neutral',
-    ss_sentence_rhythm: p.speech_style.sentence_rhythm ?? 'medium',
-    ss_user_address: p.speech_style.user_address ?? '你',
-    ss_emoji_habit: p.speech_style.emoji_habit ?? 'rare',
-    ss_punctuation_quirk: p.speech_style.punctuation_quirk ?? 'standard',
-    ss_cliche_tolerance: p.speech_style.cliche_tolerance ?? 0.5,
+    pc_default_emotion: personality_core.default_emotion ?? 'calm',
+    pc_anger_style: personality_core.anger_style ?? '',
+    ss_vocabulary: speech_style.vocabulary ?? 'neutral',
+    ss_sentence_rhythm: speech_style.sentence_rhythm ?? 'medium',
+    ss_user_address: speech_style.user_address ?? '你',
+    ss_emoji_habit: speech_style.emoji_habit ?? 'rare',
+    ss_punctuation_quirk: speech_style.punctuation_quirk ?? 'standard',
+    ss_cliche_tolerance: speech_style.cliche_tolerance ?? 0.5,
     signature_phrases_csv: arrToCsv(p.signature_phrases),
     voice_samples: p.voice_samples ?? [],
-    fp_global_csv: arrToCsv(p.forbidden_phrases._global),
-    fp_character_csv: arrToCsv(p.forbidden_phrases._character),
-    fp_qwen_csv: arrToCsv(p.forbidden_phrases._qwen),
-    fp_deepseek_csv: arrToCsv(p.forbidden_phrases._deepseek),
-    rel_type: p.relationship_to_user.type ?? 'companion',
-    rel_intimacy_progression: p.relationship_to_user.intimacy_progression ?? 'linear',
-    rel_initial_intimacy: p.relationship_to_user.initial_intimacy ?? 50,
+    fp_global_csv: arrToCsv(forbidden_phrases._global),
+    fp_character_csv: arrToCsv(forbidden_phrases._character),
+    fp_qwen_csv: arrToCsv(forbidden_phrases._qwen),
+    fp_deepseek_csv: arrToCsv(forbidden_phrases._deepseek),
+    rel_type: relationship_to_user.type ?? 'companion',
+    rel_intimacy_progression: relationship_to_user.intimacy_progression ?? 'linear',
+    rel_initial_intimacy: relationship_to_user.initial_intimacy ?? 50,
   };
 }
 
@@ -325,12 +347,41 @@ export default function PersonaEditorModal({
     existing ? _existingToForm(existing) : EMPTY_FORM,
   );
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Bugfix-segment2-1:defensive re-fetch on open。不信 `existing` prop 自带
+  // 的字段(可能是 PersonasSection 旧 list cache、partial、或 stale 引用);
+  // 始终用 ``getPersona(id)`` 拉一次 canonical fresh data 初始化 form。
+  //
+  // Fetch 失败 → fall back 到 prop 数据(仍能编辑);成功 → 用 server 最新
+  // 字段覆盖。依赖 ``existing?.id`` 而非整个 object,避免 parent 重渲染时
+  // 误触发重 fetch(prop reference 变了但 id 没变)。
   useEffect(() => {
-    setForm(existing ? _existingToForm(existing) : EMPTY_FORM);
     setError(null);
-  }, [existing]);
+    if (!existing) {
+      setForm(EMPTY_FORM);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    // 立即用 prop 数据 init form,避免 modal 出现 "全空" 闪烁
+    setForm(_existingToForm(existing));
+    getPersona(existing.id)
+      .then((fresh) => {
+        if (cancelled) return;
+        setForm(_existingToForm(fresh));
+      })
+      .catch((e) => {
+        // server 异常 → 仍能用 prop 数据编辑;log warning
+        console.warn('[PersonaEditor] getPersona failed, using prop data:', e);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [existing?.id]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const inputStyle: React.CSSProperties = {
     background: 'var(--color-bg-input)',
