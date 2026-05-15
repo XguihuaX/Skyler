@@ -14,9 +14,11 @@
    "最优" = active 优先 > enabled 优先 > 早 seed (id 小) 优先。
 
 2. **trim non-Qwen builtin** —— DELETE FROM ai_providers WHERE type='llm'
-   AND vendor_id IN ('openai','anthropic','deepseek')。
-   不区分 builtin / custom — 一刀切 (custom 一般也没有,本 stage 用户没自建
-   过 OpenAI/Anthropic/DeepSeek 自定义 model;若极少数有,他们可以重新加)
+   AND provider_kind = 'builtin' AND vendor_id IN ('openai','anthropic',
+   'deepseek')。
+   仅删 builtin seed 行;custom 行(用户自填的 deepseek-v4-flash 等)保留。
+   bugfix-Providers (2026-05-15):原版漏 ``provider_kind`` 守卫,每次启动
+   把用户加的 custom DeepSeek 一并清掉,导致 UI 加 model → 重启消失。
 
 3. **UNIQUE INDEX** —— ix_ai_providers_vendor_name_type ON
    ai_providers(vendor_id, name, type)。防未来 INSERT 重复。
@@ -88,13 +90,19 @@ async def run_migration() -> None:
         else:
             logger.info("[bugfix-3.2.8] no duplicates to dedup")
 
-        # ---- Step 2: trim non-Qwen builtin LLM ----
+        # ---- Step 2: trim non-Qwen **builtin** LLM ----
         # 用户拍板:只 Qwen 2 个 builtin 作 dogfood (依赖 .env DASHSCOPE_API_KEY)。
         # OpenAI / Anthropic / DeepSeek seed 行删除 — 用户用 [+ 添加模型] modal
         # 自填(走 AddModelModal 的 raw model name + 自动前缀 helper)。
+        #
+        # bugfix-Providers (2026-05-15):必须 ``AND provider_kind = 'builtin'``
+        # 守卫。原版一刀切,migration 每次启动 idempotent 跑 → 用户在 UI 加的
+        # custom DeepSeek (provider_kind='custom') 会被一并清掉 → 重启 model
+        # 消失。Qwen custom 行幸运逃过是因为 Qwen 不在 ``_TRIM_VENDORS``。
         trim = await conn.execute(text(f"""
             DELETE FROM ai_providers
             WHERE type = 'llm'
+              AND provider_kind = 'builtin'
               AND vendor_id IN ({", ".join("'" + v + "'" for v in _TRIM_VENDORS)})
         """))
         trimmed = getattr(trim, "rowcount", 0) or 0
@@ -105,7 +113,10 @@ async def run_migration() -> None:
                 trimmed, _TRIM_VENDORS,
             )
         else:
-            logger.info("[bugfix-3.2.8] no non-Qwen builtin LLM to trim")
+            logger.info(
+                "[bugfix-3.2.8] no non-Qwen builtin LLM to trim "
+                "(custom rows for these vendors are preserved)"
+            )
 
         # ---- Step 3: UNIQUE INDEX 防未来重复 ----
         # NOTE: 若 dedup 没清干净 (理论上不可能, ROW_NUMBER 已保证), 这条会报错。
