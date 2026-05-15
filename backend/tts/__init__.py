@@ -61,6 +61,50 @@ _PRONOUNCEABLE_RE = re.compile(r"\w", re.UNICODE)
 # 多余空白合并
 _WS_RE = re.compile(r"[ \t]{2,}")
 
+# bugfix-D1.1：final guard 用 —— ja/en literal tag 剥除 + 兜底未知 tag 检测。
+#
+# 上游 ``extract_tts_text(text, tts_language)`` 已经按 ``tts_language`` 提取
+# 对应语种的 inner 文本。但当 LLM 输出含未闭合 ``<ja>「...`` 或 stream cancel
+# 在 paired tag 中段截断时,fallback 路径 (text_filters.py:327) 会把带字面
+# ``<ja>`` 开标签的 raw_text 原样送 TTS → cosyvoice 收到 ``"\n<ja>「...`` →
+# 418 InvalidParameter。本 guard 是真正调 API 前最后一道保险。
+_JA_EN_LITERAL_RE = re.compile(r"</?(?:ja|en)\b[^>]*>", re.IGNORECASE)
+_ANY_TAG_LITERAL_RE = re.compile(r"<[a-z_][a-z_0-9]*[^>]*>", re.IGNORECASE)
+
+
+def _tts_input_final_guard(text: str) -> Optional[str]:
+    """送 TTS provider 前最后一道防线 (bugfix-D1.1)。
+
+    上游有 4 道 strip 链 + ``extract_tts_text`` 按语种提取,理论上不该有 tag
+    漏到这里;实测 LLM 输出未闭合 ``<ja>「...`` / stream cancel 截断时,
+    ``extract_tts_text`` 的 fallback 分支 (text_filters.py:323-327) 会原样返
+    带 ``<ja>`` 开标签的 raw_text。本 guard 兜底:
+
+      1. 剥除字面 ``<ja>`` / ``<en>`` / ``</ja>`` / ``</en>`` (无论闭合与否)
+      2. 头尾 strip + 剥多余引号
+      3. 空 → 返 ``None`` (caller 跳过 synth,等下一句)
+      4. 剥后仍含 ``<name>...`` 形字面 tag → 返 ``None`` (其他未知 tag 漏网)
+
+    返 ``None`` 让 caller 走 "skip synth" 静默降级,与 ``preprocess_tts_text``
+    返空串语义对齐 (``_PreprocessingEngine.synthesize`` 会 log + 跳过)。
+
+    Args:
+        text: 拟送 TTS provider 的文本 (已经过 ``preprocess_tts_text`` 主链路)。
+
+    Returns:
+        清洗后可送的纯文本 / ``None`` 表示丢弃本句。
+    """
+    if not text:
+        return None
+    cleaned = _JA_EN_LITERAL_RE.sub("", text)
+    # 剥头尾常见 stray 引号 / 空白（LLM 在 paired tag 边界容易残留 ``"\n`` 等）
+    cleaned = cleaned.strip().strip('"\'').strip()
+    if not cleaned:
+        return None
+    if _ANY_TAG_LITERAL_RE.search(cleaned):
+        return None
+    return cleaned
+
 
 def preprocess_tts_text(text: str) -> str:
     """剥离不应读出口的标记，返回交给 TTS 合成的纯文本。
@@ -79,6 +123,11 @@ def preprocess_tts_text(text: str) -> str:
     pattern 列表（motion / 动作 / 注释 / 中括号）。这是第三道 strip 链路——
     chat.py 流式按段剥（第一道）+ ws.py 写库前剥（第二道）+ 这里 TTS 兜底
     （第三道）。漏一道就会被 cosyvoice 念出来。
+
+    bugfix-D1.1：链尾追加 ``_tts_input_final_guard`` —— 兜 ``extract_tts_text``
+    fallback 路径漏出的字面 ``<ja>``/``<en>`` 开标签 (LLM 未闭合 / 流式截断
+    场景),拦截前 cosyvoice 收到字面 tag → 418 InvalidParameter。返 ``None``
+    时本函数返 ``""``,与现有 "empty → skip synth" 契约对齐,caller 无感知。
     """
     if not text:
         return ""
@@ -89,7 +138,14 @@ def preprocess_tts_text(text: str) -> str:
     out = _WS_RE.sub(" ", out).strip()
     if not out or not _PRONOUNCEABLE_RE.search(out):
         return ""
-    return out
+    guarded = _tts_input_final_guard(out)
+    if guarded is None:
+        logger.warning(
+            "[tts] final_guard rejected (literal tag / empty after strip) raw=%r out=%r",
+            text[:80], out[:80],
+        )
+        return ""
+    return guarded
 
 
 class TTSManager:
