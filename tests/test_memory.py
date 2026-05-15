@@ -23,7 +23,11 @@ _db_module.engine = TEST_ENGINE
 _db_module.AsyncSessionLocal = TEST_SESSION
 _svc_module  # already imported above
 
-from backend.memory.short_term import ShortTermMemory, SHORT_TERM_MAX
+from backend.memory.short_term import (
+    SHORT_TERM_MAX,
+    SHORT_TERM_MAX_TURNS,
+    ShortTermMemory,
+)
 from backend.memory.long_term import add_memory_with_embedding, search_relevant_memories, _encode
 
 PASS = "\033[92m[PASS]\033[0m"
@@ -77,7 +81,118 @@ async def test_short_term():
     await mem.add("ub", "user", "for ub")
     check("user isolation", (await mem.count("ua")) == 1 and (await mem.count("ub")) == 1)
 
-    check("SHORT_TERM_MAX is 20", SHORT_TERM_MAX == 20)
+    # 修法 A:SHORT_TERM_MAX 重新定义为 60 messages = 30 turns(原 20 已过时)。
+    check("SHORT_TERM_MAX_TURNS = 30", SHORT_TERM_MAX_TURNS == 30)
+    check("SHORT_TERM_MAX = 60 messages (= 30 turns × 2)",
+          SHORT_TERM_MAX == 60)
+
+
+# ---------------------------------------------------------------------------
+# 修法 A — SHORT_TERM_MAX trim 真生效(6 new test cases)
+# ---------------------------------------------------------------------------
+
+async def test_short_term_trim_below_max_keeps_all():
+    """add 20 turn(40 messages)< MAX(60)→ 全留,无 trim。"""
+    print("\n[修法A-1] add 20 turn < MAX → 全留")
+    mem = ShortTermMemory()
+    uid = "trim_u1"
+    for i in range(20):
+        await mem.add(uid, "user",      f"u-msg-{i}")
+        await mem.add(uid, "assistant", f"a-msg-{i}")
+    cnt = await mem.count(uid)
+    check("count == 40 messages (20 turn × 2)", cnt == 40, f"got {cnt}")
+    turns = await mem.get(uid)
+    check("first message preserved (chronological)",
+          turns[0]["content"] == "u-msg-0")
+    check("last message preserved", turns[-1]["content"] == "a-msg-19")
+
+
+async def test_short_term_trim_exceeding_max_trims_oldest():
+    """add 50 turn(100 messages)→ trim 到 60(= 30 turn)。最旧 40 messages 丢弃。"""
+    print("\n[修法A-2] add 50 turn > MAX → trim 到 60 messages")
+    mem = ShortTermMemory()
+    uid = "trim_u2"
+    for i in range(50):
+        await mem.add(uid, "user",      f"u-msg-{i}")
+        await mem.add(uid, "assistant", f"a-msg-{i}")
+    cnt = await mem.count(uid)
+    check("count == 60 messages (hard cap)", cnt == SHORT_TERM_MAX,
+          f"got {cnt} expected {SHORT_TERM_MAX}")
+    turns = await mem.get(uid)
+    # 最旧应该是 message 40(turn 20 的 user)── 因为 100 - 60 = 40 个被剥
+    check("oldest kept = u-msg-20 (= 100-60 dropped from head)",
+          turns[0]["content"] == "u-msg-20", f"got {turns[0]['content']!r}")
+    check("newest kept = a-msg-49", turns[-1]["content"] == "a-msg-49")
+
+
+async def test_short_term_trim_preserves_order():
+    """trim 后保留**最新** N turn 顺序(chronological)。"""
+    print("\n[修法A-3] trim 后保留 chronological order")
+    mem = ShortTermMemory()
+    uid = "trim_u3"
+    for i in range(40):
+        await mem.add(uid, "user", f"m-{i}")
+    turns = await mem.get(uid)
+    # 60 cap is per messages,here all 'user' so 40 messages < 60 → 全留
+    # 检查 strict ascending
+    contents = [t["content"] for t in turns]
+    for i in range(1, len(contents)):
+        idx_prev = int(contents[i-1].split("-")[1])
+        idx_curr = int(contents[i].split("-")[1])
+        if idx_curr != idx_prev + 1:
+            check(f"chronological broken between {i-1} and {i}", False); break
+    else:
+        check("chronological order preserved", True, "40 messages monotonic")
+
+
+async def test_short_term_trim_user_isolation():
+    """user_a add 50 turn(超 cap),user_b add 10 turn(未超):
+    trim 只影响 user_a;user_b 完整保留。"""
+    print("\n[修法A-4] trim user isolation")
+    mem = ShortTermMemory()
+    for i in range(50):
+        await mem.add("user_a", "user",      f"a-{i}")
+        await mem.add("user_a", "assistant", f"a-{i}r")
+    for i in range(10):
+        await mem.add("user_b", "user",      f"b-{i}")
+        await mem.add("user_b", "assistant", f"b-{i}r")
+    cnt_a = await mem.count("user_a")
+    cnt_b = await mem.count("user_b")
+    check("user_a trimmed to 60", cnt_a == SHORT_TERM_MAX, f"got {cnt_a}")
+    check("user_b untouched (20 messages)", cnt_b == 20, f"got {cnt_b}")
+    turns_b = await mem.get("user_b")
+    check("user_b first message intact", turns_b[0]["content"] == "b-0")
+
+
+async def test_short_term_trim_at_exact_max_no_trim():
+    """恰好 60 messages(= 30 turn)不应触发 trim。"""
+    print("\n[修法A-5] 恰好 max,不 trim")
+    mem = ShortTermMemory()
+    uid = "trim_u5"
+    for i in range(30):
+        await mem.add(uid, "user",      f"u-{i}")
+        await mem.add(uid, "assistant", f"a-{i}")
+    cnt = await mem.count(uid)
+    check("exactly 60 messages, no trim", cnt == 60, f"got {cnt}")
+    turns = await mem.get(uid)
+    check("first message preserved (no trim happened)",
+          turns[0]["content"] == "u-0", f"got {turns[0]['content']!r}")
+
+
+async def test_short_term_get_returns_trimmed_view():
+    """add 50 turn → .get() 返回最新 30 turn 视图(60 messages)。"""
+    print("\n[修法A-6] .get() 返回 trimmed view")
+    mem = ShortTermMemory()
+    uid = "trim_u6"
+    for i in range(50):
+        await mem.add(uid, "user",      f"u-{i}")
+        await mem.add(uid, "assistant", f"a-{i}")
+    turns = await mem.get(uid)
+    check("get returns 60 messages", len(turns) == 60, f"got {len(turns)}")
+    # head is u-msg-20(50-30=20 turns dropped from head)
+    check("get head = u-20 (newest 30 turns)",
+          turns[0]["content"] == "u-20", f"got {turns[0]['content']!r}")
+    check("get tail = a-49", turns[-1]["content"] == "a-49")
 
 # ---------------------------------------------------------------------------
 # Long-term memory (embedding + retrieval)
@@ -138,6 +253,13 @@ async def test_long_term():
 async def main():
     await setup()
     await test_short_term()
+    # 修法 A:6 个 trim 测试
+    await test_short_term_trim_below_max_keeps_all()
+    await test_short_term_trim_exceeding_max_trims_oldest()
+    await test_short_term_trim_preserves_order()
+    await test_short_term_trim_user_isolation()
+    await test_short_term_trim_at_exact_max_no_trim()
+    await test_short_term_get_returns_trimmed_view()
     await test_long_term()
 
     total = len(results)
