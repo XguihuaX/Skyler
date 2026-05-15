@@ -432,25 +432,65 @@ _CAPABILITY_OPEN_TAG_RE = re.compile(
 #:   * 容许 ``.`` 让 capability-name-as-tag 一并被兜住。
 #:   * 不要求 ``.`` —— 这样 ``<tool_call>`` ``<emotion>`` 等也会被命中
 #:     （即便已被前面 strip 链清掉，这里再剥一道是双保险）。
+#:
+#: bugfix-D1：第二条 alternation（自闭合）补 group 2 capture，使 ``_strip_*``
+#: callable replacement 可对自闭合分支也读到 tag 名走白名单判断。``findall``
+#: 仅被 ``count_suspicious_tags`` 用 ``len(...)`` 消费，分组数变化不破坏现有契约。
 SUSPICIOUS_TAG_RE = re.compile(
     r"<([a-z_][a-z_0-9.]*)[^>]*>[\s\S]*?</\1>"     # 配对 tag（\1 反向引用同名）
-    r"|<[a-z_][a-z_0-9.]*[^>]*?/>",                # 自闭合（容许 attrs）
+    r"|<([a-z_][a-z_0-9.]*)[^>]*?/>",              # 自闭合（容许 attrs）
     re.IGNORECASE,
 )
 
+#: 白名单：豁免 SUSPICIOUS 剥除的 tag 名（lower-case）。
+#:
+#: bugfix-D1（2026-05-15）：早期 LLM 在 ja/en TTS 角色（character_id=1 Mai）
+#: 上输出完美交替 ``中文。<ja>「日语」</ja>``，几轮后退化成全中文 → "日语
+#: voice 念中文"。根因：本兜底层 ``re.sub('', text)`` 一刀切，已被 ws.py
+#: ``extract_tts_text`` 合法消费的 ``<ja>``/``<en>`` 也被剥走 → chat_history
+#: 入库全中文 → 下一轮 LLM 看自己的 short_term 无 ja 锚点 → 模仿失败 →
+#: round-trip 失锚 → 越聊越漏标。
+#:
+#: 修法：这两个 tag 是 caller-语义（``tts_language`` 已知时才决定剥哪个），
+#: 不属于"未知 LLM 格式"范畴 —— 白名单豁免，让上游 ``extract_tts_text`` /
+#: ``strip_ja_en_tags_for_subtitle`` 按语言做决定，DB 持久层保留原 marker。
+#:
+#: 注意：本白名单只影响 ``sanitize_suspicious_tags`` / ``count_suspicious_tags``
+#: 两个**剥除** call site。``.search()`` guard（``save_memory`` reject、profile
+#: 校验等）仍按原 regex 判定 —— 那些路径意图就是"任何 tag-like 文本一律拒绝"。
+_SUSPICIOUS_TAG_WHITELIST = frozenset({"ja", "en"})
+
+
+def _suspicious_tag_name(m: "re.Match[str]") -> str:
+    """从 ``SUSPICIOUS_TAG_RE`` match 提取 tag 名（兼容两条 alternation 分支）。
+
+    配对分支命中 → group(1)；自闭合分支命中 → group(2)。lower-case 返回。
+    """
+    return (m.group(1) or m.group(2) or "").lower()
+
 
 def count_suspicious_tags(text: str) -> int:
-    """统计可疑 tag 数（不修改文本）。
+    """统计可疑 tag 数（不含白名单豁免项，不修改文本）。
 
     给迁移 / profile_summary 输出验收判定 / 测试断言用。空 / None → 0。
+    白名单（``_SUSPICIOUS_TAG_WHITELIST``）命中项不计数，与
+    ``sanitize_suspicious_tags`` 实际剥除行为保持对称 —— 避免 caller 看到
+    ``count > 0`` 却 sanitize 后内容不变的幻象日志。
     """
     if not text:
         return 0
-    return len(SUSPICIOUS_TAG_RE.findall(text))
+    return sum(
+        1 for m in SUSPICIOUS_TAG_RE.finditer(text)
+        if _suspicious_tag_name(m) not in _SUSPICIOUS_TAG_WHITELIST
+    )
 
 
 def sanitize_suspicious_tags(text: str) -> str:
-    """剥所有 ``SUSPICIOUS_TAG_RE`` 命中段。空 / None 原样返回。
+    """剥所有 ``SUSPICIOUS_TAG_RE`` 命中段（除 ``_SUSPICIOUS_TAG_WHITELIST``）。
+
+    空 / None 原样返回。白名单内的 tag（``<ja>...</ja>`` / ``<en>...</en>``
+    + 对应自闭合变体）保留原 marker，不参与剥除 —— 见
+    ``_SUSPICIOUS_TAG_WHITELIST`` 文档段（bugfix-D1）。
 
     本函数**不 log** —— caller 负责打 warning + 调出现频。这样：
       * 迁移路径可静默清理（每行命中已合并日志）
@@ -458,7 +498,13 @@ def sanitize_suspicious_tags(text: str) -> str:
     """
     if not text:
         return text
-    return SUSPICIOUS_TAG_RE.sub("", text)
+
+    def _replace(m: "re.Match[str]") -> str:
+        if _suspicious_tag_name(m) in _SUSPICIOUS_TAG_WHITELIST:
+            return m.group(0)
+        return ""
+
+    return SUSPICIOUS_TAG_RE.sub(_replace, text)
 
 
 def has_partial_open_tag(text: str) -> bool:
