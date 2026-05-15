@@ -238,13 +238,69 @@ def test_render_emotion_triggers_full():
 # ===========================================================================
 
 def test_layer_a_ja_mode_includes_directive():
-    print("\n[8] layer_a tts_language='ja' 含 ja directive")
+    """Bugfix-segment2-2:ja directive 必须强约束**中日交替**格式,不再是
+    "一回合只一组 ja tag"(那样 sentence-level extract 看不到 ja tag)。"""
+    print("\n[8] layer_a tts_language='ja' 含 ja directive (alternating spec)")
     out = _render_layer_a(available_motions=None, tts_language="ja")
     check("[日语 TTS 模式] header", "[日语 TTS 模式" in out)
     check("<ja>...</ja> tag format described",
           "<ja>" in out and "</ja>" in out)
-    check("日语翻译 instruction", "日语翻译" in out)
-    check("一回合只输出一组 <ja> tag", "一回合只输出一组" in out)
+    check("'每个中文句' alternating instruction",
+          "每个中文句" in out)
+    # Bugfix-segment2-2:旧版"一回合只输出一组"必须**已删除**,否则 LLM 集中
+    # 写中文最后才 ja,后端 sentence-level extract 看不到 → fallback raw →
+    # 中文送日语 voice 合成,听起来错乱
+    check("OLD wrong wording '一回合只输出一组' REMOVED",
+          "一回合只输出一组" not in out,
+          "still contains forbidden old wording")
+
+
+def test_layer_a_ja_directive_says_alternate():
+    """Bugfix-segment2-2:directive 必须直接说"每个中文句后立刻跟"。"""
+    print("\n[8a] ja directive 明确要求中日交替")
+    out = _render_layer_a(available_motions=None, tts_language="ja")
+    check("'每个中文句后立刻跟' or '后立刻紧跟' phrasing",
+          "立刻跟" in out or "立刻紧跟" in out)
+    check("'不要先写完所有中文再写日语' or equivalent anti-pattern",
+          "不要" in out and ("先写完所有中文" in out or "先写完" in out))
+
+
+def test_layer_a_ja_directive_has_correct_example():
+    """Bugfix-segment2-2:必须含 ✓ 正确示范(中文 → ja → 中文 → ja 交替)。"""
+    print("\n[8b] ja directive ✓ correct example shows alternation")
+    out = _render_layer_a(available_motions=None, tts_language="ja")
+    check("✓ marker present", "✓" in out)
+    # 正确示范应该有**多个** <ja> tag(交替),不是一个
+    # find the example block, count <ja> occurrences in it
+    correct_idx = out.find("正确格式")
+    wrong_idx = out.find("错误格式")
+    correct_block = out[correct_idx:wrong_idx] if (correct_idx >= 0 and wrong_idx > correct_idx) else ""
+    ja_count_correct = correct_block.count("<ja>")
+    check("✓ example contains 2+ <ja> tags (alternating)",
+          ja_count_correct >= 2, f"got {ja_count_correct} in correct block")
+    check("✓ example shows Japanese after each Chinese sentence",
+          "「" in correct_block)  # 日语引号
+
+
+def test_layer_a_ja_directive_has_wrong_example_warning():
+    """Bugfix-segment2-2:必须含 ✗ 错误示范展示 anti-pattern,LLM 看到这种
+    "集中模式" example marked WRONG → 不模仿。"""
+    print("\n[8c] ja directive ✗ wrong example marked as anti-pattern")
+    out = _render_layer_a(available_motions=None, tts_language="ja")
+    check("✗ marker present", "✗" in out)
+    check("'错误格式' header present", "错误格式" in out)
+    # 错误示范应该只有 1 个 <ja>(整段集中),正是要避免的模式
+    wrong_idx = out.find("错误格式")
+    if wrong_idx > 0:
+        # extract block until next header or end
+        rest = out[wrong_idx:wrong_idx + 400]
+        # 错误块本身就示范"一段中文 + 一个 ja",所以 1 个 ja 正确
+        ja_count_wrong = rest.count("<ja>")
+        check("✗ example shows the anti-pattern (single ja for all sentences)",
+              ja_count_wrong >= 1, f"got {ja_count_wrong} in wrong block")
+    # 还要说明 WHY:explanation tells LLM why alternation matters
+    check("explanation 'TTS 错乱' or 'sentence' or '音色' 说明",
+          "TTS 错乱" in out or "音色" in out or "sentence" in out)
 
 
 def test_layer_a_zh_mode_no_ja_directive():
@@ -764,6 +820,9 @@ async def _async_main():
     test_render_emotion_triggers_full()
     # Phase 2
     test_layer_a_ja_mode_includes_directive()
+    test_layer_a_ja_directive_says_alternate()
+    test_layer_a_ja_directive_has_correct_example()
+    test_layer_a_ja_directive_has_wrong_example_warning()
     test_layer_a_zh_mode_no_ja_directive()
     test_extract_tts_text_ja_with_tag()
     test_extract_tts_text_ja_missing_tag_fallback()
