@@ -132,6 +132,10 @@ from backend.database.migrations.v4_persona_segment2_ensure_defaults import (
 from backend.database.migrations.v4_0_0_mai_revert_zh import (
     run_migration as migrate_v4_0_0_mai_revert_zh,
 )
+# v4-beta Stage 2:有界滚动摘要层 — conversation_summary 表
+from backend.database.migrations.v4_0_0_conversation_summary import (
+    run_migration as migrate_v4_0_0_conversation_summary,
+)
 from backend.database.services import create_user, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -363,6 +367,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # longyumi_v3/zh。一旦 cid=1 已切走 voice,seg2 不再命中 cid=1。
     # ja 链代码全部保留,留 v4.1 后处理翻译架构重做。
     await migrate_v4_0_0_mai_revert_zh()
+
+    # ── 1b32. v4-beta Stage 2:conversation_summary 表(有界滚动摘要层) ─────
+    # audit_z5 + diag_z5_report.md 实锤:默认用户 memory 表 0 行,真因不是 bug
+    # 是 policy(LLM 按 prompt 主动判短/稀 chat 无 fact)。加这一层把"被 short_term
+    # cap 挤出窗口的旧 turn"语义级浓缩进 (user, char, conv) 三级 summary_text。
+    # 独立状态(last_folded_chat_history_id 在本表自己一列),**不读 memory_extractor_state**。
+    # CREATE IF NOT EXISTS,幂等。不动 memory / memory_extractor_state 等任何现存表。
+    await migrate_v4_0_0_conversation_summary()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

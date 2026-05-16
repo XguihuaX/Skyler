@@ -1241,6 +1241,23 @@ async def _build_messages(
             messages: List[dict] = [
                 {"role": "system", "content": system_prompt}
             ]
+            # v4-beta Stage 2:滚动摘要层独立 system 块,排在 system_prompt
+            # (含人设/事实)之后、short_term 最近轮之前。空摘要(短对话期)→ 跳过,
+            # 零成本零干扰。
+            try:
+                from backend.memory.summary import get_summary
+                _sum = await get_summary(user_id, character_id, conversation_id)
+                if _sum:
+                    messages.append({
+                        "role": "system",
+                        "content": f"【过往对话摘要(滚动压缩)】\n{_sum}",
+                    })
+            except Exception:
+                logger.exception(
+                    "[chat] summary fetch failed user=%s char=%s conv=%s "
+                    "— skip injection, do not block turn",
+                    user_id, character_id, conversation_id,
+                )
             if not skip_short_term:
                 for turn in await short_term_memory.get(
                     user_id,
@@ -1437,6 +1454,22 @@ async def _build_messages(
     # 长简报 turn 污染 LLM tone（实测：8-15 字约束被历史 200 字简报 tone
     # 覆盖时输出 100+ 字）。普通 chat / stage 2 仍走全量短期记忆。
     messages: List[dict] = [{"role": "system", "content": system_prompt}]
+    # v4-beta Stage 2:legacy 路径同样注入滚动摘要,独立 system 块,排在
+    # system_prompt 之后、short_term 最近轮之前。与 v4 renderer 路径同契约。
+    try:
+        from backend.memory.summary import get_summary
+        _sum = await get_summary(user_id, character_id, conversation_id)
+        if _sum:
+            messages.append({
+                "role": "system",
+                "content": f"【过往对话摘要(滚动压缩)】\n{_sum}",
+            })
+    except Exception:
+        logger.exception(
+            "[chat-legacy] summary fetch failed user=%s char=%s conv=%s "
+            "— skip injection, do not block turn",
+            user_id, character_id, conversation_id,
+        )
     if not skip_short_term:
         for turn in await short_term_memory.get(
             user_id,

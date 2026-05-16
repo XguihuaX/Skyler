@@ -303,7 +303,19 @@ class MemoryExtractor:
         return [r[0] for r in rows if r[0]]
 
     async def _extract_batch(self) -> None:
-        """单批工作循环（per-user）。commit 2 占位实现；commit 4 真接 LLM。"""
+        """单批工作循环（per-user）。commit 2 占位实现；commit 4 真接 LLM。
+
+        v4-beta Stage 2:每个 user 跑完 extractor 后,额外调一次
+        ``fold_summaries_for_user``(滚动摘要层)。**完全独立状态**(用
+        ``conversation_summary.last_folded_chat_history_id``,不读
+        ``memory_extractor_state``)—— 即便 extractor 的 pointer 卡死,summary 也能
+        自己往前走。summary 的失败处理在 ``backend/memory/summary.py`` 内自封闭
+        (LLM 失败 error log + 不推 pointer,不会冒泡到这里),所以即便 summary 抛
+        本 try/except 也兜住,不影响主 worker 循环。
+        """
+        # 延迟 import 避免 module-load 期循环 import
+        from backend.memory.summary import fold_summaries_for_user
+
         user_ids = await self._list_user_ids()
         batch_size = get_extractor_batch_size()
         total_seen = 0
@@ -313,14 +325,18 @@ class MemoryExtractor:
                 turns = await fetch_user_turns_after(
                     uid, last_id, batch_size=batch_size,
                 )
-                if not turns:
-                    continue
-                total_seen += len(turns)
-                # commit 3/4 这里接 prompt + LLM + validator + save。
-                # commit 2 占位：仅推进 state pointer（让单测能验证流水线
-                # 框架；真 LLM/save 行为留给 commit 4）。
-                await self._process_user_turns(uid, turns)
-                await update_last_processed_turn_id(uid, turns[-1].id)
+                if turns:
+                    total_seen += len(turns)
+                    # commit 3/4 这里接 prompt + LLM + validator + save。
+                    # commit 2 占位：仅推进 state pointer（让单测能验证流水线
+                    # 框架；真 LLM/save 行为留给 commit 4）。
+                    await self._process_user_turns(uid, turns)
+                    await update_last_processed_turn_id(uid, turns[-1].id)
+                # v4-beta Stage 2:无论 extractor 是否处理了新 turn,都跑一次
+                # 滚动摘要 fold(summary 状态独立于 extractor pointer,extractor 卡死
+                # 也不耽误 summary)。summary 自检 cap_breach / 自校 batch 大小,
+                # 没东西要 fold 时静默 return,零成本。
+                await fold_summaries_for_user(uid)
             except Exception:
                 logger.exception(
                     "[extractor] _extract_batch failed for user=%s", uid,
