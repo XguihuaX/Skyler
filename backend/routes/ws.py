@@ -579,8 +579,12 @@ async def _update_memory(
             )
             reply = sanitize_suspicious_tags(reply).strip()
     try:
-        await short_term_memory.add(user_id, "user",      user_text, character_id=char_id)
-        await short_term_memory.add(user_id, "assistant", reply, character_id=char_id)
+        await short_term_memory.add(
+            user_id, "user", user_text, character_id=character_id,
+        )
+        await short_term_memory.add(
+            user_id, "assistant", reply, character_id=character_id,
+        )
 
         async with AsyncSessionLocal() as session:
             if not skip_user_history:
