@@ -31,6 +31,9 @@ interface WsMessage {
   intimacy?: number;
   thought?: string | null;
   activity?: string | null;
+  // Bug 2 修法:backend 在聊天 UI 类型 chunks 上附 conv_id;前端按
+  // currentConversationId filter,stale chunks 丢弃。
+  conversation_id?: number | null;
 }
 
 // v3-G chunk 2 / 2.6 / 4: trigger.name -> toast 标题。后续加 trigger 时只在这里 append。
@@ -140,6 +143,32 @@ export function useWebSocket(): UseWebSocketReturn {
 
   const handleMessage = useCallback((msg: WsMessage) => {
     const s = store.getState();
+
+    // Bug 2 修法(audit_lost_replies.md):chunks 自带 ``conversation_id``
+    // metadata 时,与当前 UI 上 ``currentConversationId`` 不匹配则视为
+    // **stale chunk**(in-flight turn 用户已切走),丢弃不影响 UI。
+    // Backend 仍按 9039d75 snapshot 把 reply 写进原 conv 的 chat_history;
+    // 用户切回原 conv → ConversationList click → fetchMessages 重新加载
+    // → 看到 reply,Rule A "不丢" 兑现。
+    //
+    // 只过滤聊天 UI / TTS 播放相关的类型:text_chunk / audio_chunk /
+    // thinking / done / asr_result。
+    // 不过滤 emotion / motion / state_update —— 那些是 character-level 状态,
+    // 跨 conv 适用(同一 char 切不同 conv 仍应反映该 char 当前心情/动作)。
+    const FILTERABLE_TYPES = new Set([
+      'asr_result', 'text_chunk', 'audio_chunk', 'thinking', 'done',
+    ]);
+    if (FILTERABLE_TYPES.has(msg.type) && msg.conversation_id !== undefined) {
+      const cur = s.currentConversationId;
+      if (msg.conversation_id !== cur) {
+        console.log(
+          `[FRONT] drop stale ${msg.type} from conv=${msg.conversation_id} `
+          + `(currentConv=${cur})`,
+        );
+        return;
+      }
+    }
+
     switch (msg.type) {
       case 'asr_result': {
         const content = msg.content ?? '';

@@ -886,10 +886,13 @@ async def _handle_message(
                     state.user_history_already_written = True
                 except Exception:
                     logger.exception("ASR chat_history persist failed for user %s", user_id)
+            # Bug 2 修法:asr_result(用户语音转写)也带 conv_id 让前端按
+            # currentConv filter(防 in-flight 语音 turn 切走后 user 气泡冒到新 conv)
             await ws.send_json({
                 "type": "asr_result",
                 "content": text,
                 "message_id": asr_message_id,
+                "conversation_id": state.conv_id,
             })
         elif msg_type == "touch":
             # v3-E1 step3：用户点 Live2D canvas 触发主动对话
@@ -1005,7 +1008,13 @@ async def _handle_message(
 
         async def _send_audio(audio: bytes) -> None:
             audio_b64 = base64.b64encode(audio).decode()
-            await ws.send_json({"type": "audio_chunk", "content": audio_b64})
+            # Bug 2 修法:chunks 附 conv_id snapshot,前端按 currentConversationId
+            # filter 防 in-flight turn 切走后的 audio 串到新 conv 播放。
+            await ws.send_json({
+                "type": "audio_chunk",
+                "content": audio_b64,
+                "conversation_id": state.conv_id,
+            })
 
         consumer_task: Optional[asyncio.Task] = None
         try:
@@ -1085,9 +1094,11 @@ async def _handle_message(
                             "[thinking] pushed (len=%d) user=%s",
                             len(thinking_value), user_id,
                         )
+                        # Bug 2 修法:chunks 带 conv_id 让前端按 currentConv filter。
                         await ws.send_json({
                             "type": "thinking",
                             "value": thinking_value,
+                            "conversation_id": state.conv_id,
                         })
 
                     # v3-E1 step6：每段独立解析 motion 标签 —— 与 emotion（整轮
@@ -1141,7 +1152,12 @@ async def _handle_message(
                     )
                     if not final_chunk.strip():
                         continue  # 全是 meta tag → 不 push
-                    payload = {"type": "text_chunk", "content": final_chunk}
+                    payload = {
+                        "type": "text_chunk",
+                        "content": final_chunk,
+                        # Bug 2 修法:chunks 带 conv_id 让前端按 currentConv filter。
+                        "conversation_id": state.conv_id,
+                    }
                     payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                     ws_send_count += 1
                     with timed(f"WS send chunk #{sentence_idx} bytes={payload_bytes}"):
@@ -1228,7 +1244,8 @@ async def _handle_message(
         except Exception:
             logger.exception("[tool_resilience] layer crashed; using raw reply")
 
-        await ws.send_json({"type": "done"})
+        # Bug 2 修法:done 也带 conv_id 让前端按 currentConv filter
+        await ws.send_json({"type": "done", "conversation_id": state.conv_id})
 
         # ── 3b. Background memory update ────────────────────────────────────
         asyncio.create_task(_update_memory(
@@ -1275,7 +1292,12 @@ async def _handle_message_safe(
                 "save interrupted turn failed for user=%s", user_id,
             )
         try:
-            await ws.send_json({"type": "done", "interrupted": True})
+            # Bug 2 修法:interrupted done 也带 conv_id
+            await ws.send_json({
+                "type": "done",
+                "interrupted": True,
+                "conversation_id": state.conv_id,
+            })
         except Exception:
             pass
         # 不再 re-raise —— turn 至此安全收尾
@@ -1316,6 +1338,35 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             if msg_type == "interrupt":
                 logger.info("[interrupt] received user=%s", user_id)
                 _request_interrupt(state)
+                continue
+
+            # ── Bug 2 修法(audit_lost_replies.md):character_switch 是纯状态
+            #    同步,不应触发对旧 turn 的 cancel。在 endpoint loop 直接处理:
+            #    更新 ConnectionManager + ack,**让 in-flight turn 继续跑完**,
+            #    跑完按 9039d75 snapshot 投递回原 conv → Rule A "不丢" 兑现。
+            #    与 interrupt 共享同一"提前处理 + continue 跳 task 调度"模式。
+            if msg_type == "character_switch":
+                raw_char = data.get("character_id")
+                raw_conv = data.get("conversation_id")
+                new_char: Optional[int] = (
+                    int(raw_char) if raw_char is not None else None
+                )
+                new_conv: Optional[int] = (
+                    int(raw_conv) if raw_conv is not None else None
+                )
+                connection_manager.set_current(user_id, new_char, new_conv)
+                logger.info(
+                    "[character_switch] user=%s char=%s conv=%s "
+                    "(in-flight turn preserved)", user_id, new_char, new_conv,
+                )
+                try:
+                    await websocket.send_json({
+                        "type": "character_switch_ack",
+                        "character_id": new_char,
+                        "conversation_id": new_conv,
+                    })
+                except Exception:
+                    logger.exception("[character_switch] ack failed")
                 continue
 
             # ── 新一轮：若上一轮还没结束（比如客户端没等 done 直接发了下条）
