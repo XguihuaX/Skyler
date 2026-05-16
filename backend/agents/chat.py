@@ -1095,6 +1095,7 @@ async def _build_messages(
     extra_system: str | None = None,
     skip_short_term: bool = False,
     turn_origin: str = "user",
+    conversation_id: Optional[int] = None,
 ) -> List[dict]:
     """Assemble the full message list to send to the LLM.
 
@@ -1242,7 +1243,9 @@ async def _build_messages(
             ]
             if not skip_short_term:
                 for turn in await short_term_memory.get(
-                    user_id, character_id=character_id,
+                    user_id,
+                    character_id=character_id,
+                    conversation_id=conversation_id,
                 ):
                     messages.append(
                         {"role": turn["role"], "content": turn["content"]}
@@ -1436,7 +1439,9 @@ async def _build_messages(
     messages: List[dict] = [{"role": "system", "content": system_prompt}]
     if not skip_short_term:
         for turn in await short_term_memory.get(
-            user_id, character_id=character_id,
+            user_id,
+            character_id=character_id,
+            conversation_id=conversation_id,
         ):
             messages.append({"role": turn["role"], "content": turn["content"]})
 
@@ -1470,6 +1475,11 @@ class ChatAgent(IAgent):
         character_id: Optional[int] = (
             int(raw_char) if isinstance(raw_char, (int, str)) and str(raw_char).strip() else None
         )
+        # Bug 1 修法:同源 conv_id 用于 short_term 过滤(audit_lost_replies.md)
+        raw_conv = payload.get("conversation_id")
+        conversation_id: Optional[int] = (
+            int(raw_conv) if isinstance(raw_conv, (int, str)) and str(raw_conv).strip() else None
+        )
 
         if not user_id or not text:
             return {
@@ -1484,6 +1494,7 @@ class ChatAgent(IAgent):
                 character_id=character_id,
                 extra_system=extra_system,
                 turn_origin=turn_origin,
+                conversation_id=conversation_id,
             )
 
             reply_parts: List[str] = []
@@ -1552,6 +1563,11 @@ class ChatAgent(IAgent):
         character_id: Optional[int] = (
             int(raw_char) if isinstance(raw_char, (int, str)) and str(raw_char).strip() else None
         )
+        # Bug 1 修法:同源 conv_id 用于 short_term 过滤(audit_lost_replies.md)
+        raw_conv = payload.get("conversation_id")
+        conversation_id: Optional[int] = (
+            int(raw_conv) if isinstance(raw_conv, (int, str)) and str(raw_conv).strip() else None
+        )
 
         if not user_id or not text:
             raise ValueError("payload must contain non-empty user_id and text")
@@ -1563,6 +1579,7 @@ class ChatAgent(IAgent):
                 extra_system=extra_system,
                 skip_short_term=skip_short_term,
                 turn_origin=turn_origin,
+                conversation_id=conversation_id,
             )
 
         prompt_str = json.dumps(messages, ensure_ascii=False)

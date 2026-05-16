@@ -634,10 +634,12 @@ async def _update_memory(
             reply = sanitize_suspicious_tags(reply).strip()
     try:
         await short_term_memory.add(
-            user_id, "user", user_text, character_id=character_id,
+            user_id, "user", user_text,
+            character_id=character_id, conversation_id=conversation_id,
         )
         await short_term_memory.add(
-            user_id, "assistant", reply, character_id=character_id,
+            user_id, "assistant", reply,
+            character_id=character_id, conversation_id=conversation_id,
         )
 
         async with AsyncSessionLocal() as session:
@@ -745,11 +747,13 @@ async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
     try:
         # short-term：被打断的也算一轮（让 LLM 下轮知道说到哪儿了）
         await short_term_memory.add(
-            user_id, "user", state.user_text, character_id=state.char_id,
+            user_id, "user", state.user_text,
+            character_id=state.char_id, conversation_id=state.conv_id,
         )
         if full_reply:
             await short_term_memory.add(
-                user_id, "assistant", full_reply, character_id=state.char_id,
+                user_id, "assistant", full_reply,
+                character_id=state.char_id, conversation_id=state.conv_id,
             )
 
         async with AsyncSessionLocal() as session:
@@ -973,6 +977,9 @@ async def _handle_message(
                 "user_id":      user_id,
                 "text":         text,
                 "character_id": char_id,
+                # Bug 1 修法:ChatAgent 用此 conv_id 过滤 short_term,确保同
+                # character 不同 conversation 的历史不串(audit_lost_replies.md)。
+                "conversation_id": conv_id,
             },
         }
 

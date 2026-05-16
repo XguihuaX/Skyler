@@ -439,20 +439,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             cleaned = _strip_ja_en(msg.content or "").strip()
             if not cleaned:
                 continue
+            # Bug 1 修法:把 chat_history.conversation_id 同步进 short_term
+            # entry,让 get(conversation_id=cur) 能按当前 conv 过滤。重启后
+            # 不同 conv 历史不再串(audit_lost_replies.md 主因 a)。
             await short_term_memory.add(
-                default_uid, msg.role, cleaned, character_id=cid,
+                default_uid, msg.role, cleaned,
+                character_id=cid,
+                conversation_id=msg.conversation_id,
             )
             n_cid += 1
         total_restored += n_cid
         logger.info(
             "Restored %d chat_history turns into short-term memory for "
-            "user=%s char=%s (ja/en tags stripped)",
+            "user=%s char=%s (ja/en tags stripped, conv_id preserved)",
             n_cid, default_uid, cid,
         )
     if char_ids:
         logger.info(
             "[restore] total %d turn(s) across %d character bucket(s) "
-            "(per-char limit=20, ja/en tag stripped at restore)",
+            "(per-char limit=20, ja/en tag stripped, conv-aware)",
             total_restored, len(char_ids),
         )
 

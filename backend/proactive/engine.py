@@ -375,6 +375,8 @@ async def run_trigger(
             "user_id": user_id,
             "text": _PROACTIVE_USER_PROMPT,
             "character_id": target_char_id,
+            # Bug 1 修法:proactive 也按 (user, char, conv) 过滤 short_term。
+            "conversation_id": conv_id,
             "context": {
                 "extra_system": system_prompt,
                 "enable_search": bool(trigger.enable_search),
@@ -584,9 +586,13 @@ async def run_trigger(
         # short-term memory：必须 add，否则用户 VAD 续聊时 ChatAgent 上下文里
         # 看不到这条简报 turn，"把 X 改到下午"等指代会断（spec 验收硬指标）。
         # 路径 7 修法:按 (user_id, target_char_id) 入 bucket,与同用户其他角色隔离。
+        # Bug 1 修法:entry 同时记录 conv_id,让 get() 能按当前 conv 过滤
+        # (proactive 的 conv 是 _get_or_create_conversation 拿到的最近 conv,
+        # 用户后续 VAD 续聊若仍在该 conv 就能看到,切走则自然隐藏)。
         try:
             await short_term_memory.add(
-                user_id, "assistant", full_reply, character_id=target_char_id,
+                user_id, "assistant", full_reply,
+                character_id=target_char_id, conversation_id=conv_id,
             )
         except Exception:
             logger.exception("[proactive] short_term add failed trigger=%s", trigger.name)
@@ -921,8 +927,10 @@ async def run_wake_call_trigger(
     if full_reply:
         try:
             # 路径 7 修法:wake_call 也按 (user, target_char) 入 bucket。
+            # Bug 1 修法:同步记录 conv_id 让 get() 能按 conv 过滤。
             await short_term_memory.add(
-                user_id, "assistant", full_reply, character_id=target_char_id,
+                user_id, "assistant", full_reply,
+                character_id=target_char_id, conversation_id=conv_id,
             )
         except Exception:
             logger.exception("[wake_call] short_term add failed")
