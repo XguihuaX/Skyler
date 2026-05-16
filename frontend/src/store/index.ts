@@ -38,22 +38,53 @@ export interface ChatMessage {
 
 // V2.5-C2 — ConversationList collapse persistence
 const CONV_LIST_COLLAPSED_KEY = 'momoos.convListCollapsed';
+// 方案 1(右侧 chat panel 推拉)— 与 conv list 推拉对称。同样持久化到 localStorage。
+const CHAT_PANEL_COLLAPSED_KEY = 'momoos.chatPanelCollapsed';
 
-function readCollapsedFromStorage(): boolean {
+// M1 Air 小屏降级阈值。视口 inner width < SMALL_VIEWPORT_PX → 默认两侧抽屉
+// 都收起,优先保立绘 + 输入框;用户仍可手动展开。13" M1 Air 默认逻辑分辨率
+// 1280×800,选 1280 作为分界让 13" 起就降级,15" 之上正常 expand。
+export const SMALL_VIEWPORT_PX = 1280;
+
+function readBoolStorage(key: string, defaultVal: boolean): boolean {
   try {
-    const raw = localStorage.getItem(CONV_LIST_COLLAPSED_KEY);
-    return raw === 'true';
+    const raw = localStorage.getItem(key);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    return defaultVal;
   } catch {
-    return false;
+    return defaultVal;
   }
 }
 
-function writeCollapsedToStorage(v: boolean): void {
+function writeBoolStorage(key: string, v: boolean): void {
   try {
-    localStorage.setItem(CONV_LIST_COLLAPSED_KEY, v ? 'true' : 'false');
+    localStorage.setItem(key, v ? 'true' : 'false');
   } catch {
     // localStorage unavailable (private mode / disabled) — silently ignore
   }
+}
+
+function initialCollapsedDefault(): boolean {
+  // 小屏首次启动两侧默认收起。已有持久化值 → 尊重用户上次选择。
+  if (typeof window === 'undefined') return false;
+  return window.innerWidth < SMALL_VIEWPORT_PX;
+}
+
+function readCollapsedFromStorage(): boolean {
+  return readBoolStorage(CONV_LIST_COLLAPSED_KEY, initialCollapsedDefault());
+}
+
+function writeCollapsedToStorage(v: boolean): void {
+  writeBoolStorage(CONV_LIST_COLLAPSED_KEY, v);
+}
+
+function readChatPanelCollapsedFromStorage(): boolean {
+  return readBoolStorage(CHAT_PANEL_COLLAPSED_KEY, initialCollapsedDefault());
+}
+
+function writeChatPanelCollapsedToStorage(v: boolean): void {
+  writeBoolStorage(CHAT_PANEL_COLLAPSED_KEY, v);
 }
 
 // V2.5-D — start-up mode persistence. First-run default is 'panel' so a fresh
@@ -174,6 +205,11 @@ interface AppState {
   // ConversationList 折叠状态（持久化到 localStorage）
   conversationListCollapsed: boolean;
   setConversationListCollapsed: (v: boolean) => void;
+
+  // 方案 1：右侧 ChatHistoryPanel 折叠状态（与左侧 conv list 推拉对称,
+  // 持久化到 localStorage,M1 Air 小屏首次启动默认收起）
+  chatPanelCollapsed: boolean;
+  setChatPanelCollapsed: (v: boolean) => void;
 
   // 诊断用：用户最近一次发送 user message 的 performance.now() 时间戳
   // 仅前端 in-memory，所有前端 WS 接收 timer 都相对它计算 elapsed
@@ -377,6 +413,12 @@ export const useAppStore = create<AppState>((set) => ({
   setConversationListCollapsed: (conversationListCollapsed) => {
     writeCollapsedToStorage(conversationListCollapsed);
     set({ conversationListCollapsed });
+  },
+
+  chatPanelCollapsed: readChatPanelCollapsedFromStorage(),
+  setChatPanelCollapsed: (chatPanelCollapsed) => {
+    writeChatPanelCollapsedToStorage(chatPanelCollapsed);
+    set({ chatPanelCollapsed });
   },
 
   lastSendTimestamp: 0,

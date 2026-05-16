@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Circle, UserRound } from 'lucide-react';
 import { useAppStore } from '../store';
 import { useAppApi } from '../contexts/appApi';
-import { fetchConversations, createConversation } from '../lib/config';
+import {
+  fetchConversations,
+  createConversation,
+  fetchMessages,
+} from '../lib/config';
 
 /**
  * Compact character switcher placed in TopBar.
@@ -24,6 +28,7 @@ export default function CharacterSwitcher() {
   const currentCharacterId = useAppStore((s) => s.currentCharacterId);
   const setCurrentCharacterId = useAppStore((s) => s.setCurrentCharacterId);
   const setCurrentConversationId = useAppStore((s) => s.setCurrentConversationId);
+  const setChatMessages    = useAppStore((s) => s.setChatMessages);
   const userId             = useAppStore((s) => s.defaultUserId);
   const setPanelView       = useAppStore((s) => s.setPanelView);
   const { sendCharacterSwitch } = useAppApi();
@@ -119,6 +124,7 @@ export default function CharacterSwitcher() {
                         setOpen(false);
                         (async () => {
                           let convId: number | null = null;
+                          let isNewConv = false;
                           try {
                             const convs = await fetchConversations(userId, c.id);
                             if (convs.length > 0) {
@@ -128,6 +134,7 @@ export default function CharacterSwitcher() {
                                 userId, c.id, '新对话',
                               );
                               convId = created.id;
+                              isNewConv = true;
                             }
                             setCurrentConversationId(convId);
                           } catch (err) {
@@ -137,6 +144,32 @@ export default function CharacterSwitcher() {
                             );
                             // 回退:留 conv=null,backend ``_resolve_conv_char``
                             // 兜底走最近 conv;set_current 仍发,至少 char 同步。
+                          }
+                          // 加载该 conversation 完整消息列表到 chatMessages
+                          // — Galgame 中央右侧 ChatHistoryPanel 显示。
+                          // 新建对话 / 无对话 → 空数组(ChatHistory 自带"开始
+                          // 一段对话吧"空状态 + 引导)。
+                          if (convId !== null && !isNewConv) {
+                            try {
+                              const msgs = await fetchMessages(convId);
+                              setChatMessages(msgs.map((r) => ({
+                                id: `s-${r.id}`,
+                                role: r.role,
+                                content: r.content,
+                                streaming: false,
+                                ts: 0,
+                                kind: r.kind ?? 'normal',
+                                proactiveTrigger: r.proactive_trigger ?? undefined,
+                              })));
+                            } catch (err) {
+                              console.error(
+                                '[CharacterSwitcher] fetchMessages failed',
+                                err,
+                              );
+                              setChatMessages([]);
+                            }
+                          } else {
+                            setChatMessages([]);
                           }
                           sendCharacterSwitch(c.id, convId);
                         })();

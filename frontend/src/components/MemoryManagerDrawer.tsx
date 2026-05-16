@@ -112,8 +112,8 @@ interface Props {
 /**
  * Right-side slide-in drawer for managing the long-term memory list.
  *
- * - Always mounted; opening/closing toggles translate-x for the same slide
- *   animation as ChatHistoryDrawer.
+ * - Always mounted; opening/closing toggles translate-x for the slide
+ *   animation.
  * - pt-10 keeps the header below TopBar (z-50) so the drawer × never
  *   overlaps the global app-close button.
  * - Type filter is purely client-side (useMemo) — backend always returns the
