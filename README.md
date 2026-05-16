@@ -2,9 +2,9 @@
 
 > A hackable AI companion framework — bring your own LLM, your own Live2D model, your own MCP tools. The agent core gives you a foundation. The rest is yours to sculpt.
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/v4--alpha-✅%20shipped-success)
+![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/v4--beta-🚧%20wrapping%20up-orange)
 
-> **Latest**: v4-alpha (May 2026) — Activity Timeline + tool-call transition UX + Live2D-aware fade overlay. See [ROADMAP](ROADMAP.md) for what's shipped and what's next.
+> **Latest**: v4-beta (May 2026) — Persona Engineering five-layer framework + memory/conversation isolation fixes + conversation-anchored binding semantics + unified chat UI. Currently focused on **Mai as a single-character, Chinese-only companion** (other characters land in v4.1). See [ROADMAP](ROADMAP.md).
 >
 > *Project formerly known as MomoOS — renamed to Skyler in 2026-05.*
 
@@ -19,6 +19,28 @@ Skyler is a desktop AI agent with a Live2D character interface. Unlike pre-packa
 If you've ever wanted an AI companion that's actually *yours* — running locally, speaking with your character, calling your tools — Skyler is for you.
 
 The character isn't decoration. Persona-level state (mood, recent thoughts, relationship intimacy) persists across sessions; the agent can call any tool you register and any MCP server you connect; the avatar reacts to what it says and what you do on screen. None of these layers are locked.
+
+---
+
+## ⚠️ v4-beta Status (2026-05)
+
+v4-beta is a **wrap-up phase** — the goal is one character done solidly before shipping, not seven half-built ones.
+
+**Currently focused on Mai (`cid=1`, riding the Momo shell + Hiyori model, with a Sakurajima Mai persona core) as a single-character, Chinese-only companion.**
+
+Fixed and verified on-device this cycle:
+
+- **Reverted to Chinese-only** — the Japanese-voice pipeline (alternating `<ja>` tag synthesis) never reached stable quality across several iterations; v4.0.0 reverts Mai to Chinese-only (persona untouched, only the voice path changes). Japanese voice returns in v4.1 via a **post-processing translation architecture** (LLM emits Chinese → translate before TTS → synthesize) done right once. The ja-chain code is fully preserved but dormant.
+- **Memory/conversation cross-talk fixed** — short-term memory upgraded from user-only slicing to **(user, character, conversation)** three-level isolation + conversation-filtered restore on restart. "Switch to Yae but it says it's Mai" and "deleted the conversation, restarted, still remembers old context" are both resolved.
+- **Conversation-anchored binding** — switching character = switch to that character's latest conversation (or create one). **Rule A**: a user-initiated turn locks its conversation at send time; the response is delivered back to the originating conversation unconditionally (not dropped even if you switch away mid-flight). **Rule B**: a system-initiated proactive message snapshots its conversation at trigger time and is validated before delivery; stale ones are dropped. `character_switch` no longer kills the in-flight turn.
+- **Unified chat UI** — the separate top-right "history" entry and the old fading dialogue bubble are both removed; conversation content is served by a single **left-side push/pull chat panel**; left conversation-list + right chat-panel both push/pull, both collapsed = pure-avatar Galgame immersion; window <1280px auto-degrades layout.
+- **Token cost control** — short-term memory hard-capped at the last 30 turns; tool-result injection truncated to 4000 chars. Multi-round tool calls no longer push a single request to tens of thousands of tokens.
+
+**Known limitations (listed honestly — this is the roadmap):**
+
+- Other characters (Yae Miko etc., `cid=2/3/...`) are currently **empty skeletons** with no full persona; switching to them feels hollow. v4.1 (F1) fills real personas one by one.
+- **Long-term memory chain under v4.0.0 audit** — the wrap-up audit found 0 rows in the `memory` table for the default user; whether the long-term fact-extraction chain actually fires is being investigated. This means the character may "forget" content older than the 30-turn window. This is a v4.0.0 must-fix, not v4.1. The "Memory & Personality" section below flags this status honestly. **The failing `test_long_term` test is the live repro for this — it is the v4.0.0 audit's step-0 entry point, NOT one of the v4.1 "pre-existing" import-broken tests. (The "7 pre-existing test failures" line under Known Problems is a 2026-05-11 historical record covering import-dead tests test_chat_agent/test_database/… — `test_long_term` is a separate, v4.0.0-critical case and must not be read as "v4.1 / unrelated".)**
+- LLM first-response is slow (still 5–10s with VPN off) — an independent model + network performance issue. With binding semantics locked, "slow" and "cross-talk" are now decoupled; slowness degrades to a pure UX concern, optimized separately later.
 
 ---
 
@@ -56,7 +78,11 @@ Your AI character becomes a node in the MCP ecosystem, not an island.
 
 Most agent frameworks track task state. Skyler also tracks **character state** — LLM-driven accumulation of mood, attention, current activity, recent thoughts, relationship intimacy. The state isn't a hardcoded prompt; it evolves as you interact.
 
-This is what makes Momo feel like a specific person rather than a generic tool. It's also the foundation for the long-term roadmap item we care most about: persona-level learning (the character grows with you, not just gets more capable).
+This is what makes Momo / Mai feel like a specific person rather than a generic tool. It's also the foundation for the long-term roadmap item we care most about: persona-level learning (the character grows with you, not just gets more capable).
+
+### 4. Persona Engineering five-layer framework (v4-beta)
+
+A character definition is not a blob of free text. v4-beta introduces a five-layer prompt framework (format contract / mode / persona / context / dialogue) + a multi-variant persona schema, Tier-1 (identity / personality / speech style) + Tier-2 (taboo / lore / emotion triggers / voice samples). Mai is the reference implementation of this framework (full Tier-1+2, see `docs/mai_prompt.md`).
 
 ---
 
@@ -66,7 +92,7 @@ This is what makes Momo feel like a specific person rather than a generic tool. 
 |---|---|---|---|
 | Form factor | Desktop + Live2D | Desktop + Live2D | CLI + messaging gateway |
 | Hackability | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ |
-| Character system | ⭐⭐⭐⭐ persona + state machine | ⭐⭐⭐ Live2D + persona | ❌ |
+| Character system | ⭐⭐⭐⭐ persona five-layer framework + state machine | ⭐⭐⭐ Live2D + persona | ❌ |
 | Proactive engagement | ⭐⭐⭐⭐ broadcast + trigger pack | ❌ reactive only | ⭐⭐⭐ cron |
 | MCP integration | ✅ bidirectional | ✅ client only | ✅ workspace |
 | Self-improving learning | ❌ on roadmap | ❌ | ⭐⭐⭐⭐⭐ |
@@ -143,15 +169,19 @@ Here's what Skyler currently does. None of these are locked — every layer is b
 - **ASR result preview** — recognized text shown above input box in real time via `asr_result` WS message; persists into chat history
 - **Streaming output** — text and audio arrive sentence by sentence
 - **TTS** — CosyVoice (DashScope, default) → Edge-TTS fallback; per-character `voice_model` config; SoVITS planned
+  - **v4-beta**: the focus character Mai is reverted to **Chinese-only** (Chinese voice `longyumi_v3`). The Japanese-voice path (alternating `<ja>` synthesis) is kept in code but dormant; v4.1 redoes it via a post-processing translation architecture (LLM emits Chinese → qwen-turbo translates before TTS → CosyVoice), removing the "LLM self-alternates ja tags in real time" uncertainty from the chain entirely.
 - **Auto-mute mic** when the assistant is speaking (prevents feedback loop)
-- **Tool-call transition** — when the agent calls a tool, it first emits a short transition line ("let me check…") and the input area shows a contextual loading pill ("checking calendar…") so you're never left wondering whether it's frozen. chunk 14 producer/consumer + chunk 6b TTS pipeline 已实现 sentence-by-sentence streaming,经 chunk 15 实测验证体感流畅
+- **Tool-call transition** — when the agent calls a tool, it first emits a short transition line ("let me check…") and the input area shows a contextual loading pill ("checking calendar…") so you're never left wondering whether it's frozen. chunk 14 producer/consumer + chunk 6b TTS pipeline implement sentence-by-sentence streaming, verified smooth on-device in chunk 15.
 
 ### 🧠 Memory & Personality (three layers)
-- **Layer 1 — short-term** — `chat_history` table, organized by `conversation_id`; the agent picks the last N turns; also the sole input source for the Layer 2 worker
-- **Layer 2 — long-term facts** — `memory` table, populated by a **server-side worker** (`MemoryExtractor`, runs every 5 min, 10-stage quality filter, 4-category `entry_type`, 4-state `extraction_source` provenance tag). The `save_memory` tool is demoted to "user explicitly asked to remember." Retrieval uses a forgetting-curve score `score = relevance * (1+log(1+ac)) / (1+age*decay)` with threshold gate and cross-character sharing.
-- **Layer 3 — user profile** — `users.profile_data` JSON schema (`profession` / `current_projects` / `interests` / `recurring_topics` / `communication_style` / `active_hours` / `language_preferences`). A strict validator hard-rejects projection language; legacy `profile_summary` kept as fallback; daily cron regenerates from chat history.
-- **Activity timeline** — parallel to `chat_history`: every app/URL session you have (with idle-filtered duration) gets persisted. Momo can reference today's activity in conversation ("looks like you spent 3h in VS Code — same project as yesterday?"). 30-day retention by default.
-- **Memory viewer drawer** — `entry_type` tab (fact / preference / event / commitment) + `extraction_source` badge (auto / explicit / manual / legacy) + confidence display
+
+> **v4-beta audit note**: the Layer 2 (long-term facts) write path was found to have **0 rows** for the default user during the v4-beta wrap-up audit. Whether the extraction worker actually fires and writes successfully is a v4.0.0 must-check. Until the audit concludes, long-term memory **may not be active** and the character will forget content older than 30 turns. The prose below describes design intent, but treat this note as the current real state.
+
+- **Layer 1 — short-term** — in-process short-term buffer, isolated by **(user, character, conversation)** three levels, last N turns per turn (hard-capped at the last 30 turns for token cost control); on restart, restored from the `chat_history` table **filtered by conversation** (no longer cross-conversation / cross-character bleed)
+- **Layer 2 — long-term facts** — `memory` table, designed main write path is a server-side worker (`MemoryExtractor`, runs every 5 min, 10-stage quality filter, 4-category `entry_type`, 4-state `extraction_source` provenance tag); the `save_memory` tool is the "user explicitly asked to remember" entry; retrieval uses a forgetting-curve score `score = relevance * (1+log(1+ac)) / (1+age*decay)` with threshold gate. **⚠️ See audit note above: this chain is under v4.0.0 audit, currently writing 0 rows.**
+- **Layer 3 — user profile** — `users.profile_data` JSON schema (`profession` / `current_projects` / `interests` / `recurring_topics` / `communication_style` / `active_hours` / `language_preferences`). A strict validator hard-rejects projection language; legacy `profile_summary` kept as fallback; daily cron regenerates. **User profile is shared across characters (one impression of you); per-character isolation of event/relationship-type long-term memory (the F8 ownership tiering) is a v4.1 multi-character item.**
+- **Activity timeline** — parallel to `chat_history`: every app/URL session you have (with idle-filtered duration) gets persisted. The character can reference today's activity in conversation ("looks like you spent 3h in VS Code — same project as yesterday?"). 30-day retention by default.
+- **Memory / conversation viewer** — unified into the **left-side push/pull chat panel** (v4-beta UI unification, see below); `entry_type` tab (fact / preference / event / commitment) + `extraction_source` badge + confidence display
 - **Memory toggles** — long-term memory, profile, activity awareness, web search, activity timeline — each independently switchable in Settings
 
 ### 🤖 Multi-Agent Intelligence
@@ -160,11 +190,20 @@ Here's what Skyler currently does. None of these are locked — every layer is b
 - **LiteLLM unified LLM** — DeepSeek / Qwen / OpenAI / Claude (config switchable)
 - **Web search** — model-native (Qwen Max / DeepSeek), toggled via `enable_search`
 
-### 🎭 Multi-Character Conversations
-- **Per-character isolation** — every character has its own conversations + memory; user profile is shared across characters (one impression of you)
-- **Conversation list** — collapsible sidebar with rename / delete; deleting triggers profile recompute
-- **Character switcher** — dropdown in TopBar, full CRUD via `CharacterManagerDrawer` (Momo / `id=1` is system default and cannot be deleted)
+### 🎭 Multi-Character Conversations (conversation-anchored)
+- **Conversation-anchored** — switching character = switch to that character's **latest conversation** (or create one); one conversation is 1:1 bound to one character; character identity is derived from the conversation
+- **Rule A (user-initiated)** — a turn locks its conversation the moment it's sent, and the response stays bound to that conversation for its whole lifecycle; even if you switch away mid-flight, the reply is delivered back to the originating conversation unconditionally (not dropped)
+- **Rule B (system-initiated)** — a proactive message snapshots its conversation at trigger time and is validated before delivery; if it's stale (you've switched away) it is silently dropped, never surfacing in the wrong conversation
 - **Per-character voice** — `character.voice_model` JSON: `{provider, voice, instruct_supported}`; empty falls back to global default
+- **Known limitation** — v4-beta only Mai (`cid=1`) has a full persona; other characters are empty skeletons, filled one by one in v4.1 (F1)
+
+### 🎨 Chat UI (v4-beta unified)
+
+v4-beta collapses the split conversation/history entries into one:
+
+- The separate top-right "history" entry **is removed**; the old fading dialogue bubble **is removed** (had bugs + overlapped chat-panel function).
+- Conversation content is served by a single **left-side push/pull chat panel** (full chat log of the current conversation).
+- Left conversation-list + right chat-panel **both push/pull**; switching character auto-loads that character's latest conversation content (empty state with prompt if none); both collapsed = pure-avatar Galgame immersion; window <1280px auto-degrades layout.
 
 ### 🎨 UI: 8-Theme System
 Settings → UI lets you switch between:
@@ -188,6 +227,7 @@ All components use `var(--color-*)` from `styles/themes.css` (no hardcoded Tailw
 - **Trigger pack** — wake_call / lunch_call / dinner_call / bedtime_chat / long_idle / morning_briefing — Momo reaches out when it matters, not on every poll
 - **Activity-based triggers** — `ide_open` / `music_playing` / `long_focus` / `url_tech_doc` / `late_night_ide` — fast-path classification on context, with a slow-path LLM judge for ambiguous cases (5+ min dwell, multi-gate throttle, daily cap, idle gate so it stops when you walk away)
 - **Invite-conversation pattern** — proactive isn't just push; the trigger can open a short greeting and wait for your response, then route into a regular conversation
+- **Binding guarantee (v4-beta)** — proactive messages follow Rule B: validated against the current conversation before delivery; once you switch away, stale messages are silently dropped and never surface in the wrong character's conversation
 
 ### 🛠 Tool ecosystem
 - **Calendar** — Apple EventKit (default, zero-network) + Google Calendar (optional)
@@ -215,13 +255,16 @@ User input (voice / text)
 
   → ASR        faster-whisper (backend) → asr_result pushed to frontend
   → ChatAgent  context assembly + LiteLLM tool calling
+                ├─ short_term: (user, character, conversation) 3-level isolation, cap 30 turns
                 ├─ memory tools: save / delete / list / compress (LLM-driven)
                 ├─ built-in tools: ToolRegistry (MCP-extensible)
                 ├─ capabilities: @register_capability auto-injects into ToolRegistry
                 └─ web search: model-native (Qwen Max / DeepSeek)
   → emotion    first sentence parses <emotion>X</emotion> → locks turn emotion
   → TTS        get_tts_engine(voice_model) → CosyVoice / Edge / SoVITS
+                (v4-beta Mai = Chinese-only path)
   → Output:    streamed text chunks + per-sentence audio chunks + asr_result preview
+                (delivered to the originating conversation, Rule A/B)
 
 Capability Registry:
   @register_capability decorator → CapabilityRegistry singleton
@@ -251,6 +294,12 @@ Persona-level state:
   daily intimacy_decay cron
   shared user profile (cross-character impression of you)
 
+Conversation-anchored binding:
+  switch character → that character's latest conversation (or new); identity derived from conversation
+  Rule A: user-initiated → lock conversation at send, response delivered back unconditionally (not dropped)
+  Rule B: system-initiated → snapshot at trigger, validate current conversation before delivery, drop if stale
+  character_switch not in turn scheduler → never kills the in-flight reply
+
 Activity timeline:
   ActivityWatcher (30s poll)
     → (app, url, idle_flag) tuple change → session boundary
@@ -265,7 +314,7 @@ Activity timeline:
 
 - **Backend**: Python 3.10 / FastAPI / SQLAlchemy (async) / APScheduler / LiteLLM / faster-whisper / sentence-transformers / pyobjc (macOS-only bits)
 - **Frontend**: Tauri 2 / React 18 / TypeScript / Vite / Tailwind / Zustand / lucide-react / pixi-live2d-display (Cubism 3 + 4)
-- **TTS**: CosyVoice (DashScope) primary / Edge-TTS fallback / SoVITS planned
+- **TTS**: CosyVoice (DashScope) primary / Edge-TTS fallback / SoVITS planned (v4-beta Mai = Chinese-only)
 - **ASR**: faster-whisper (local)
 - **LLM**: LiteLLM (Qwen / DeepSeek / OpenAI / Claude / local Ollama — config switchable)
 - **DB**: SQLite + Alembic migrations
@@ -351,6 +400,7 @@ Local Ollama models, on-prem deployments, custom endpoints — all one config fi
 - Skyler does **not** ship messaging gateways (Telegram / Discord / etc). On the medium-term roadmap. Today, Skyler is desktop-only.
 - Skyler does **not** export your conversation data as training data. On the long-term roadmap as a "train your own small model on your character" capability.
 - Skyler is **not** competing with general-purpose agent frameworks like LangChain or AutoGen. It's specifically a *character-driven desktop agent*. If you don't want the character layer, you don't want Skyler.
+- v4-beta does **not** open the full multi-character experience yet — currently focused on Mai as a single Chinese-only character. Other characters' personas, Japanese voice, and the long-term memory chain are all v4.0.0/v4.1 wrap-up items, listed honestly in "v4-beta Status" above and in the roadmap.
 
 We list these honestly because the gaps matter. They're also the roadmap.
 
@@ -358,9 +408,10 @@ We list these honestly because the gaps matter. They're also the roadmap.
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the full picture, organized around four pillars:
+See [ROADMAP.md](ROADMAP.md) for the full picture.
 
-- **Current focus**: making hackability genuinely easy (skill docs, Live2D swap guide, plugin registry seedling)
+- **v4.0.0 wrap-up (in progress)**: long-term memory chain audit → TTS per-user daily char cap + main-chat throttle → Stage3 Tauri packaging / dmg / dogfood / tag
+- **v4.1**: ja post-processing translation redo (F0) / seven real character personas (F1) / long-term memory ownership tiering (F8) / "Memory Architecture v2" (one permanent conversation stream per character + RAG) / switch-character conversation linkage cleanup (F2) / LLM performance / CosyVoice weak-network timeout / test-debt cleanup
 - **Medium-term**: filling the honest gaps above (messaging gateway, training data export, capability marketplace)
 - **Long-term**: persona-level learning (`character_states` that actually grow)
 - **Long-vision**: a small, loyal hobbyist ecosystem around hackable AI characters on the desktop
@@ -524,7 +575,9 @@ Where they're ahead of Skyler today is in [Comparison](#comparison) above — li
 
 ## Project Status
 
-v4-alpha shipped May 2026. Activity timeline + tool-call transition UX + Live2D-aware fade overlay are live. The full implementation log (every chunk, hotfix, UX iteration) lives in [ROADMAP.md](ROADMAP.md) — that's the honest history. The current focus is making Skyler's hackability genuinely easy for the next contributor, not just the original author.
+**v4-beta wrap-up phase (May 2026).** Persona Engineering five-layer framework + memory/conversation three-level isolation + conversation-anchored binding semantics + unified chat UI are shipped and verified on-device. Currently focused on Mai as a single-character, Chinese-only companion.
+
+Remaining v4.0.0 wrap-up items: long-term memory chain audit (critical — see the memory audit note above) → TTS/conversation cost gates → Stage3 packaging & release. The full implementation log (every chunk, hotfix, UX iteration) lives in [ROADMAP.md](ROADMAP.md) — that's the honest history.
 
 ---
 
