@@ -138,7 +138,7 @@ from backend.database.migrations.v4_0_0_conversation_summary import (
 )
 from backend.database.services import create_user, get_user
 from backend.memory import long_term as long_term_memory
-from backend.memory.short_term import short_term_memory
+from backend.memory.short_term import short_term_memory, SHORT_TERM_MAX
 from backend.routes.activity_api import router as activity_router
 from backend.routes.backgrounds_api import router as backgrounds_router
 from backend.routes.briefing_api import router as briefing_router
@@ -418,7 +418,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     #      短期记忆 ja precedent 让 LLM in-context-learning 继续抄。restore 阶段
     #      就把 tag 剥掉,纯中文 inner 保留(``strip_ja_en_tags_for_subtitle`` 只
     #      删 ja/en 包裹,中文正文 / 其他 meta tag 不动)。
-    # 通过 chat_history.character_id 列查 distinct char,逐 char 拉 limit=20 最近
+    # 通过 chat_history.character_id 列查 distinct char,逐 char 拉
+    # ``SHORT_TERM_MAX`` 条最近(与 short_term.add 的 trim cap 同一常量,
+    # 保证重启冷启动 bucket = 稳态 bucket,与 fold cap_cutoff 接缝无 gap)。
     # 然后 add(user, role, cleaned_content, character_id=cid)。
     from sqlalchemy import distinct as _distinct, select as _select
     from backend.database.models import ChatHistory as _ChatHistory
@@ -443,7 +445,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                        else _ChatHistory.character_id == cid)
                 .order_by(
                     _ChatHistory.created_at.desc(), _ChatHistory.id.desc(),
-                ).limit(20)
+                ).limit(SHORT_TERM_MAX)
             )).scalars().all()
         rows = list(reversed(list(rows)))
         n_cid = 0
