@@ -522,8 +522,11 @@ async def run_trigger(
     if full_reply:
         # short-term memory：必须 add，否则用户 VAD 续聊时 ChatAgent 上下文里
         # 看不到这条简报 turn，"把 X 改到下午"等指代会断（spec 验收硬指标）。
+        # 路径 7 修法:按 (user_id, target_char_id) 入 bucket,与同用户其他角色隔离。
         try:
-            await short_term_memory.add(user_id, "assistant", full_reply)
+            await short_term_memory.add(
+                user_id, "assistant", full_reply, character_id=target_char_id,
+            )
         except Exception:
             logger.exception("[proactive] short_term add failed trigger=%s", trigger.name)
 
@@ -856,7 +859,10 @@ async def run_wake_call_trigger(
     full_reply = _strip_format_tags("".join(reply_parts))
     if full_reply:
         try:
-            await short_term_memory.add(user_id, "assistant", full_reply)
+            # 路径 7 修法:wake_call 也按 (user, target_char) 入 bucket。
+            await short_term_memory.add(
+                user_id, "assistant", full_reply, character_id=target_char_id,
+            )
         except Exception:
             logger.exception("[wake_call] short_term add failed")
 

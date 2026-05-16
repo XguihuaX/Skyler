@@ -579,8 +579,8 @@ async def _update_memory(
             )
             reply = sanitize_suspicious_tags(reply).strip()
     try:
-        await short_term_memory.add(user_id, "user",      user_text)
-        await short_term_memory.add(user_id, "assistant", reply)
+        await short_term_memory.add(user_id, "user",      user_text, character_id=char_id)
+        await short_term_memory.add(user_id, "assistant", reply, character_id=char_id)
 
         async with AsyncSessionLocal() as session:
             if not skip_user_history:
@@ -686,9 +686,13 @@ async def _save_interrupted_turn(state: "_TurnState", user_id: str) -> None:
 
     try:
         # short-term：被打断的也算一轮（让 LLM 下轮知道说到哪儿了）
-        await short_term_memory.add(user_id, "user", state.user_text)
+        await short_term_memory.add(
+            user_id, "user", state.user_text, character_id=state.char_id,
+        )
         if full_reply:
-            await short_term_memory.add(user_id, "assistant", full_reply)
+            await short_term_memory.add(
+                user_id, "assistant", full_reply, character_id=state.char_id,
+            )
 
         async with AsyncSessionLocal() as session:
             if not state.user_history_already_written:

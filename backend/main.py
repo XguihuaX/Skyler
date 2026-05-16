@@ -132,7 +132,7 @@ from backend.database.migrations.v4_persona_segment2_ensure_defaults import (
 from backend.database.migrations.v4_0_0_mai_revert_zh import (
     run_migration as migrate_v4_0_0_mai_revert_zh,
 )
-from backend.database.services import create_user, get_chat_history, get_user
+from backend.database.services import create_user, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
 from backend.routes.activity_api import router as activity_router
@@ -398,15 +398,62 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("Default user already exists: %s", default_uid)
 
     # ── 3. Restore short-term memory from chat_history ───────────────────────
-    async with AsyncSessionLocal() as session:
-        history = await get_chat_history(session, default_uid, limit=20)
+    # 路径 7 修法(audit_role_switch.md / audit_ja_persist.md):
+    #   1. **按 character_id 分桶 restore** —— 不再把跨角色历史搅在一个 user bucket
+    #      (旧实现 limit=20 by user_id only 会把 cid=1 Mai 历史装回去,切到 cid=2
+    #       八重也看到,触发"我是麻衣"持续 bug)。
+    #   2. **剥离 ``<ja>``/``<en>`` 历史 tag** —— audit_ja_persist 三定位收敛根因:
+    #      短期记忆 ja precedent 让 LLM in-context-learning 继续抄。restore 阶段
+    #      就把 tag 剥掉,纯中文 inner 保留(``strip_ja_en_tags_for_subtitle`` 只
+    #      删 ja/en 包裹,中文正文 / 其他 meta tag 不动)。
+    # 通过 chat_history.character_id 列查 distinct char,逐 char 拉 limit=20 最近
+    # 然后 add(user, role, cleaned_content, character_id=cid)。
+    from sqlalchemy import distinct as _distinct, select as _select
+    from backend.database.models import ChatHistory as _ChatHistory
+    from backend.utils.text_filters import (
+        strip_ja_en_tags_for_subtitle as _strip_ja_en,
+    )
 
-    if history:
-        for msg in history:
-            await short_term_memory.add(default_uid, msg.role, msg.content)
+    async with AsyncSessionLocal() as session:
+        char_id_rows = (await session.execute(
+            _select(_distinct(_ChatHistory.character_id))
+            .where(_ChatHistory.user_id == default_uid)
+        )).all()
+    char_ids = [r[0] for r in char_id_rows]
+
+    total_restored = 0
+    for cid in char_ids:
+        async with AsyncSessionLocal() as session:
+            rows = (await session.execute(
+                _select(_ChatHistory)
+                .where(_ChatHistory.user_id == default_uid)
+                .where(_ChatHistory.character_id.is_(cid) if cid is None
+                       else _ChatHistory.character_id == cid)
+                .order_by(
+                    _ChatHistory.created_at.desc(), _ChatHistory.id.desc(),
+                ).limit(20)
+            )).scalars().all()
+        rows = list(reversed(list(rows)))
+        n_cid = 0
+        for msg in rows:
+            cleaned = _strip_ja_en(msg.content or "").strip()
+            if not cleaned:
+                continue
+            await short_term_memory.add(
+                default_uid, msg.role, cleaned, character_id=cid,
+            )
+            n_cid += 1
+        total_restored += n_cid
         logger.info(
-            "Restored %d chat_history turns into short-term memory for user %s",
-            len(history), default_uid,
+            "Restored %d chat_history turns into short-term memory for "
+            "user=%s char=%s (ja/en tags stripped)",
+            n_cid, default_uid, cid,
+        )
+    if char_ids:
+        logger.info(
+            "[restore] total %d turn(s) across %d character bucket(s) "
+            "(per-char limit=20, ja/en tag stripped at restore)",
+            total_restored, len(char_ids),
         )
 
     # ── 4. Preload local models (embedding + whisper) ────────────────────────

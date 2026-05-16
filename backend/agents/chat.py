@@ -1241,7 +1241,9 @@ async def _build_messages(
                 {"role": "system", "content": system_prompt}
             ]
             if not skip_short_term:
-                for turn in await short_term_memory.get(user_id):
+                for turn in await short_term_memory.get(
+                    user_id, character_id=character_id,
+                ):
                     messages.append(
                         {"role": turn["role"], "content": turn["content"]}
                     )
@@ -1433,7 +1435,9 @@ async def _build_messages(
     # 覆盖时输出 100+ 字）。普通 chat / stage 2 仍走全量短期记忆。
     messages: List[dict] = [{"role": "system", "content": system_prompt}]
     if not skip_short_term:
-        for turn in await short_term_memory.get(user_id):
+        for turn in await short_term_memory.get(
+            user_id, character_id=character_id,
+        ):
             messages.append({"role": turn["role"], "content": turn["content"]})
 
     # ---- Current user input ----
