@@ -471,8 +471,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if char_ids:
         logger.info(
             "[restore] total %d turn(s) across %d character bucket(s) "
-            "(per-char limit=20, ja/en tag stripped, conv-aware)",
-            total_restored, len(char_ids),
+            "(per-char limit=%d, ja/en tag stripped, conv-aware)",
+            total_restored, len(char_ids), SHORT_TERM_MAX,
         )
 
     # ── 4. Preload local models (embedding + whisper) ────────────────────────
