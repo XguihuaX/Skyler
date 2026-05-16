@@ -321,6 +321,43 @@ async def run_trigger(
                 "error": "no character resolvable",
             }
 
+    # Rule B(绑定语义)— 触发时刻 snapshot,本函数全程使用此值。
+    target_char_id_at_trigger: int = int(target_char_id)
+
+    # Rule B early gate:LLM 调用前先校验。若 ``ConnectionManager`` 里
+    # 用户当前 UI 角色 != 触发目标角色 → 直接 drop,不浪费 LLM 调用
+    # (20-50s 成本)。配合 frontend ``character_switch`` 帧,这一关能
+    # 拦下绝大多数"触发了错角色"场景。
+    _conn_state = _ws.connection_manager.get_current(user_id)
+    if _conn_state is None:
+        logger.debug(
+            "[proactive] drop trigger=%s target_char=%s: no active connection",
+            trigger.name, target_char_id_at_trigger,
+        )
+        return {
+            "text": "",
+            "character_id": target_char_id_at_trigger,
+            "conversation_id": None,
+            "proactive_trigger": trigger.name,
+            "audio_bytes": 0,
+            "dropped": "no_connection",
+        }
+    _cur_char_id, _cur_conv_id = _conn_state
+    if _cur_char_id is not None and _cur_char_id != target_char_id_at_trigger:
+        logger.debug(
+            "[proactive] drop trigger=%s target_char=%s cur_char=%s — "
+            "user on different character, early gate fired",
+            trigger.name, target_char_id_at_trigger, _cur_char_id,
+        )
+        return {
+            "text": "",
+            "character_id": target_char_id_at_trigger,
+            "conversation_id": None,
+            "proactive_trigger": trigger.name,
+            "audio_bytes": 0,
+            "dropped": "character_mismatch_early",
+        }
+
     conv_id = await _get_or_create_conversation(user_id, target_char_id)
 
     # ── system prompt 拼接 ──────────────────────────────────────────────
@@ -510,6 +547,30 @@ async def run_trigger(
         for t in pending_tts:
             if not t.done():
                 t.cancel()
+
+    # Rule B late gate(执行完投递前校验)— LLM 流式过程中用户可能切走。
+    # 若 ``ConnectionManager`` 现在的 char != target_char_id_at_trigger:
+    # 不发 ``done``、不持久化 short_term、不持久化 chat_history。
+    # 流式 chunks 已 push 出去(用户切换前看到一两句正常),done 不发
+    # 让前端按 done 缺失自然收尾(streaming 气泡 isStreaming=False 兜底)。
+    _cur_state_late = _ws.connection_manager.get_current(user_id)
+    _cur_char_late = _cur_state_late[0] if _cur_state_late is not None else None
+    if _cur_char_late is not None and _cur_char_late != target_char_id_at_trigger:
+        logger.debug(
+            "[proactive] late gate fired trigger=%s target_char=%s cur_char=%s "
+            "— user switched during LLM stream;skip done/persist",
+            trigger.name, target_char_id_at_trigger, _cur_char_late,
+        )
+        if consumer is not None and not consumer.done():
+            consumer.cancel()
+        return {
+            "text": "",
+            "character_id": target_char_id_at_trigger,
+            "conversation_id": conv_id,
+            "proactive_trigger": trigger.name,
+            "audio_bytes": audio_total_bytes,
+            "dropped": "character_mismatch_late",
+        }
 
     # done
     await _push({

@@ -50,6 +50,10 @@ interface UseWebSocketReturn {
   sendInterrupt: () => void;
   // v3-E1 step3：用户点 Live2D canvas，触发后端主动对话
   sendTouch: () => void;
+  // Rule B(绑定语义)— 切角色时把新 (char, conv) 推给 backend。
+  sendCharacterSwitch: (
+    characterId: number, conversationId: number | null,
+  ) => void;
   isConnected: () => boolean;
 }
 
@@ -621,9 +625,33 @@ export function useWebSocket(): UseWebSocketReturn {
     }));
   }, [store]);
 
+  const sendCharacterSwitch = useCallback(
+    (characterId: number, conversationId: number | null) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.warn('[WS] not connected, drop character_switch');
+        return;
+      }
+      const s = store.getState();
+      console.log(
+        `[FRONT] send character_switch char=${characterId} conv=${conversationId}`,
+      );
+      ws.send(JSON.stringify({
+        type: 'character_switch',
+        user_id: s.defaultUserId,
+        character_id: characterId,
+        conversation_id: conversationId,
+      }));
+    },
+    [store],
+  );
+
   const isConnected = useCallback(() => {
     return wsRef.current?.readyState === WebSocket.OPEN;
   }, []);
 
-  return { sendText, sendVoice, sendInterrupt, sendTouch, isConnected };
+  return {
+    sendText, sendVoice, sendInterrupt, sendTouch, sendCharacterSwitch,
+    isConnected,
+  };
 }

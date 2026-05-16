@@ -38,6 +38,7 @@ import base64
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import List
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -91,22 +92,75 @@ router = APIRouter()
 
 # ---------------------------------------------------------------------------
 # ConnectionManager — push notifications from background tasks to frontend
+# + per-connection (character_id, conversation_id) tracking(绑定语义 Rule B)
 # ---------------------------------------------------------------------------
+#
+# Rule B(proactive 投递校验)需要 backend 在 push 前回答"用户**此刻 UI 上**
+# 是哪个 character / conversation"。原 ``ConnectionManager`` 只存 WebSocket
+# 句柄,无 char/conv 维度。本版本加 ``set_current`` / ``get_current``:
+#   * 每次 WS 收到 user 帧(``type='text'/'voice'/'touch'/'character_switch'``)
+#     在 ``_handle_message`` 入口调 ``set_current(uid, char_id, conv_id)``
+#     —— 把最新意图 snapshot 进 connection state。
+#   * ``run_trigger`` 在 LLM 调用前 + 持久化前两次调 ``get_current(uid)``,
+#     若 char_id 与触发时的 ``target_char_id`` 不符 → 静默丢弃(debug log,
+#     不投递不持久化)。
+#
+# ``character_switch`` 是新的 WS 帧 type:前端切角色时通知 backend 更新
+# state,backend 不触发 LLM,仅更新连接状态 + ack。
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _ConnState:
+    ws: WebSocket
+    char_id: Optional[int] = None
+    conv_id: Optional[int] = None
+
 
 class ConnectionManager:
     def __init__(self) -> None:
-        self._connections: dict[str, WebSocket] = {}
+        self._connections: dict[str, _ConnState] = {}
 
     def register(self, user_id: str, ws: WebSocket) -> None:
-        self._connections[user_id] = ws
+        self._connections[user_id] = _ConnState(ws=ws)
 
     def unregister(self, user_id: str) -> None:
         self._connections.pop(user_id, None)
 
+    def set_current(
+        self, user_id: str,
+        char_id: Optional[int], conv_id: Optional[int],
+    ) -> None:
+        """Snapshot the user's current (character, conversation) for this conn。
+
+        路径 7 / Rule B:在每一次 WS user 帧入口调用 —— text/voice/touch/
+        character_switch 都视为"用户明确表达当前 UI 状态"的事件。
+        若用户尚未注册(``register`` 未调过),no-op(下次 register 时为空,
+        必须收到第一帧才被填充)。
+        """
+        st = self._connections.get(user_id)
+        if st is None:
+            return
+        st.char_id = char_id
+        st.conv_id = conv_id
+
+    def get_current(
+        self, user_id: str,
+    ) -> Optional[tuple[Optional[int], Optional[int]]]:
+        """Return ``(char_id, conv_id)`` snapshot for the user's connection。
+
+        无连接 / 连接已 unregister → ``None``。
+        连接在但未收到 user 帧(char/conv 仍 None)→ ``(None, None)``。
+        """
+        st = self._connections.get(user_id)
+        if st is None:
+            return None
+        return (st.char_id, st.conv_id)
+
     async def push(self, user_id: str, message: dict) -> None:
-        ws = self._connections.get(user_id)
-        if ws:
-            await ws.send_json(message)
+        st = self._connections.get(user_id)
+        if st is not None:
+            await st.ws.send_json(message)
 
 
 connection_manager = ConnectionManager()
@@ -759,7 +813,31 @@ async def _handle_message(
     raw_char = data.get("character_id")
     incoming_conv: Optional[int] = int(raw_conv) if raw_conv is not None else None
     incoming_char: Optional[int] = int(raw_char) if raw_char is not None else None
+
+    # 路径 7 / Rule B(绑定语义)— ``character_switch`` 是新 WS 帧 type:
+    # 前端切角色时通知 backend 当前 UI 状态,不触发 LLM,仅更新连接状态。
+    # 必须在 _resolve_conv_char 之前处理(避免反查 chat_history 干扰)。
+    if msg_type == "character_switch":
+        connection_manager.set_current(user_id, incoming_char, incoming_conv)
+        logger.info(
+            "[character_switch] user=%s char=%s conv=%s",
+            user_id, incoming_char, incoming_conv,
+        )
+        try:
+            await ws.send_json({
+                "type": "character_switch_ack",
+                "character_id": incoming_char,
+                "conversation_id": incoming_conv,
+            })
+        except Exception:
+            logger.exception("[character_switch] ack failed")
+        return
+
     conv_id, char_id = await _resolve_conv_char(user_id, incoming_conv, incoming_char)
+
+    # Rule B:每次 user 帧入口同步更新 ConnectionManager —— proactive gate
+    # 投递前以这个 snapshot 为"用户当前 UI 角色 / 对话"的 source of truth。
+    connection_manager.set_current(user_id, char_id, conv_id)
 
     # 把可见信息写入 state，让打断收尾能找到 conv / char / user_text
     state.conv_id = conv_id

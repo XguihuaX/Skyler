@@ -172,17 +172,22 @@ function MainApp() {
     };
   }, []);
 
-  const { sendText, sendVoice, sendInterrupt, sendTouch } = useWebSocket();
+  const {
+    sendText, sendVoice, sendInterrupt, sendTouch, sendCharacterSwitch,
+  } = useWebSocket();
   const { startManual, stopManualAndSend, toggleVad } = useAudio({
     sendVoice, sendInterrupt,
   });
 
   const api: AppApi = useMemo(
     () => ({
-      sendText, sendVoice, sendInterrupt, sendTouch,
+      sendText, sendVoice, sendInterrupt, sendTouch, sendCharacterSwitch,
       startManual, stopManualAndSend, toggleVad,
     }),
-    [sendText, sendVoice, sendInterrupt, sendTouch, startManual, stopManualAndSend, toggleVad],
+    [
+      sendText, sendVoice, sendInterrupt, sendTouch, sendCharacterSwitch,
+      startManual, stopManualAndSend, toggleVad,
+    ],
   );
 
   return (

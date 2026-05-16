@@ -7,6 +7,12 @@ export interface AppApi {
   sendInterrupt: () => void;
   // v3-E1 step3：点 Live2D canvas 触发主动对话
   sendTouch: () => void;
+  // Rule B(绑定语义)— 切角色时通知 backend 当前 UI char/conv。
+  // backend ``ConnectionManager.set_current`` 收到后做为 proactive 投递 gate
+  // 的 source of truth。不触发 LLM,仅同步状态 + 等一条 ``character_switch_ack``。
+  sendCharacterSwitch: (
+    characterId: number, conversationId: number | null,
+  ) => void;
   startManual: () => Promise<void>;
   stopManualAndSend: () => Promise<void>;
   toggleVad: () => Promise<void>;

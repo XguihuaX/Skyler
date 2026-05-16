@@ -1,18 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Circle, UserRound } from 'lucide-react';
 import { useAppStore } from '../store';
+import { useAppApi } from '../contexts/appApi';
+import { fetchConversations, createConversation } from '../lib/config';
 
 /**
  * Compact character switcher placed in TopBar.
  *
  * 显示当前角色（头像 + 名字 + ▾），下拉列出所有角色；底部一行跳转到角色管理页。
  * v3-B 起角色管理是 Panel 的独立子视图（panelView='characters'），不再用 Drawer。
+ *
+ * Rule B(绑定语义)— 切角色时**前端必须做这一连串**:
+ *   1. setCurrentCharacterId(new) — UI 立刻反映
+ *   2. fetchConversations(uid, new) → 取该角色对话列表
+ *   3. 有 → setCurrentConversationId(latest);无 → createConversation 新建
+ *   4. sendCharacterSwitch(new, conv_id) — 告诉 backend 当前 UI 状态
+ *      (backend ``ConnectionManager.set_current`` 收到后做为 proactive
+ *       投递 gate 的 source of truth,不触发 LLM)
+ * 这一套是 audit_binding_semantics.md 方案 3 的"根治闭环"。
  */
 export default function CharacterSwitcher() {
   const characters         = useAppStore((s) => s.characters);
   const currentCharacterId = useAppStore((s) => s.currentCharacterId);
   const setCurrentCharacterId = useAppStore((s) => s.setCurrentCharacterId);
+  const setCurrentConversationId = useAppStore((s) => s.setCurrentConversationId);
+  const userId             = useAppStore((s) => s.defaultUserId);
   const setPanelView       = useAppStore((s) => s.setPanelView);
+  const { sendCharacterSwitch } = useAppApi();
 
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -95,8 +109,37 @@ export default function CharacterSwitcher() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (!active) setCurrentCharacterId(c.id);
+                        if (active) {
+                          setOpen(false);
+                          return;
+                        }
+                        // Rule B 闭环 — 先切角色,异步切对话(latest or new),
+                        // 然后 sendCharacterSwitch 让 backend snapshot 新 UI 状态。
+                        setCurrentCharacterId(c.id);
                         setOpen(false);
+                        (async () => {
+                          let convId: number | null = null;
+                          try {
+                            const convs = await fetchConversations(userId, c.id);
+                            if (convs.length > 0) {
+                              convId = convs[0].id;
+                            } else {
+                              const created = await createConversation(
+                                userId, c.id, '新对话',
+                              );
+                              convId = created.id;
+                            }
+                            setCurrentConversationId(convId);
+                          } catch (err) {
+                            console.error(
+                              '[CharacterSwitcher] resolve conversation failed',
+                              err,
+                            );
+                            // 回退:留 conv=null,backend ``_resolve_conv_char``
+                            // 兜底走最近 conv;set_current 仍发,至少 char 同步。
+                          }
+                          sendCharacterSwitch(c.id, convId);
+                        })();
                       }}
                       className="w-full flex items-center gap-2 px-3 py-2 text-sm transition"
                       style={
