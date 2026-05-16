@@ -127,6 +127,11 @@ from backend.database.migrations.v4_persona_segment2_mai_ja import (
 from backend.database.migrations.v4_persona_segment2_ensure_defaults import (
     run_migration as migrate_v4_persona_segment2_ensure_defaults,
 )
+# v4.0.0 ship-call: Mai (cid=1) 回退纯中文 — longyumi_v3 + tts_language=zh
+# (ja 链代码保留,留 v4.1 后处理翻译架构重做)
+from backend.database.migrations.v4_0_0_mai_revert_zh import (
+    run_migration as migrate_v4_0_0_mai_revert_zh,
+)
 from backend.database.services import create_user, get_chat_history, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory
@@ -350,6 +355,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 让 renderer 走 layer_a.j2 的 ja 分支，LLM 输出 <ja>日语翻译</ja>，
     # TTS 取 ja 段，中文给字幕。幂等（WHERE tts_language IS NULL OR != 'ja'）。
     await migrate_v4_persona_segment2_mai_ja()
+
+    # ── 1b31. V4.0.0 ship-call: Mai (cid=1) 回退纯中文 ──────────────────────
+    # v4.0.0 产品决策:Mai 放弃 ja pipeline,改用 cosyvoice 内置中文音色
+    # longyumi_v3 + tts_language=zh。**必须在 v4_seg2_mai_ja 之后跑** ——
+    # 若 seg2 那条按 voice=a19f... 把 cid=1 标 ja,本迁移立刻无条件覆盖回
+    # longyumi_v3/zh。一旦 cid=1 已切走 voice,seg2 不再命中 cid=1。
+    # ja 链代码全部保留,留 v4.1 后处理翻译架构重做。
+    await migrate_v4_0_0_mai_revert_zh()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.
