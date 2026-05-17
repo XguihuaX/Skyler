@@ -138,6 +138,26 @@ class ChatTurn:
     created_at: Optional[datetime]
 
 
+async def _user_chat_history_max_id(user_id: str) -> Optional[int]:
+    """该 user 当前 chat_history 的 MAX(id);无行返 None。
+
+    供 ``_extract_batch`` 越界自愈 clamp 用 —— audit_z5 + Stage 2 第一刀:
+    purge 等历史路径(如 cfa006c / 9e434e3 ad-hoc DELETE)会让
+    ``memory_extractor_state.last_processed_turn_id`` 远大于 ``MAX(chat_history.id)``,
+    worker ``WHERE id > pointer`` 永无命中 → 死循环空转 + 永不推进。
+    本 helper 提供"剩余 user 行 MAX id"作 clamp 目标(Phase A §5 三不变量证明:
+    clamp 到此值是唯一同时满足 不死循环 / 不跳幸存未抽行 / 不重抽已抽行 的取值)。
+    """
+    async with AsyncSessionLocal() as session:
+        row = (await session.execute(
+            select(ChatHistory.id)
+            .where(ChatHistory.user_id == user_id)
+            .order_by(ChatHistory.id.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+    return int(row) if row is not None else None
+
+
 async def fetch_user_turns_after(
     user_id: str,
     after_id: int,
@@ -322,6 +342,19 @@ class MemoryExtractor:
         for uid in user_ids:
             try:
                 last_id = await get_last_processed_turn_id(uid)
+                # 防御:purge 等历史路径(audit_z5)让 pointer > MAX(id) → worker
+                # WHERE id > pointer 永无命中 → 死循环空转。clamp 到 user 当前
+                # MAX(id)(Phase A §5 三不变量证明:唯一既不死循环、又不跳幸存
+                # 未抽行、又不重抽已抽行的取值)。clamp 后持久化,只触发一次,
+                # 之后用户新对话产生新 id > clamp 值 → worker 自然恢复抽取。
+                cur_max = await _user_chat_history_max_id(uid)
+                if cur_max is not None and last_id > cur_max:
+                    logger.warning(
+                        "[extractor] pointer (%d) > MAX(id) (%d) for user=%s "
+                        "— clamping", last_id, cur_max, uid,
+                    )
+                    await update_last_processed_turn_id(uid, cur_max)
+                    last_id = cur_max
                 turns = await fetch_user_turns_after(
                     uid, last_id, batch_size=batch_size,
                 )
