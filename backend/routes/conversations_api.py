@@ -13,7 +13,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import config_yaml
@@ -124,6 +124,24 @@ async def delete_conversation(
     await session.execute(
         delete(ChatHistory).where(ChatHistory.conversation_id == conversation_id)
     )
+    # Patch A(audit_z5 + Stage 2):源头 reconcile extractor 指针。
+    # 删完 chat_history 后,若 ``memory_extractor_state.last_processed_turn_id``
+    # 越过用户剩余 chat_history 的 MAX(id) → clamp 到该 MAX(无行则 0)。
+    # 死守两点(Phase A §5 风险旗):
+    #   ① MAX 按 user_id 算"剩余行",绝不按"被删 conv max id"(scope 错配会
+    #      跳别 conv 幸存高 id 行,违反不变量 ii);
+    #   ② WHERE ... AND last_processed_turn_id > ... 这个 guard 必须在,只
+    #      在真越界时动、只 clamp 不前进 → 幂等,已抽过 / 正常的指针不乱动。
+    # 与 Patch B(f712625 worker 自愈)是纵深关系:本句删时即修对,worker
+    # 那道是"漏改任何删除路径就兜底"的兜底,**互不耦合**。
+    await session.execute(text(
+        "UPDATE memory_extractor_state "
+        "SET last_processed_turn_id = COALESCE("
+        "  (SELECT MAX(id) FROM chat_history WHERE user_id = :u), 0) "
+        "WHERE user_id = :u "
+        "  AND last_processed_turn_id > COALESCE("
+        "    (SELECT MAX(id) FROM chat_history WHERE user_id = :u), 0)"
+    ), {"u": owner_user_id})
     await session.delete(c)
     await session.commit()
 
