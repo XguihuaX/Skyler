@@ -136,6 +136,10 @@ from backend.database.migrations.v4_0_0_mai_revert_zh import (
 from backend.database.migrations.v4_0_0_conversation_summary import (
     run_migration as migrate_v4_0_0_conversation_summary,
 )
+# v4-beta Stage 2 supersede+墓碑 Phase B:memory_tombstone 表(删过的持久事实不再重抽)
+from backend.database.migrations.v4_0_0_memory_tombstone import (
+    run_migration as migrate_v4_0_0_memory_tombstone,
+)
 from backend.database.services import create_user, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory, SHORT_TERM_MAX
@@ -375,6 +379,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 独立状态(last_folded_chat_history_id 在本表自己一列),**不读 memory_extractor_state**。
     # CREATE IF NOT EXISTS,幂等。不动 memory / memory_extractor_state 等任何现存表。
     await migrate_v4_0_0_conversation_summary()
+
+    # ── 1b33. v4-beta Stage 2 supersede+墓碑:memory_tombstone 表 ────────────
+    # Phase A 实锤:硬删 memory 行后无墓碑,dup-check 看不到已删条目,用户再
+    # 随口提同一事实就被重抽。本表存"删过的持久事实"(expires_at IS NULL 那批),
+    # dup-check 额外比对它(精确 content 或 cosine ≥ 0.92)以压重抽。
+    # CREATE IF NOT EXISTS,幂等。不动 memory / 任何现存表 schema。
+    await migrate_v4_0_0_memory_tombstone()
 
     # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
     #         tag them as Momo's so per-character filters keep showing them.

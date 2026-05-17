@@ -273,6 +273,18 @@ async def validate_and_filter_entries(
             )
             continue
 
+        # v4-beta Stage 2 supersede+墓碑 Phase B:删过的"持久事实"墓碑压制。
+        # 精确 content 相等 / cosine ≥ 0.92 → skip,不进 memory 表。
+        # 延迟 import 避免 module-load 期循环 import。
+        from backend.memory.tombstone import is_tombstone_suppressed
+        if await is_tombstone_suppressed(cleaned["content"], user_id):
+            logger.info(
+                "[extractor_validator] tombstone-suppressed user=%s idx=%d "
+                "preview=%r",
+                user_id, idx, cleaned["content"][:80],
+            )
+            continue
+
         if await _is_duplicate(cleaned["content"], existing_contents,
                                dup_threshold):
             logger.info(

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.models import (
@@ -167,10 +167,31 @@ async def delete_memory(session: AsyncSession, memory_id: int) -> None:
     """Delete a single memory row by its primary key.
 
     Silently does nothing if the row does not exist.
+
+    v4-beta Stage 2 supersede+墓碑 Phase B:**仅当该行 ``expires_at IS NULL``
+    (持久事实)** 时,在同事务里把 (user_id, content, embedding, character_id)
+    INSERT 进 ``memory_tombstone`` —— 防止下次 worker / save_memory 又把同一
+    事实重抽进 memory 表。**只读** ``expires_at`` 判 NULL,**绝不写/改它**。
+    时效性提醒(``expires_at`` 有值)→ 不写墓碑,照常硬删
+    (recall 侧已按 ``active_only=True`` 自动过滤过期,无需墓碑挡)。
+    本表 / 列由 v4_0_0_memory_tombstone migration 保证存在(幂等)。
     """
     result = await session.execute(select(Memory).where(Memory.id == memory_id))
     memory = result.scalar_one_or_none()
     if memory is not None:
+        # 墓碑写入(仅 expires_at IS NULL 的持久事实)。同事务,与 session.delete
+        # 一起 commit;任一失败会回滚两边。
+        if memory.expires_at is None:
+            await session.execute(text(
+                "INSERT INTO memory_tombstone "
+                "(user_id, content, embedding, character_id) "
+                "VALUES (:u, :c, :e, :cid)"
+            ), {
+                "u": memory.user_id,
+                "c": memory.content,
+                "e": memory.embedding,
+                "cid": memory.character_id,
+            })
         await session.delete(memory)
         await session.commit()
 

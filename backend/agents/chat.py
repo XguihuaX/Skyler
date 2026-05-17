@@ -639,6 +639,20 @@ async def _tool_save_memory(
     except Exception as exc:
         logger.error("save_memory: embedding generation failed: %s", exc)
 
+    # v4-beta Stage 2 supersede+墓碑 Phase B:删过的"持久事实"墓碑压制。
+    # 在原 cosine-vs-active-memories 之前先比对墓碑表(精确 content 或 cosine ≥ 0.92)
+    # 命中即返回 status=tombstone_suppressed,不写 memory 表。
+    from backend.memory.tombstone import is_tombstone_suppressed
+    if await is_tombstone_suppressed(content, user_id):
+        logger.info(
+            "[save_memory] tombstone-suppressed user=%s preview=%r",
+            user_id, content[:80],
+        )
+        return {
+            "status": "tombstone_suppressed",
+            "content": content,
+        }
+
     # 3. 重复检测（用 cosine 与现有 memory 比较）
     from backend.memory.extractor import get_extractor_dup_threshold
     dup_th = get_extractor_dup_threshold()
