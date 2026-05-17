@@ -1,18 +1,18 @@
-# Skyler 技术设计速览(DESIGN_LITE)v4-beta(2026-05-16)
+# Skyler 技术设计速览(DESIGN_LITE)v4.0.0 记忆线收口(2026-05-17)
 
 > 本文档是给 Claude 对话使用的**精简版**技术设计。每次开启新会话时,把本文档粘进上下文即可。
-> 完整 4779 行 DESIGN.md 是历史档案(含每个 chunk / hotfix 的根因分析、testing 覆盖、实施细节),保留作机构记忆。
+> 完整 5200+ 行 DESIGN.md 是历史档案(含每个 chunk / hotfix 的根因分析、testing 覆盖、实施细节),保留作机构记忆。
 >
-> **当前状态(2026-05-16)**:v4-beta 收口完成,进入 v4.0.0 ship 路径。
+> **当前状态(2026-05-17)**:v4-beta 收口完成 + v4.0.0 记忆线收口(audit 完结 + 修复链 ship,代码核验,待真机回归),进入剩余 v4.0.0 ship 路径。
 > - v4-alpha shipped 2026-05-13(chunk 14 + UX-004/005/007 + hotfix-3 ~ 10)
 > - **Bugfix 1-4 系列** shipped 2026-05-13/14(sanitize 加固 / Settings 拆分 / AI Providers 重构 / observability + 小窗修复)
 > - **Persona Engineering Segment 1/2** shipped 2026-05-15(5 层 prompt 框架 + multi-variant + ja tag pipeline)
 > - **v4-beta 收口批次** shipped 并真机验证 2026-05-16(回退纯中文 / short_term 三级隔离 / conversation 锚定绑定语义 / character_switch 不杀 in-flight turn / 对话 UI 统一 / token 成本治理)
-> - 下一站:文档重写 → **长期记忆链路 audit(critical)** → TTS cap/throttle → Stage 3 v4.0.0 MVP 封装
+> - 下一站:文档纠真 ✅ → 长期记忆链路 audit ✅(修复链 ship,代码核验,待真机回归)→ TTS cap/throttle → Stage 3 v4.0.0 MVP 封装
 
 > ⚠️ **接管必读(3 个 red flag,新 Claude 先看这个)**:
 > 1. **Mai 已回退纯中文** —— ja 中日交替强约束(§6.5 旧描述)**已放弃**,ja 链代码保留休眠;`cid=1` `tts_language=zh` + voice `longyumi_v3`,人格不动。日语原声 = v4.1 F0 后处理翻译重做。**不要再给 ja 交替打补丁。**
-> 2. **长期记忆链路实际可能没在工作** —— 收口 audit 发现默认用户 `memory` 表 **0 行**。§4 memory schema 描述的是设计意图,不是当前现实。这是 **v4.0.0 critical**(陪伴命门),不是 v4.1。先解决"有没有"再谈 F8"分级"。
+> 2. **长期记忆链路 audit 完结、修复链已 ship** —— 根因=抽取 prompt 偏 fact-only + 闲聊→合法 [];子 bug=purge 不重置指针。修复链(滚动摘要层 + 指针自愈/reconcile + prompt 重平衡 + 墓碑)已 ship 且代码核验;**陪伴质量待真机回归(验收门)**。§4 声明已更新;详 DESIGN §五·补 + §十五之 Z.5.1。
 > 3. **conversation 锚定绑定语义已上线(§5.9)** —— 切角色/串台/回复被吃全靠这套规则 A/B。改对话/角色/proactive 投递相关代码前必读 §5.9,别破坏绑定。
 
 ---
@@ -187,7 +187,7 @@ confidence, extraction_source(auto/explicit/manual/legacy),
 embedding_vector(blob), access_count, last_accessed,
 检索:score = relevance * (1+log(1+access_count)) / (1+age*decay)
 ```
-> ⚠️ **v4.0.0 audit 声明**:收口审计发现默认用户此表 **0 行**。上面是设计意图,**不是当前现实**。MemoryExtractor worker 是否真触发/写入是否成功待 audit(只读排查 → 据结论修)。**这是 v4.0.0 critical(陪伴命门),不是 v4.1。** F8 归属分级(fact/profile→user_shared,event/关系→character_private)的前提"long-term 在工作"已被推翻,先解决"有没有"再"分级"。
+> ✅ **v4.0.0 更新(取代上方"0 行 / 待 audit"声明)**:audit 完结,根因=抽取 prompt 偏 fact-only + 闲聊→LLM 合法返回 [];子 bug=purge 不重置 extractor 指针。修复链(有界滚动摘要层 + 指针自愈/源头 reconcile + 抽取 prompt 重平衡 + 墓碑)已 ship 且对真 diff 代码核验。功能/陪伴质量待真机回归 + friend-test(验收门)。详 DESIGN §五·补 + §十五之 Z.5.1。
 
 ### chat_history
 ```
@@ -440,8 +440,8 @@ GET /api/observability/system/resources         — psutil RAM/CPU/Whisper/netwo
 ## §8 当前 Tech Debt 优先级速览
 
 ### 🔴 v4.0.0 critical(ship 前必处理,按序)
-1. **文档重写**(进行中:本批次)
-2. **长期记忆链路 audit** —— 默认用户 memory 表 0 行,陪伴命门,只读 audit → 据结论修(§4 声明)。**第 0 步:跑 `test_long_term`(它就是这条 bug 的现成 repro,不是无关测试),读 assert 断在哪一环 → 顺 stack 定位 0 行根因。别从零构造复现。**
+1. ✅ **文档纠真**(本批次完成;DESIGN.md 大整合立项留待表层重构 pass)
+2. ✅ **长期记忆链路 audit + 修复链** —— audit 完结(根因=fact-only prompt + 闲聊→合法 [];子 bug=purge 不重置指针),修复链已 ship 且代码核验;**陪伴质量待真机回归(验收门)**。详 §4 更新 + DESIGN §十五之 Z.5.1
 3. TTS daily char cap per-user enforcement(防 dogfood 烧爆)
 4. main chat per-minute throttle
 
@@ -452,7 +452,8 @@ GET /api/observability/system/resources         — psutil RAM/CPU/Whisper/netwo
 8. **记忆架构 v2(陪伴洞察)** —— 一角色一永久对话流 + 近期 short_term 原文 + 远期 RAG,"重来"靠显式清空非新对话;与 F8 统一设计
 9. PersonaEditorModal Tier-2 UI(v4.2)
 10. persona automated style check 上线
-11. 7 个 **import-死符号断测** cleanup(test_chat_agent / test_database / test_llm_client / test_memory_agent / test_ws_helpers / test_memory / test_integration,v2.5-B/v3-C 时代 import 已删符号,与功能无关)。**注:`test_long_term` 不在这 7 个内 —— 它是 Z.5 的现成 repro,属 v4.0.0 critical #2,不是 v4.1。**
+11. 7 个 **import-死符号断测** cleanup(test_chat_agent / test_database / test_llm_client / test_memory_agent / test_ws_helpers / test_memory / test_integration,v2.5-B/v3-C 时代 import 已删符号,与功能无关)。**注:`test_long_term` 不在这 7 个内 —— 它曾是 Z.5(0 行)的 repro;v4.0.0 修复链已 ship,其当前状态以真机回归为准(见 §十五之 Z.5.1)。**
+12. **记忆表层历史债(§5.8 → 表层重构 pass,立项)** —— 异构表 facts+提醒未拆 / 双 type 列 cruft / supersede 无机制 / `expires_at` 未接线 / 墓碑 check 无类型感知。结构债,不在 v4.0.0 ship 范围;详 DESIGN §十四之B RT-1~5 + §十五之 Z.5.1。
 
 ### 低
 12. _TOOL_PROMPT_ADDENDUM 重构
@@ -472,8 +473,8 @@ GET /api/observability/system/resources         — psutil RAM/CPU/Whisper/netwo
 
 | Sub-stage | Goal | ETA |
 |---|---|---|
-| Stage 0 | **文档重写**(README ×2 / ROADMAP / DESIGN_LITE / DESIGN_patch 对齐 v4-beta)→ 落地 repo | 进行中 |
-| Stage 1 | **长期记忆链路 audit(critical)** —— 只读查 default memory 0 行真相 → 据结论修 | 待 audit |
+| Stage 0 | **文档纠真**(DESIGN / DESIGN_LITE / ROADMAP / README ×2 对齐 v4.0.0 + §5.8 入册)→ 落地 repo | ✅ 完成 |
+| Stage 1 | **长期记忆链路 audit + 修复链** —— audit 完结 + 修复链 ship(代码核验)| ✅ ship,待真机回归 |
 | Stage 2 | TTS daily char cap per-user + main chat throttle(防烧) | 0.5d |
 | Stage 3a | Tauri build 验证 | 0.5-1d |
 | Stage 3b | .dmg + tauri-updater + onboarding | 2-3d |
@@ -481,7 +482,7 @@ GET /api/observability/system/resources         — psutil RAM/CPU/Whisper/netwo
 | Stage 3d | Dogfood 1 周 | 7d |
 | Stage 3e | 反馈迭代 + tag v4.0.0 | 0.5-1d |
 
-总:~1.5 week(Stage 1 audit 工时取决于结论)。
+总:~1.5 week(Stage 0/1 已完成;余下 Stage 2/3)。
 
 dogfood 反馈驱动 v4.1 优先级 — 高频痛点优先于 nice-to-have。
 
@@ -520,7 +521,7 @@ v4-beta 收口核心(绑定/记忆,改前必读 §5.9):
   backend/main.py                         — :387/402 restore character+conv filter
   backend/agents/chat.py                  — :1244/1438 _build_messages 透传 conv_id
   characters cid=1                        — voice=longyumi_v3, tts_language=zh(勿动)
-  memory 表                               — ⚠️ v4.0.0 audit 重点(为何 default 0 行)
+  memory 表                               — ✅ v4.0.0 audit 完结+修复链 ship(待真机回归;见 §十五之 Z.5.1)
   docs/mai_prompt.md                      — Mai 完整 Tier-1+2 spec(F1 七套参考)
   DB 备份系列 momoos.db.backup_*          — 回退兜底(zh_revert/purge/bindfix/2bugfix/chatpanel)
 

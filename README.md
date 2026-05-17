@@ -39,7 +39,7 @@ Fixed and verified on-device this cycle:
 **Known limitations (listed honestly — this is the roadmap):**
 
 - Other characters (Yae Miko etc., `cid=2/3/...`) are currently **empty skeletons** with no full persona; switching to them feels hollow. v4.1 (F1) fills real personas one by one.
-- **Long-term memory chain under v4.0.0 audit** — the wrap-up audit found 0 rows in the `memory` table for the default user; whether the long-term fact-extraction chain actually fires is being investigated. This means the character may "forget" content older than the 30-turn window. This is a v4.0.0 must-fix, not v4.1. The "Memory & Personality" section below flags this status honestly. **The failing `test_long_term` test is the live repro for this — it is the v4.0.0 audit's step-0 entry point, NOT one of the v4.1 "pre-existing" import-broken tests. (The "7 pre-existing test failures" line under Known Problems is a 2026-05-11 historical record covering import-dead tests test_chat_agent/test_database/… — `test_long_term` is a separate, v4.0.0-critical case and must not be read as "v4.1 / unrelated".)**
+- **Long-term memory chain — audit complete, remediation shipped (code-verified), pending real-device regression** — the wrap-up audit concluded: the root cause was the fact-only extraction prompt + sparse/casual chat legitimately yielding `[]` (not a broken chain), plus a sub-bug where purge didn't reset the extractor pointer. A remediation chain shipped (bounded rolling-summary layer + extractor-pointer self-heal/reconcile + extraction-prompt rebalance + tombstone) and is code-verified against real diffs. **Companionship/functional quality is not yet validated — pending real-device regression + friend-test (acceptance gate; CC does not self-certify).** See the "Memory & Personality" note below and DESIGN §五·补 + §十五之 Z.5.1.
 - LLM first-response is slow (still 5–10s with VPN off) — an independent model + network performance issue. With binding semantics locked, "slow" and "cross-talk" are now decoupled; slowness degrades to a pure UX concern, optimized separately later.
 
 ---
@@ -175,10 +175,10 @@ Here's what Skyler currently does. None of these are locked — every layer is b
 
 ### 🧠 Memory & Personality (three layers)
 
-> **v4-beta audit note**: the Layer 2 (long-term facts) write path was found to have **0 rows** for the default user during the v4-beta wrap-up audit. Whether the extraction worker actually fires and writes successfully is a v4.0.0 must-check. Until the audit concludes, long-term memory **may not be active** and the character will forget content older than 30 turns. The prose below describes design intent, but treat this note as the current real state.
+> **v4.0.0 update (supersedes the earlier "0 rows / may not be active" audit note)**: the audit is complete. Root cause: fact-only extraction prompt + sparse/casual chat → LLM legitimately returns `[]`; sub-bug: purge didn't reset the extractor pointer. The remediation chain (bounded rolling-summary layer + extractor-pointer self-heal/reconcile + extraction-prompt rebalance + tombstone) is shipped and code-verified against real diffs. Functional/companionship quality is pending real-device regression + friend-test (acceptance gate). The prose below describes the design; see DESIGN §五·补 + §十五之 Z.5.1 for the v4.0.0 closure record.
 
 - **Layer 1 — short-term** — in-process short-term buffer, isolated by **(user, character, conversation)** three levels, last N turns per turn (hard-capped at the last 30 turns for token cost control); on restart, restored from the `chat_history` table **filtered by conversation** (no longer cross-conversation / cross-character bleed)
-- **Layer 2 — long-term facts** — `memory` table, designed main write path is a server-side worker (`MemoryExtractor`, runs every 5 min, 10-stage quality filter, 4-category `entry_type`, 4-state `extraction_source` provenance tag); the `save_memory` tool is the "user explicitly asked to remember" entry; retrieval uses a forgetting-curve score `score = relevance * (1+log(1+ac)) / (1+age*decay)` with threshold gate. **⚠️ See audit note above: this chain is under v4.0.0 audit, currently writing 0 rows.**
+- **Layer 2 — long-term facts** — `memory` table, designed main write path is a server-side worker (`MemoryExtractor`, runs every 5 min, 10-stage quality filter, 4-category `entry_type`, 4-state `extraction_source` provenance tag); the `save_memory` tool is the "user explicitly asked to remember" entry; retrieval uses a forgetting-curve score `score = relevance * (1+log(1+ac)) / (1+age*decay)` with threshold gate. **✅ v4.0.0: audit concluded, remediation shipped & code-verified (rolling-summary layer + pointer self-heal + prompt rebalance + tombstone); pending real-device regression — see note above.**
 - **Layer 3 — user profile** — `users.profile_data` JSON schema (`profession` / `current_projects` / `interests` / `recurring_topics` / `communication_style` / `active_hours` / `language_preferences`). A strict validator hard-rejects projection language; legacy `profile_summary` kept as fallback; daily cron regenerates. **User profile is shared across characters (one impression of you); per-character isolation of event/relationship-type long-term memory (the F8 ownership tiering) is a v4.1 multi-character item.**
 - **Activity timeline** — parallel to `chat_history`: every app/URL session you have (with idle-filtered duration) gets persisted. The character can reference today's activity in conversation ("looks like you spent 3h in VS Code — same project as yesterday?"). 30-day retention by default.
 - **Memory / conversation viewer** — unified into the **left-side push/pull chat panel** (v4-beta UI unification, see below); `entry_type` tab (fact / preference / event / commitment) + `extraction_source` badge + confidence display
@@ -410,7 +410,7 @@ We list these honestly because the gaps matter. They're also the roadmap.
 
 See [ROADMAP.md](ROADMAP.md) for the full picture.
 
-- **v4.0.0 wrap-up (in progress)**: long-term memory chain audit → TTS per-user daily char cap + main-chat throttle → Stage3 Tauri packaging / dmg / dogfood / tag
+- **v4.0.0 wrap-up (in progress)**: long-term memory chain audit ✅ (remediation shipped, code-verified; pending real-device regression) → TTS per-user daily char cap + main-chat throttle → Stage3 Tauri packaging / dmg / dogfood / tag
 - **v4.1**: ja post-processing translation redo (F0) / seven real character personas (F1) / long-term memory ownership tiering (F8) / "Memory Architecture v2" (one permanent conversation stream per character + RAG) / switch-character conversation linkage cleanup (F2) / LLM performance / CosyVoice weak-network timeout / test-debt cleanup
 - **Medium-term**: filling the honest gaps above (messaging gateway, training data export, capability marketplace)
 - **Long-term**: persona-level learning (`character_states` that actually grow)
@@ -524,6 +524,12 @@ See [ROADMAP.md](ROADMAP.md) for the full picture.
       - 测试期间用 strict YAML loader(自实现 ``StrictLoader`` mimic serde_yaml,见 ``tests/test_hotfix7_tts_toggle.py`` pattern)而非默认 permissive ``yaml.safe_load``
     - 优先级低（用户授权后才动 config.yaml；非高频路径），工程量 < 1 hr
 
+17. **记忆表层历史债（v4.0.0 §5.8 → 表层重构 pass，立项）**
+    - 现状：`memory` 表混存"持久事实"（`expires_at` NULL）与"时效提醒"（`expires_at` 有值）；`type`（5 类 CHECK）与 `entry_type`（4 类）双列并存；supersede 无自身机制（新旧事实共存不替换）；`expires_at` signature 接受但 caller 全传 None；墓碑 check 无类型感知（可能误压合法重建的新提醒）
+    - 来源：v4.0.0 记忆线收口审计副产（与第 6 条 `characters.yaml` 双源、第 11 条 `profile_summary` 清理同性质）
+    - 修法：留待**表层重构 pass**（建议并入/紧随表结构重构那一局）—— 详 DESIGN §十五之 Z.5.1 移交清单 + §十四之B RT-1~5
+    - 优先级：结构债，日常不阻塞；不在 v4.0.0 ship 范围
+
 > ~~**用户画像污染**~~（"温柔陪伴 / 亲密关系 / 细腻敏感" 等反推词写入 profile_summary）✅ chunk 11 治本（2026-05-12）—— LLM 输出严格按 JSON schema，validator hard-reject 违规输出，注入用机械模板而非 LLM。
 >
 > ~~**LLM hallucinate save_memory**~~（chunk 9 跨角色共享后放大）✅ chunk 10 治本（2026-05-12）—— memory 入库主路径改成 server-side worker（每 5 分钟 batch 提取 + 10 道 filter），``save_memory`` tool 降级为"用户明确说要记"的显式入口；entry 上打 ``extraction_source`` 区分来源，MemoryManagerDrawer UI 角标可见。
@@ -577,7 +583,7 @@ Where they're ahead of Skyler today is in [Comparison](#comparison) above — li
 
 **v4-beta wrap-up phase (May 2026).** Persona Engineering five-layer framework + memory/conversation three-level isolation + conversation-anchored binding semantics + unified chat UI are shipped and verified on-device. Currently focused on Mai as a single-character, Chinese-only companion.
 
-Remaining v4.0.0 wrap-up items: long-term memory chain audit (critical — see the memory audit note above) → TTS/conversation cost gates → Stage3 packaging & release. The full implementation log (every chunk, hotfix, UX iteration) lives in [ROADMAP.md](ROADMAP.md) — that's the honest history.
+Remaining v4.0.0 wrap-up items: long-term memory chain audit ✅ (remediation shipped & code-verified; pending real-device regression) → TTS/conversation cost gates → Stage3 packaging & release. The full implementation log (every chunk, hotfix, UX iteration) lives in [ROADMAP.md](ROADMAP.md) — that's the honest history.
 
 ---
 

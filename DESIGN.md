@@ -674,6 +674,31 @@ ALTER TABLE users ADD COLUMN profile_data TEXT;  -- JSON
 -- profile_summary 列保留作 fallback（README Known Problems #11）
 ```
 
+### 5.补 — v4.0.0 有界滚动摘要层（在三层模型之上新增）
+
+> 本小节与 §十五之 Z.5.1 为 v4.0.0 收口实况，取代本文档此前关于"长期记忆链路可能没在写 / under audit"的判断（Z.5 保留为 audit 当时的历史发现记录）。
+
+三层模型之上新增**有界滚动摘要层**，根治"闲聊不入长期 + short_term cap-30 → 感知失忆"。它独立于（曾卡死的）extractor 指针，自带状态，与 Layer 1/2/3 互不破坏。
+
+```
+─── Layer 2.5：有界滚动摘要（conversation_summary 表，v4.0.0 chunk 起）──────
+触发：独立 async batch worker，不走 extractor 指针（自带状态指针）
+压缩：固定 token 预算的**再压缩**——(当前 summary + 滑出窗口的最旧若干段)
+      → 重新压回预算内。**非追加**（不会无限增长）
+模型：默认在线 Qwen3.5-Flash（config 可换；用不留存的正式 endpoint）
+scope：(user × character × conversation)。CC（Character Core）只读；
+       若破坏 conversation 绑定 / path-7 → 降级 per-conversation
+注入：与 Layer 1 短期 raw 同窗注入；single-conv 稳态下注入窗口与折叠
+      cap 用**同一 SHORT_TERM_MAX 常量**（60 msg = 30 turn），无 31–60 空洞
+无 RAG / 无向量库 / 无热路径工具调用
+```
+
+既有三层全部保留；**Layer 2 持久 facts 是永久锚，永不被摘要层压缩**。
+
+- **commit**：b91505a（层主体）；配套 audit 后修复链见 §十五之 Z.5.1。
+- **状态**：代码已对真 git diff 逐刀核验（顾问签，代码层）；**陪伴/功能质量未核验**，待真机回归 + friend-test（验收门，CC 不自证）。
+- **已知 caveat（→ v4.1）**：多会话同角色短暂争用同 (user,char) 桶时存在过渡性 gap。
+
 ---
 
 ## 六、TTS 分层设计
@@ -1362,6 +1387,11 @@ v3-E2 chunk 6 给八重 (id=2) 的 `hit_area_map_json` 写好了 8 个 HitAreas 
 | v4.2-1 | Tier-2 字段完整 UI 编辑器 | taboo_topics / lore / capability_overrides JSON form | 中 |
 | v4.2-2 | cosyvoice-v3.5-plus instruct 解锁 | 等 DashScope 上游放开 | 等上游 |
 | v4.2-3 | CosyVoice 日语合成声学质量验证 | dogfood 反馈驱动 | 等反馈 |
+| RT-1 | 异构表 facts+提醒未拆（`memory` 混存 `expires_at` NULL 持久事实 + 有值时效提醒） | 拆表 / 加 kind 列 / 迁数据 | 表层重构新对话 |
+| RT-2 | 双 type 列 cruft（`type` 5 类 CHECK / `entry_type` 4 类并存，各有真消费者） | ALTER + 3+ 消费者 + 逆映射非双射 | 表层重构新对话 |
+| RT-3 | supersede 自身机制未实现（新旧事实共存，不替换） | 写 `expires_at`，与墓碑"只读 NULL"边界互补 | 表层重构新对话 |
+| RT-4 | `expires_at` 未正经接线（signature 接受但 caller 全传 None） | supersede 那刀启用，定谁填/何时填 | 表层重构新对话 |
+| RT-5 | 墓碑 check 无类型感知（可能误压合法重建的新提醒） | prompt/validator 引入事实类型信号，与 RT-1 联动 | 表层重构新对话 |
 
 ---
 
@@ -4648,6 +4678,34 @@ GET /api/observability/system/resources          — psutil RAM/CPU/Whisper/netw
 
 **修正既往判断**:此前"v4.0.0 单角色全共享=正确,F8 留 v4.1"的前提是"long-term 在工作",已被推翻。→ "有没有"(链路是否生效)必须 **v4.0.0 audit**(只读排查 → 据结论修);"分级"(F8 归属:fact/profile→user_shared,event/关系→character_private)才 v4.1。
 
+> → audit 结论与修复实况见 **Z.5.1**(Z.5 保留为 audit 当时的历史发现记录,不覆盖)。
+
+### Z.5.1 长期记忆链路 audit 后实施(v4.0.0 收口)
+
+**audit 结论(非链路全断)**:根因是抽取 prompt 偏 fact-only + 稀疏/闲聊语料 → LLM 合法返回 `[]`(不是 bug,是 prompt 设计使然);子 bug:purge 硬删 `chat_history` 却不重置 `memory_extractor_state` 指针 → 指针卡死,后续永不抽取。
+
+**修复链(均叠于 5e55721 之上;全程 14 sentinel commit 未动,stash 未动)**:
+
+| commit | 修法 |
+|---|---|
+| b91505a | 有界滚动摘要层(见 §五·补)——根治"闲聊不入长期 + cap-30 失忆" |
+| 902c2c2 | restart 窗口 `.limit(20)` → `SHORT_TERM_MAX`(闭重启冷启 caveat,单会话) |
+| 1437e48 | restore 日志真值 `%d`(文本对齐;L415 历史叙述按原则保留) |
+| f712625 | extractor 指针越界自愈 clamp(解开 default 卡死;clamp=cur_max,满足三不变式) |
+| 42d1800 | `delete_conversation` 源头幂等 reconcile(按 user 剩余 MAX,clamp-only 不前进;与 f712625 纵深) |
+| bfcd821 | 抽取 prompt 重平衡(随口单次的稳定锚 @0.6–0.8 也抽;recurrence 降为只提 confidence;护栏字节保留) |
+| 3f3be08 | 墓碑表(仅 `expires_at IS NULL` 持久事实写墓碑;双删入口经 `services.delete_memory` 单点收口;双 dedup 精确/cosine≥0.92 压制;不碰 supersede/expires_at/召回) |
+
+**核验状态**:以上修复链对真 git diff 逐刀顾问核验通过(**代码层**)。**陪伴/功能质量未核验**,需真机回归 + friend-test 过验收门(CC 不自证)。
+
+**显式不做,移交"表层重构新对话"(留下一刀,理由各见 §十四之B RT-1~5)**:
+
+1. **异构表**:`memory` 混存"持久事实(`expires_at` NULL)"与"时效提醒(`expires_at` 有值)",未拆。
+2. **双 type 列 cruft**:`type`(5 类 CHECK)与 `entry_type`(4 类)并存,各有真消费者。
+3. **supersede 自身机制未实现**:新事实"搬到上海"不会找/标/替老事实"住北京",两条共存。
+4. **`expires_at` 未正经接线**:signature 接受但所有 caller 全传 None,写端从未利用。
+5. **墓碑 check 无类型感知**:可能误压合法重建的新"时效提醒"。
+
 ### Z.6 token 成本治理
 
 - **修法 A**:short_term 硬性 cap 最近 30 turn(trim 旧 turn)。
@@ -5136,9 +5194,10 @@ Skyler 站在两个项目之间的空地。本节不是"借鉴 OLV 哪些 featur
 
 ---
 
-*文档版本：v4-beta 收口 | 最后更新：2026-05-16*
+*文档版本：v4.0.0（记忆线收口）| 最后更新：2026-05-17*
 
 变更日志：
+- 2026-05-17 v4.0.0 记忆线收口:有界滚动摘要层(b91505a)+ audit 后修复链(902c2c2 restart 窗口 / 1437e48 日志真值 / f712625 指针自愈 / 42d1800 源头 reconcile / bfcd821 抽取 prompt 重平衡 / 3f3be08 墓碑表)。Z.5 audit 发现的"可能没在写"已据结论修复并对真 diff 代码核验;陪伴/功能质量待真机回归(验收门,CC 不自证)。§5.8 表层历史债(异构表 / 双 type 列 / supersede 机制 / expires_at 接线 / 墓碑类型感知,= §十四之B RT-1~5)移交专门重构对话。详 §五·补 + §十五之 Z.5.1 + §十四之B。
 - 2026-05-16 v4-beta 收口:回退纯中文(Mai cid=1 ja→zh)/ short_term (user,char,conv) 三级隔离 / conversation 锚定绑定语义(规则 A/B)/ character_switch 不杀 in-flight turn / 对话 UI 统一 / token 成本治理 / 测试不污染主库。long-term memory 链路 audit 发现 default 用户 0 行,提为 v4.0.0 critical。详 §十五之X/Y/Z + §十四之B v4-beta 衍生 Tech Debt。
 - **v3-WIP+1（2026-05-04 晚，TTS schema + Live2D 拆分）**：§六 TTS 分层重写，加入完整 voice_model JSON schema（CosyVoice / Edge / GPT-SoVITS 三种 provider 的 schema 示例 + GPT-SoVITS 多情感参考音频结构）+ §6.4 前端 CharacterPanel 配置 UI 设计（per-character only，无全局开关，下拉只显示真实可用选项）；v3-E 拆分为 v3-E1（用 Hiyori 走通 Live2D 集成）+ v3-E2（换目标模型）；新增 v3-G'（TTS UI 升级）；v5 阶段拆分为 v5-D（autodl 部署）/ v5-T1（GPT-SoVITS 后端接通）/ v5-T2（自定义 voice 训练）
 - **v3-WIP（2026-05-04，Skyler 改名 + v3-A/B/C/D 完成）**：项目 MomoOS → Skyler；v3 拆 A-G 七个子阶段；A/B/C/D 完成（8 套主题 + lucide / character.voice_model + CosyVoice / PlannerAgent 简化 / emotion 后端）；E/F/G 计划写明（Live2D / 语音体验 / 生活工具层）；新增 §十九 OLV/Hermes 借鉴清单 + §二十 跨平台策略
