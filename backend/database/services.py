@@ -133,7 +133,9 @@ async def get_all_memories(
     from sqlalchemy import or_
     query = select(Memory).where(Memory.user_id == user_id)
     if character_id is not None:
-        query = query.where(Memory.character_id == character_id)
+        query = query.where(
+            or_(Memory.character_id == character_id, Memory.character_id.is_(None))
+        )
     if active_only:
         now = datetime.utcnow()
         query = query.where(

@@ -387,27 +387,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # CREATE IF NOT EXISTS,幂等。不动 memory / 任何现存表 schema。
     await migrate_v4_0_0_memory_tombstone()
 
-    # ── 1c. V2.5-C2c backfill: legacy memory rows pre-date character_id, so
-    #         tag them as Momo's so per-character filters keep showing them.
-    from sqlalchemy import text
-    from backend.database import engine as _engine
-    async with _engine.begin() as _conn:
-        momo_id_row = (await _conn.execute(
-            text("SELECT id FROM characters WHERE name = 'Momo' LIMIT 1")
-        )).fetchone()
-        if momo_id_row is not None:
-            momo_id = int(momo_id_row[0])
-            res = await _conn.execute(
-                text("UPDATE memory SET character_id = :cid WHERE character_id IS NULL"),
-                {"cid": momo_id},
-            )
-            updated = getattr(res, "rowcount", None)
-            if updated:
-                logger.info(
-                    "[V2.5-C2c] Backfilled %d legacy memory rows -> character_id=%d (Momo)",
-                    updated, momo_id,
-                )
-
     # ── 2. Default user ──────────────────────────────────────────────────────
     default_uid: str  = config_yaml.get("default_user_id", "default")
     default_name: str = "Momo"

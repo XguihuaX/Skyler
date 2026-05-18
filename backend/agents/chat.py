@@ -38,7 +38,7 @@ import re
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from backend.agents.base import IAgent
 from backend.config import (
@@ -843,7 +843,9 @@ async def _tool_compress_memories(
         try:
             existing_q = select(Memory).where(Memory.user_id == user_id)
             if character_id is not None:
-                existing_q = existing_q.where(Memory.character_id == character_id)
+                existing_q = existing_q.where(
+                    or_(Memory.character_id == character_id, Memory.character_id.is_(None))
+                )
             existing = list((await session.execute(existing_q)).scalars().all())
             for m in existing:
                 await session.delete(m)

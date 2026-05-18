@@ -110,10 +110,6 @@ async def migrate() -> None:
             text("UPDATE chat_history SET character_id = :cid WHERE character_id IS NULL"),
             {"cid": char_id},
         )
-        await conn.execute(
-            text("UPDATE memory SET character_id = :cid WHERE character_id IS NULL"),
-            {"cid": char_id},
-        )
         for (uid,) in users:
             conv_row = (await conn.execute(
                 text(
