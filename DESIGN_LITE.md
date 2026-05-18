@@ -196,6 +196,14 @@ kind('normal'/'touch'/'proactive'), proactive_trigger, created_at
 ```
 > **v4-beta**:chat_history 是对话存档 + restore 源,**不是记忆本身**。运行时短期记忆 = 进程内 short_term buffer,按 **(user, character, conversation)** 三级隔离,cap 最近 30 turn(token 治理);进程重启从此表**按 conversation 过滤**恢复(`get(conv_id=X)` 严格匹配,不跨对话/跨角色串)。删对话 = 硬删 chat_history + conversations,不动 memory/profile/进程内 short_term。
 
+### conversation_summary(v4.0.0 b91505a 有界滚动摘要层)
+```
+id, user_id, character_id, conversation_id,
+summary_text, last_folded_chat_history_id, token_budget, updated_at
+UNIQUE(user_id, character_id, conversation_id)
+```
+> 给每个 (user, character, conversation) 三元组维护一份滚动摘要,worker(`backend/memory/summary.py`)按 `last_folded_chat_history_id` 增量折叠超出 short_term cap 的旧 turn 进 `summary_text`;ChatAgent 注入 prompt 时取最新一行。补 short_term 硬性 cap 30 turn 之外的"中期记忆"层。
+
 ### activity_sessions(v3.5 chunk 14)
 ```
 id, user_id, app_name, url, title, start_time, end_time,
@@ -215,6 +223,14 @@ cost_estimate, success, error_message
 voice_id(PK), display_name
 给 cloned voice 起友好名,UI 显示用
 ```
+
+### mcp_credentials / mcp_client_state / mcp_tool_state(MCP 配置 + 启用态)
+```
+mcp_credentials  : id, server_name, key_name, value, updated_at  (UNIQUE server+key)
+mcp_client_state : server_name(PK), enabled, updated_at
+mcp_tool_state   : id, server_name, tool_name, enabled, updated_at  (UNIQUE server+tool)
+```
+> 三表分管 MCP server 的凭证 / client 启停态 / 单 tool 启停粒度。`mcp_client.py` 启动按 `mcp_client_state.enabled=1` 拉起 server,按 `mcp_tool_state.enabled` 决定 tool 是否注册进 ToolRegistry;UI 的 MCP 面板 CRUD 走 `routes/mcp.py`。
 
 ### users.profile_data(v3.5 chunk 11)
 ```
