@@ -7,7 +7,6 @@ Mounted at /api in main.py.  Full URL map:
   DELETE /api/conversations/{id}
   GET    /api/conversations/{id}/messages
 """
-import asyncio
 from datetime import datetime
 from typing import List, Optional
 
@@ -144,12 +143,9 @@ async def delete_conversation(
     ), {"u": owner_user_id})
     await session.delete(c)
     await session.commit()
-
-    # V2.5-D — kick the profile_summary background task so the impression
-    # adjusts to (or clears against) the remaining chat_history. Imported
-    # locally to avoid circular import with backend.routes.ws.
-    from backend.routes.ws import _regenerate_profile_summary
-    asyncio.create_task(_regenerate_profile_summary(owner_user_id))
+    # (2026-05-19) 旧 V2.5-D _regenerate_profile_summary kick 已删 —
+    # profile_summary 全退役 (chunk 11 profile_data 接管,由 cron 维护);
+    # 删对话不再触发任何 profile 重生。
 
 
 @router.get("/conversations/{conversation_id}/messages")

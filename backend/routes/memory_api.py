@@ -5,11 +5,10 @@ Mounted at /api in main.py.  Full URL map:
   POST   /api/memory/add
   PATCH  /api/memory/{id}
   DELETE /api/memory/{id}
-  GET    /api/todos/list
-  POST   /api/todos/add
-  PATCH  /api/todos/{id}/status
-  GET    /api/profile
-  PATCH  /api/profile
+
+(2026-05-19: /api/todos/* + bare /api/profile 已退役 — todos 链路全清,
+profile_summary 由 chunk 11 profile_data 取代;真"用户画像"前端走
+/api/users/{uid}/profile_data。)
 """
 import logging
 from datetime import datetime
@@ -29,11 +28,6 @@ from backend.database.services import (
     add_memory as db_add_memory,
     delete_memory as db_delete_memory,
     get_all_memories,
-    create_todo,
-    get_todos,
-    update_todo_status,
-    get_profile_summary,
-    update_profile_summary,
 )
 
 _MEMORY_TYPES = {"fact", "instruction", "emotion", "activity", "daily"}
@@ -67,23 +61,6 @@ class MemoryPatchBody(BaseModel):
     content: Optional[str] = None
     type: Optional[str] = None
     expires_at: Optional[datetime] = None
-
-
-class TodoAddBody(BaseModel):
-    owner_type: str
-    title: str
-    description: Optional[str] = None
-    due_time: datetime
-    status: str = "pending"
-    user_id: Optional[str] = None
-
-
-class TodoStatusBody(BaseModel):
-    status: str
-
-
-class ProfileUpdateBody(BaseModel):
-    summary: str
 
 
 # ---------------------------------------------------------------------------
@@ -226,93 +203,3 @@ async def delete_memory_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> None:
     await db_delete_memory(session, memory_id)
-
-
-# ---------------------------------------------------------------------------
-# /todos
-# ---------------------------------------------------------------------------
-
-@router.get("/todos/list")
-async def list_todos(
-    user_id: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    session: AsyncSession = Depends(get_session),
-) -> List[dict]:
-    rows = await get_todos(session, _uid(user_id), status=status)
-    return [
-        {
-            "id": t.id,
-            "user_id": t.user_id,
-            "owner_type": t.owner_type,
-            "title": t.title,
-            "description": t.description,
-            "due_time": _fmt_dt(t.due_time),
-            "status": t.status,
-            "created_at": _fmt_dt(t.created_at),
-        }
-        for t in rows
-    ]
-
-
-@router.post("/todos/add", status_code=201)
-async def add_todo_endpoint(
-    body: TodoAddBody,
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    uid = _uid(body.user_id)
-    t = await create_todo(
-        session,
-        user_id=uid,
-        owner_type=body.owner_type,
-        title=body.title,
-        due_time=body.due_time,
-        description=body.description,
-    )
-    if body.status != "pending":
-        await update_todo_status(session, t.id, body.status)
-        t.status = body.status
-    return {
-        "id": t.id,
-        "user_id": t.user_id,
-        "owner_type": t.owner_type,
-        "title": t.title,
-        "description": t.description,
-        "due_time": _fmt_dt(t.due_time),
-        "status": t.status,
-        "created_at": _fmt_dt(t.created_at),
-    }
-
-
-@router.patch("/todos/{todo_id}/status")
-async def update_todo_status_endpoint(
-    todo_id: int,
-    body: TodoStatusBody,
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    await update_todo_status(session, todo_id, body.status)
-    return {"todo_id": todo_id, "status": body.status}
-
-
-# ---------------------------------------------------------------------------
-# /profile
-# ---------------------------------------------------------------------------
-
-@router.get("/profile")
-async def get_profile(
-    user_id: Optional[str] = Query(None),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    uid = _uid(user_id)
-    summary = await get_profile_summary(session, uid)
-    return {"user_id": uid, "profile_summary": summary}
-
-
-@router.patch("/profile")
-async def update_profile(
-    body: ProfileUpdateBody,
-    user_id: Optional[str] = Query(None),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    uid = _uid(user_id)
-    await update_profile_summary(session, uid, body.summary)
-    return {"user_id": uid, "profile_summary": body.summary}

@@ -29,7 +29,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_session
 from backend.database.models import User
-from backend.database.services import update_profile_summary
 from backend.utils.profile_schema import (
     PROFILE_SCHEMA_V1,
     empty_profile,
@@ -51,21 +50,9 @@ class UserProfilePatchBody(BaseModel):
     language: Optional[str] = None
 
 
-class ProfileSummaryPatchBody(BaseModel):
-    """v3.5 chunk 9：用户手动编辑 profile_summary。"""
-    summary: str
-
-
-class ProfileSummaryRegenerateResponse(BaseModel):
-    """同步 regenerate 返回结构。
-
-    ``status`` 与 ``ws._compute_profile_summary`` 同 enum：
-    ``regenerated`` / ``cleared`` / ``skip_too_few_rows`` /
-    ``skip_llm_failed`` / ``skip_llm_too_short`` / ``skip_llm_suspicious``。
-    """
-    status: str
-    profile_summary: Optional[str] = None
-    detail: Optional[str] = None
+# (2026-05-19: profile_summary 配套 endpoint 全套已退役 —
+#  chunk 11 profile_data 取代;真"用户画像"走 /users/{uid}/profile_data。
+#  users.profile_summary 列保留空列,无活读写。)
 
 
 @router.get("/users/{user_id}/profile")
@@ -83,7 +70,6 @@ async def get_user_profile(
         "user_name": u.user_name,
         "nickname": u.nickname,
         "language": u.language,
-        "profile_summary": u.profile_summary,
     }
 
 
@@ -110,126 +96,7 @@ async def patch_user_profile(
         "user_name": u.user_name,
         "nickname": u.nickname,
         "language": u.language,
-        "profile_summary": u.profile_summary,
     }
-
-
-@router.patch("/users/{user_id}/profile_summary")
-async def patch_user_profile_summary(
-    user_id: str,
-    body: ProfileSummaryPatchBody,
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    """v3.5 chunk 9：用户手动编辑 profile_summary。
-
-    写入前过 ``SUSPICIOUS_TAG_RE`` sanitize（防用户粘贴时带 XML）；命中
-    log warning（与 ``_update_memory`` / ``_regenerate_profile_summary``
-    一致的写库前 sanitize 契约）。
-
-    .. deprecated:: chunk 11
-       新前端应改用 ``PATCH /users/{user_id}/profile_data``（结构化 JSON）。
-       legacy endpoint 保留作 fallback。
-    """
-    logger.warning(
-        "[deprecated] PATCH /users/%s/profile_summary called — "
-        "chunk 11 prefers PATCH /profile_data (structured JSON)",
-        user_id,
-    )
-    u = (await session.execute(
-        select(User).where(User.user_id == user_id)
-    )).scalar_one_or_none()
-    if u is None:
-        raise HTTPException(status_code=404, detail="user not found")
-
-    cleaned = (body.summary or "").strip()
-    suspicious_n = count_suspicious_tags(cleaned)
-    if suspicious_n > 0:
-        logger.warning(
-            "[sanitize] PATCH profile_summary suspicious tags hit=%d user=%s "
-            "preview=%r",
-            suspicious_n, user_id, cleaned[:200],
-        )
-        cleaned = sanitize_suspicious_tags(cleaned).strip()
-
-    u.profile_summary = cleaned or None
-    await session.commit()
-    await session.refresh(u)
-    return {
-        "user_id": u.user_id,
-        "profile_summary": u.profile_summary,
-    }
-
-
-@router.delete("/users/{user_id}/profile_summary", status_code=204)
-async def reset_user_profile_summary(
-    user_id: str,
-    session: AsyncSession = Depends(get_session),
-) -> None:
-    logger.warning(
-        "[deprecated] DELETE /users/%s/profile_summary called — "
-        "chunk 11 prefers DELETE /profile_data",
-        user_id,
-    )
-    u = (await session.execute(
-        select(User).where(User.user_id == user_id)
-    )).scalar_one_or_none()
-    if u is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    u.profile_summary = None
-    await session.commit()
-
-
-@router.post("/users/{user_id}/profile_summary/regenerate")
-async def regenerate_user_profile_summary(
-    user_id: str,
-    session: AsyncSession = Depends(get_session),
-) -> ProfileSummaryRegenerateResponse:
-    """v3.5 chunk 9：同步触发 LLM 重算 profile_summary 并返回新内容。
-
-    .. deprecated:: chunk 11
-       新前端用 ``POST /profile_data/regenerate``（结构化）。legacy 保留。
-    """
-    logger.warning(
-        "[deprecated] POST /users/%s/profile_summary/regenerate called — "
-        "chunk 11 prefers POST /profile_data/regenerate",
-        user_id,
-    )
-    # 先确认 user 存在
-    u = (await session.execute(
-        select(User).where(User.user_id == user_id)
-    )).scalar_one_or_none()
-    if u is None:
-        raise HTTPException(status_code=404, detail="user not found")
-
-    # 延迟 import 避免循环（routes.ws → 多个其他 routes）
-    from backend.routes.ws import _compute_profile_summary
-
-    try:
-        status, summary = await _compute_profile_summary(
-            user_id, min_user_rows=1,
-        )
-    except Exception as exc:
-        logger.exception(
-            "[profile_summary] regenerate endpoint failed user=%s", user_id,
-        )
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    # 拿最新 profile_summary（regenerated 时 compute 已写库；其他状态可能未动）
-    await session.refresh(u)
-
-    detail_map = {
-        "regenerated": None,
-        "cleared": "无对话记录，已清空",
-        "skip_too_few_rows": "对话不足（需至少 1 条用户消息）",
-        "skip_llm_failed": "LLM 调用失败，旧 profile 已保留",
-        "skip_llm_too_short": "LLM 输出过短，旧 profile 已保留",
-        "skip_llm_suspicious": "LLM 输出含可疑标签，旧 profile 已保留",
-    }
-    return ProfileSummaryRegenerateResponse(
-        status=status,
-        profile_summary=u.profile_summary,
-        detail=detail_map.get(status),
-    )
 
 
 # ---------------------------------------------------------------------------

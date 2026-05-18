@@ -22,10 +22,14 @@ class User(Base):
 
     user_id = Column(String, primary_key=True)
     user_name = Column(String, nullable=False)
-    profile_summary = Column(Text, nullable=True)   # legacy chunk 9 free-text profile; retained for fallback
+    # [RETIRED 2026-05-19] profile_summary 字段已退役 — chunk 11 profile_data
+    # 接管"用户画像";chat.py fallback / users_api 端点 / service 函数全清。
+    # 列保留空列以避免不可逆 DROP COLUMN(SQLite 上破坏性);无活读写。后续
+    # 单独小刀可 DROP COLUMN。
+    profile_summary = Column(Text, nullable=True)
     # v3.5 chunk 11：结构化 profile（JSON 字符串），schema 见
-    # backend/utils/profile_schema.py PROFILE_SCHEMA_V1。``profile_data``
-    # 优先于 ``profile_summary`` 注入 system prompt；NULL 时 fallback。
+    # backend/utils/profile_schema.py PROFILE_SCHEMA_V1。注入 system prompt
+    # 的唯一源(2026-05-19 起,不再 fallback 到 profile_summary)。
     profile_data = Column(Text, nullable=True)
     nickname = Column(Text, nullable=True)
     language = Column(Text, nullable=True, default="zh-CN")
@@ -175,6 +179,10 @@ class Memory(Base):
     user = relationship("User", back_populates="memories")
 
 
+# [RETIRED 2026-05-19] todos 链路全退役 — LLM 工具(add_todo / delete_todo /
+# search_todo)、AlarmScheduler、/api/todos/* 路由、services todo 函数全删。
+# 提醒改由 ``apple_calendar.create_event``(macOS EventKit)。保留空表 + ORM
+# class 避免不可逆 DROP TABLE;无活代码消费。后续可单独小刀 DROP。
 class Todo(Base):
     __tablename__ = "todos"
     __table_args__ = (

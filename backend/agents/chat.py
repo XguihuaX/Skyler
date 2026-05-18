@@ -55,7 +55,6 @@ from backend.database.services import (
     add_memory as db_add_memory,
     delete_memory as db_delete_memory,
     get_all_memories,
-    get_profile_summary,
 )
 from backend.llm.client import LLMError, call_llm, stream_llm
 from backend.llm.tool_name_sanitize import sanitize_tools_for_llm
@@ -1143,11 +1142,8 @@ async def _build_messages(
                     formatted = format_profile_for_prompt(profile_data)
                     if formatted:
                         profile_str = formatted
-                    else:
-                        async with AsyncSessionLocal() as session:
-                            summary = await get_profile_summary(session, user_id)
-                        if summary:
-                            profile_str = summary
+                    # (2026-05-19) profile_summary fallback 已退役;
+                    # profile_data 为空时不注入画像。
                 except Exception:
                     logger.exception("[chat] profile gather failed (renderer path)")
 
@@ -1377,11 +1373,9 @@ async def _build_messages(
     _long_term_enabled = get_long_term_enabled()
 
     # ---- 2. User profile (config-gated) ----
-    # v3.5 chunk 11：结构化 ``users.profile_data``（JSON）取代 chunk 9 自然
-    # 语言 ``profile_summary``。优先级：
-    #   - ``profile_data`` 有内容 → ``format_profile_for_prompt`` 模板化注入
-    #   - ``profile_data`` NULL / 空 → fallback 到 legacy ``profile_summary``
-    # 完整迁移后（README Known Problems 标 backlog）才真删 legacy 字段。
+    # v3.5 chunk 11：结构化 ``users.profile_data``（JSON）注入 system prompt。
+    # (2026-05-19) chunk 9 ``profile_summary`` fallback 已退役;profile_data
+    # 为空时不注入用户画像。``users.profile_summary`` 列保留空列,无读写。
     if _profile_enabled:
         from backend.services.profile_regen import (
             format_profile_for_prompt,
@@ -1391,11 +1385,6 @@ async def _build_messages(
         formatted = format_profile_for_prompt(profile_data)
         if formatted:
             system_parts.append(formatted)
-        else:
-            async with AsyncSessionLocal() as session:
-                summary = await get_profile_summary(session, user_id)
-            if summary:
-                system_parts.append("【用户画像】\n" + summary)
 
     # ---- 2b. Today's activity timeline (chunk 14, config-gated) ----
     # 与 profile 同位置(用户上下文层),早于 memory recall(更老的语义层)。

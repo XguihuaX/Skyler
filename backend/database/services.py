@@ -46,30 +46,6 @@ async def get_user(session: AsyncSession, user_id: str) -> Optional[User]:
     return result.scalar_one_or_none()
 
 
-async def update_profile_summary(
-    session: AsyncSession, user_id: str, summary: Optional[str]
-) -> None:
-    """Overwrite the free-text profile_summary for *user_id*.
-
-    Pass ``None`` to clear the column (used after the user wipes all chat
-    history). Silently does nothing if the user does not exist.
-    """
-    result = await session.execute(select(User).where(User.user_id == user_id))
-    user = result.scalar_one_or_none()
-    if user is not None:
-        user.profile_summary = summary
-        await session.commit()
-
-
-async def get_profile_summary(
-    session: AsyncSession, user_id: str
-) -> Optional[str]:
-    """Return the profile_summary string for *user_id*, or None."""
-    result = await session.execute(select(User).where(User.user_id == user_id))
-    user = result.scalar_one_or_none()
-    return user.profile_summary if user else None
-
-
 # ---------------------------------------------------------------------------
 # Memory
 # ---------------------------------------------------------------------------
@@ -203,40 +179,6 @@ async def delete_memory(session: AsyncSession, memory_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def create_todo(
-    session: AsyncSession,
-    user_id: str,
-    owner_type: str,
-    title: str,
-    due_time: datetime,
-    description: Optional[str] = None,
-) -> Todo:
-    """Create a new todo / alarm entry.
-
-    Args:
-        session:     Active async DB session.
-        user_id:     Owner of the todo.
-        owner_type:  'alarm', 'agent', or 'schedule'.
-        title:       Short title shown to the user.
-        due_time:    When the todo is due / should fire.
-        description: Optional longer description.
-
-    Returns the newly created Todo instance with status 'pending'.
-    """
-    todo = Todo(
-        user_id=user_id,
-        owner_type=owner_type,
-        title=title,
-        due_time=due_time,
-        description=description,
-        status="pending",
-    )
-    session.add(todo)
-    await session.commit()
-    await session.refresh(todo)
-    return todo
-
-
 async def get_pending_todos(
     session: AsyncSession, user_id: str
 ) -> List[Todo]:
@@ -247,47 +189,6 @@ async def get_pending_todos(
         .order_by(Todo.due_time.asc())
     )
     return list(result.scalars().all())
-
-
-async def get_todos(
-    session: AsyncSession, user_id: str, status: Optional[str] = None
-) -> List[Todo]:
-    """Return todos for the given user, optionally filtered by status.
-
-    Args:
-        session: Active async DB session.
-        user_id: Owner filter.
-        status:  If provided, only rows matching this status are returned.
-                 Pass None to retrieve all statuses.
-
-    Results are ordered by due_time ascending.
-    """
-    query = select(Todo).where(Todo.user_id == user_id)
-    if status is not None:
-        query = query.where(Todo.status == status)
-    query = query.order_by(Todo.due_time.asc())
-
-    result = await session.execute(query)
-    return list(result.scalars().all())
-
-
-async def update_todo_status(
-    session: AsyncSession, todo_id: int, status: str
-) -> None:
-    """Update the status of an existing todo.
-
-    Args:
-        session:  Active async DB session.
-        todo_id:  Primary key of the todo to update.
-        status:   New status value: 'pending', 'completed', 'failed', or 'multiple'.
-
-    Silently does nothing if the todo_id does not exist.
-    """
-    result = await session.execute(select(Todo).where(Todo.id == todo_id))
-    todo = result.scalar_one_or_none()
-    if todo is not None:
-        todo.status = status
-        await session.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -360,57 +261,6 @@ async def delete_todo(
         await session.delete(todo)
         await session.commit()
 
-
-async def search_todo(
-    session: AsyncSession,
-    user_id: str,
-    id: Optional[int] = None,
-    owner_type: Optional[str] = None,
-    title: Optional[str] = None,
-    description: Optional[str] = None,
-    status: Optional[str] = None,
-    due_start: Optional[datetime] = None,
-    due_end: Optional[datetime] = None,
-    created_start: Optional[datetime] = None,
-    created_end: Optional[datetime] = None,
-) -> List[Todo]:
-    """Return todo rows for *user_id* filtered by optional predicates.
-
-    Args:
-        id:            Exact match on todo primary key.
-        owner_type:    Exact match on owner_type.
-        title:         Substring match on title.
-        description:   Substring match on description.
-        status:        Exact match on status.
-        due_start:     Include rows where due_time >= due_start.
-        due_end:       Include rows where due_time < due_end.
-        created_start: Include rows where created_at >= created_start.
-        created_end:   Include rows where created_at < created_end.
-
-    Results are ordered by due_time ascending.
-    """
-    query = select(Todo).where(Todo.user_id == user_id)
-    if id is not None:
-        query = query.where(Todo.id == id)
-    if owner_type is not None:
-        query = query.where(Todo.owner_type == owner_type)
-    if title is not None:
-        query = query.where(Todo.title.contains(title))
-    if description is not None:
-        query = query.where(Todo.description.contains(description))
-    if status is not None:
-        query = query.where(Todo.status == status)
-    if due_start is not None:
-        query = query.where(Todo.due_time >= due_start)
-    if due_end is not None:
-        query = query.where(Todo.due_time < due_end)
-    if created_start is not None:
-        query = query.where(Todo.created_at >= created_start)
-    if created_end is not None:
-        query = query.where(Todo.created_at < created_end)
-    query = query.order_by(Todo.due_time.asc())
-    result = await session.execute(query)
-    return list(result.scalars().all())
 
 
 # ---------------------------------------------------------------------------

@@ -6,11 +6,13 @@ Lifespan sequence
 2. Ensure default user      — create from config.default_user_id if missing
 3. Restore short-term mem   — load last ≤20 chat_history rows into memory
 4. Preload local models     — sentence-transformers + faster-whisper
-5. AlarmScheduler.start()   — begin 30 s polling loop for due alarms
+5. CronScheduler.start()    — APScheduler (proactive triggers + intimacy_decay
+                              + profile_daily_regenerate)。旧 AlarmScheduler
+                              / scheduler.task 2026-05-19 退役。
 
 Routes
 ------
-  /api/memory/*    — memory / personality / todo REST API (memory_api.py)
+  /api/memory/*    — memory REST API (memory_api.py)
   /api/health      — model warm-up status (health_api.py)
   /ws              — WebSocket streaming conversation (ws.py)
 """
@@ -168,7 +170,6 @@ from backend.routes.users_api import router as users_router
 from backend.routes.webhooks_api import router as webhooks_router
 from backend.routes.ws import router as ws_router
 from backend.scheduler import cron as cron_scheduler
-from backend.scheduler.task import scheduler
 
 # v3-G chunk 0+ — 触发 capability decorator 副作用注册到 CapabilityRegistry +
 # ToolRegistry。必须在 FastAPI app 构造前 import，使 ChatAgent 在第一次
@@ -495,11 +496,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     asyncio.create_task(_preload_embedding())
     asyncio.create_task(_preload_whisper())
 
-    # ── 5. Alarm scheduler ───────────────────────────────────────────────────
-    await scheduler.start(default_uid)
-    logger.info("AlarmScheduler started")
-
     # ── 6. v3-G chunk 0 — Cron scheduler (APScheduler) ──────────────────────
+    # (旧 AlarmScheduler / scheduler.task 已于 2026-05-19 退役;
+    # 提醒走 apple_calendar.create_event + macOS EventKit,无需后端轮询。)
     await cron_scheduler.start()
 
     # ── 6b. v3-G chunk 3b — intimacy_decay daily cron（每天 0:00）─────────
@@ -866,7 +865,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("[activity] stop_polling failed: %s", exc)
 
     await cron_scheduler.shutdown()
-    await scheduler.stop()
 
 
 # ---------------------------------------------------------------------------
