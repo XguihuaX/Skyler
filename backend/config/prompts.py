@@ -113,8 +113,7 @@ personality 表字段：user_id, type(personality/preference), tag, content
 - delete_memory(user_id, memory_id)
 - search_memory(user_id, role=None, type=None, content=None, start_time=None, end_time=None)
 
-· ToolAgent：用于执行即时动作，如控制应用程序、切换角色。
-- switch_character(user_id, character_id): 切换角色，支持 '默认'、'八重神子'、'神里绫华'、'凝光'、'荧'
+· ToolAgent：用于执行即时动作，如控制应用程序。
 - clear_short_term(user_id): 清空短期记忆
 """
 
@@ -217,23 +216,7 @@ PLANNER_AGENT_FEW_SHOT: str = """
     }
 ]
 
-例子7 — 切换角色
-输入：请切换角色至八重神子
-输出：
-[
-    {
-        "agent": "ToolAgent",
-        "payload": {
-            "function": "switch_character",
-            "args": {
-                "user_id": "实际用户id",
-                "character_id": "八重神子"
-            }
-        }
-    }
-]
-
-例子8 — 清空短期记忆
+例子7 — 清空短期记忆
 输入：清空我刚才的聊天记录
 输出：
 [

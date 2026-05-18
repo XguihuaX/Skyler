@@ -92,5 +92,8 @@ from backend.tools.builtin import (  # noqa: E402
     CLEAR_SHORT_TERM_SCHEMA,
 )
 
-ToolRegistry.register("switch_character", switch_character, SWITCH_CHARACTER_SCHEMA)
+#: switch_character LLM tool 已下线 — yaml-only 校验源仅认 5 个角色，DB 中
+#: cid=1/99/100/101/102 切不动 (silent failure)。前端 UI 切角色走 WS frame
+#: type="character_switch" → connection_manager.set_current,不依赖此 tool。
+#: 函数本体 + schema 暂留 backend/tools/builtin.py 不动，仅停止 LLM 暴露。
 ToolRegistry.register("clear_short_term", clear_short_term, CLEAR_SHORT_TERM_SCHEMA)
