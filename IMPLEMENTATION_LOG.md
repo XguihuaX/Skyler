@@ -1478,3 +1478,19 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
 
 ---
 
+### v4-beta 收口批次 — 本 session 已 ship 并真机验证(2026-05-16,从 ROADMAP.md Now 段剥离归档)
+
+> 2026-05-19 docs 第二刀剥离:此段属"已 ship 历史成就清单"性质,从 ROADMAP.md L15-25 移到本文件作历史归档,ROADMAP 原位删除。内容字字保留未改。
+
+| Status | Item | Goal |
+|---|---|---|
+| ✅ | 回退纯中文 | Mai `cid=1` `tts_language=zh` + voice `longyumi_v3`,人格不动;ja 链代码保留休眠 |
+| ✅ | 记忆/对话串台根治 | short_term 升级 (用户,角色,conversation) 三级隔离 + 重启按 conv 过滤恢复 |
+| ✅ | conversation 锚定绑定语义 | 规则 A(用户发起锁定 conv,响应无条件回原对话)+ 规则 B(主动消息投递前校验,过时丢弃) |
+| ✅ | character_switch 不杀 in-flight turn | 切角色帧不进 turn 调度,进行中回复跑完不被 cancel |
+| ✅ | 对话 UI 统一 | 删右上历史入口 + 删旧台词气泡;左 conv list + 右 chat panel 双推拉;全收起 Galgame 沉浸;<1280px 降级 |
+| ✅ | token 成本治理 | short_term cap 30 turn(修法 A)+ tool_result 截断 4000(修法 B) |
+| ✅ | 测试不污染主库 | 26+ 测试改 in-memory,清掉污染数据;short_term per-(user,char,conv) 隔离回归 139 passed |
+
+---
+

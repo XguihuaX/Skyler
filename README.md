@@ -179,7 +179,7 @@ Here's what Skyler currently does. None of these are locked — every layer is b
 
 - **Layer 1 — short-term** — in-process short-term buffer, isolated by **(user, character, conversation)** three levels, last N turns per turn (hard-capped at the last 30 turns for token cost control); on restart, restored from the `chat_history` table **filtered by conversation** (no longer cross-conversation / cross-character bleed)
 - **Layer 2 — long-term facts** — `memory` table, designed main write path is a server-side worker (`MemoryExtractor`, runs every 5 min, 10-stage quality filter, 4-category `entry_type`, 4-state `extraction_source` provenance tag); the `save_memory` tool is the "user explicitly asked to remember" entry; retrieval uses a forgetting-curve score `score = relevance * (1+log(1+ac)) / (1+age*decay)` with threshold gate. **✅ v4.0.0: audit concluded, remediation shipped & code-verified (rolling-summary layer + pointer self-heal + prompt rebalance + tombstone); pending real-device regression — see note above.**
-- **Layer 3 — user profile** — `users.profile_data` JSON schema (`profession` / `current_projects` / `interests` / `recurring_topics` / `communication_style` / `active_hours` / `language_preferences`). A strict validator hard-rejects projection language; legacy `profile_summary` kept as fallback; daily cron regenerates. **User profile is shared across characters (one impression of you); per-character isolation of event/relationship-type long-term memory (the F8 ownership tiering) is a v4.1 multi-character item.**
+- **Layer 3 — user profile** — `users.profile_data` JSON schema (`profession` / `current_projects` / `interests` / `recurring_topics` / `communication_style` / `active_hours` / `language_preferences`). A strict validator hard-rejects projection language; daily cron regenerates. The legacy `profile_summary` fallback was retired in commit `c1d65ff` (2026-05-19) — `profile_data` is now the sole source; `users.profile_summary` column remains as an empty placeholder (`[RETIRED]` annotated, not yet DROP COLUMN). **User profile is shared across characters (one impression of you); per-character isolation of event/relationship-type long-term memory (the F8 ownership tiering) is a v4.1 multi-character item.**
 - **Activity timeline** — parallel to `chat_history`: every app/URL session you have (with idle-filtered duration) gets persisted. The character can reference today's activity in conversation ("looks like you spent 3h in VS Code — same project as yesterday?"). 30-day retention by default.
 - **Memory / conversation viewer** — unified into the **left-side push/pull chat panel** (v4-beta UI unification, see below); `entry_type` tab (fact / preference / event / commitment) + `extraction_source` badge + confidence display
 - **Memory toggles** — long-term memory, profile, activity awareness, web search, activity timeline — each independently switchable in Settings
@@ -244,7 +244,7 @@ All components use `var(--color-*)` from `styles/themes.css` (no hardcoded Tailw
 
 ## Architecture
 
-Skyler's architecture isn't incidental. Every major choice — the Capability Registry, bidirectional MCP, persona-level `character_states`, the activity timeline — is a direct consequence of the positioning. A hackable character framework requires first-class extension, ecosystem participation, and persona persistence. If you want to know *why* a piece is shaped a certain way, see [DESIGN.md](DESIGN.md).
+Skyler's architecture isn't incidental. Every major choice — the Capability Registry, bidirectional MCP, persona-level `character_states`, the activity timeline — is a direct consequence of the positioning. A hackable character framework requires first-class extension, ecosystem participation, and persona persistence. If you want to know *why* a piece is shaped a certain way, see [DESIGN_LITE.md](DESIGN_LITE.md) (current source of truth) or [docs/archive/DESIGN.md](docs/archive/DESIGN.md) (historical institutional memory; 5,206 lines, frozen 2026-05-19).
 
 ```
 User input (voice / text)
@@ -420,7 +420,7 @@ See [ROADMAP.md](ROADMAP.md) for the full picture.
 
 ## ⚠️ Known Problems / 已知问题
 
-按优先级排列。日常运行不阻塞，但未来需要处理。详细 backlog 散落条目散见 [ROADMAP.md §Tech Debt & Backlog](ROADMAP.md#tech-debt--backlog) / [DESIGN.md §十四之B](DESIGN.md)；本块是 manual 验收期间发现的活跃 issue 汇总。
+按优先级排列。日常运行不阻塞，但未来需要处理。详细 backlog 散落条目散见 [ROADMAP.md §Tech Debt & Backlog](ROADMAP.md#tech-debt--backlog) / [docs/archive/DESIGN.md §十四之B](docs/archive/DESIGN.md)；本块是 manual 验收期间发现的活跃 issue 汇总。
 
 ### 中
 
@@ -428,6 +428,7 @@ See [ROADMAP.md](ROADMAP.md) for the full picture.
    - 文件：`test_chat_agent` / `test_database` / `test_integration` / `test_llm_client` / `test_memory_agent` / `test_memory` / `test_ws_helpers`
    - 根因：chunk 0–4 累积过程中漏维护，引用已删/改名 API（`upsert_personality` / `DEFAULT_MODEL` / `_personality_to_dict` / `_run_plan`）
    - 影响：每次 hotfix 的 "0 regression" 声明带 false positive（实际新代码 0 regression，但旧测试仍红）
+   - **2026-05-19 更新**：commit `c1d65ff` 删除 `backend/agents/memory.py` / `backend/agents/planner.py` / `backend/scheduler/task.py` 整文件后，`test_memory_agent.py` 引用的源模块已不存在，问题**更严重**但仍未修；7 文件 currently 未触
    - 修法：扫 7 文件改成当前 API / 删过时测试
    - 工程量：1–2 小时
 
@@ -462,7 +463,8 @@ See [ROADMAP.md](ROADMAP.md) for the full picture.
 
 6. **`characters.yaml` vs DB 双源真相**（v3-E1 留 v4 Scheme C 修）
    - 当前 Scheme B（DB 主 + YAML fallback）—— `_build_messages` 优先 DB persona，YAML fallback
-   - 计划 Scheme C（v3-G 末或 v4）：删 yaml、DB 单源、迁移脚本、`switch_character` 改 DB query、`prompt_manager` 改 DB-backed
+   - 计划 Scheme C（v3-G 末或 v4）：删 yaml、DB 单源、迁移脚本、`prompt_manager` 改 DB-backed
+   - **2026-05-19 更新**：原条目含的 `switch_character 改 DB query` 已不再适用 —— `switch_character` LLM tool 在 commit `71b6e99` 已整体下线（schema 不暴露给 LLM；前端切角色走 WS `character_switch` 帧）；该 backlog 性质已从"接线修复"变为"yaml 退役 + prompt_manager 单源化"
 
 7. **超长 B 站字幕分段总结**（v3.5 chunk 6a 衍生 backlog）
    - 现状：`bilibili.get_subtitles` 返完整字幕全文不截断
@@ -484,11 +486,10 @@ See [ROADMAP.md](ROADMAP.md) for the full picture.
     - 现状：clipboard watcher 调试日志会带 content preview；生产环境若 log 级别开 INFO 可能记录剪贴板敏感内容（密码 / token 等）
     - 修法：watcher / capabilities 内部 log 改成 hash / length / type，content 仅 DEBUG 级（默认 WARNING+ 不记）
 
-11. **`users.profile_summary` legacy 字段未来清理**（v3.5 chunk 11 衍生 backlog）
-    - 现状：chunk 11 引入结构化 `profile_data` JSON 字段，但 `profile_summary`（chunk 9 自然语言段）**保留作 fallback**（向后兼容 + 用户主动迁移期）
-    - 现行注入优先级：`profile_data` 非空 → 模板化注入；NULL → fallback 到 `profile_summary`
-    - 修法：N 个版本后（用户 profile_data 全部填充）→ 删 column / 删 legacy 写库路径 / 删 chunk 9 `/profile_summary/*` endpoints（已加 deprecation log）
-    - 工程量：1 个 migration（DROP COLUMN）+ 3 个 endpoint 删除 + chunk 9 路径清理；< 1 小时
+11. **`users.profile_summary` legacy 字段未来清理**（v3.5 chunk 11 衍生 backlog）—— **2026-05-19 commit `c1d65ff` 大部分已闭合**
+    - **已闭合**：`chat.py` fallback 已删；`services.get_profile_summary / update_profile_summary` 已删；`users_api.py /profile_summary` 全套 endpoints 已删；`memory_api.py` bare `/profile` 已删；`ws.py` `_compute_profile_summary` / `_regenerate_profile_summary` 整段 217 行已删；`conversations_api.py` delete 路径 kick 已删；`prompts.py` PLANNER 段已删
+    - **保留**：`users.profile_summary` 列保留为空列（`models.py:24-28` 加 `[RETIRED]` 注释），未 DROP COLUMN
+    - **剩余工作**：1 个 migration（DROP COLUMN）—— 可作单独小刀处理；估 < 30 分钟
 
 12. **MemoryExtractor worker 调参 backlog**（v3.5 chunk 10 衍生）
     - 现状：worker 默认 ``interval_seconds: 300`` / ``batch_size: 50`` / ``min_confidence: 0.5`` / ``dup_threshold: 0.9`` —— 全是初始猜测值，未跑长跑数据
@@ -512,7 +513,7 @@ See [ROADMAP.md](ROADMAP.md) for the full picture.
 
 15. **Windows / Linux 平台 activity_monitor 不可用**（v3.5 chunk 8a 衍生）
     - 现状：activity_monitor 全函数返 None；ActivityWatcher 仍然跑（不抛错），但 listener 拿不到任何 change → smart trigger 永远 skip
-    - 跨平台一致性：与 v3 阶段 macOS-only 整体策略一致（[DESIGN §二十](DESIGN.md)）
+    - 跨平台一致性：与 v3 阶段 macOS-only 整体策略一致（[DESIGN §二十](docs/archive/DESIGN.md)）
     - 修法：Windows 用 win32gui ``GetForegroundWindow`` + UIA / Chrome DevTools Protocol 拉 URL；Linux X11 ``_NET_ACTIVE_WINDOW`` + 浏览器扩展。两边都是单独工程，留 v6+ Windows 客户端阶段处理
 
 16. **CC restore-user-tweaks 流程非幂等 backlog**（hotfix-8 副产，2026-05-13）
@@ -529,6 +530,10 @@ See [ROADMAP.md](ROADMAP.md) for the full picture.
     - 来源：v4.0.0 记忆线收口审计副产（与第 6 条 `characters.yaml` 双源、第 11 条 `profile_summary` 清理同性质）
     - 修法：留待**表层重构 pass**（建议并入/紧随表结构重构那一局）—— 详 DESIGN §十五之 Z.5.1 移交清单 + §十四之B RT-1~5
     - 优先级：结构债，日常不阻塞；不在 v4.0.0 ship 范围
+
+18. ~~**todos 整套**~~ ✅ commit `c1d65ff` 退役（2026-05-19）—— `add_todo / delete_todo / search_todo` LLM 工具链路自 v3-C 已退出主流程（PlannerAgent/MemoryAgent dead path），实际无任何写入源；`backend/agents/planner.py` / `backend/agents/memory.py` / `backend/scheduler/task.py` 整文件删；`/api/todos/*` endpoints 删；`services.py` 中 4 个 todo 函数删；`prompts.py` PLANNER 段死代码删；提醒能力由 `apple_calendar.create_event`(macOS EventKit) 承担。`todos` 表 + `Todo` ORM 保留空表 + `[RETIRED]` 注释，未 DROP TABLE，可作后续单独小刀。
+
+19. ~~**`switch_character` LLM tool silent failure**~~ ✅ commit `71b6e99` 下线（2026-05-19）—— 旧 `prompt_manager.switch_character` 仅认 yaml 5 个角色名，DB cid=1/99/100/101/102 切不动 silent failure。修法：`ToolRegistry.register("switch_character", ...)` 删除；prompts.py / tool_addendum.py 引导文字删；函数体 + schema 暂留 `backend/tools/builtin.py` 不动。前端切角色走 WS `character_switch` 帧（与此 tool 无关），不受影响。
 
 > ~~**用户画像污染**~~（"温柔陪伴 / 亲密关系 / 细腻敏感" 等反推词写入 profile_summary）✅ chunk 11 治本（2026-05-12）—— LLM 输出严格按 JSON schema，validator hard-reject 违规输出，注入用机械模板而非 LLM。
 >

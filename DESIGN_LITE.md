@@ -1,7 +1,9 @@
 # Skyler 技术设计速览(DESIGN_LITE)v4.0.0 记忆线收口(2026-05-17)
 
+> **当前设计真源**:2026-05-19 docs 第二刀起,本文件(DESIGN_LITE.md)为 Skyler 当前设计的单一真源。
+> 完整 5,206 行 DESIGN.md 已归档至 `docs/archive/DESIGN.md` 作为历史机构记忆档案(含每个 chunk / hotfix 的根因分析、testing 覆盖、实施细节);DESIGN.md 不再维护,仅作追溯参考。
+>
 > 本文档是给 Claude 对话使用的**精简版**技术设计。每次开启新会话时,把本文档粘进上下文即可。
-> 完整 5200+ 行 DESIGN.md 是历史档案(含每个 chunk / hotfix 的根因分析、testing 覆盖、实施细节),保留作机构记忆。
 >
 > **当前状态(2026-05-17)**:v4-beta 收口完成 + v4.0.0 记忆线收口(audit 完结 + 修复链 ship,代码核验,待真机回归),进入剩余 v4.0.0 ship 路径。
 > - v4-alpha shipped 2026-05-13(chunk 14 + UX-004/005/007 + hotfix-3 ~ 10)
@@ -236,7 +238,8 @@ mcp_tool_state   : id, server_name, tool_name, enabled, updated_at  (UNIQUE serv
 ```
 profession / current_projects / interests / recurring_topics /
 communication_style / active_hours / language_preferences
-profile_summary @deprecated 但保留 fallback
+profile_summary 列保留为空列([RETIRED 2026-05-19],fallback 已退役于 commit c1d65ff;
+未 DROP COLUMN,留作后续单独小刀)
 ```
 
 ---
@@ -547,24 +550,27 @@ Tests:
   tests/test_sanitize.py          — 128 regression
 
 历史档案:
-  DESIGN.md  4779 行 — git 在线查每个 chunk/hotfix 的详细决策
+  docs/archive/DESIGN.md  5,206 行 — git 在线查每个 chunk/hotfix 的详细决策
+                                  (2026-05-19 docs 第二刀归档,不再维护)
+  docs/archive/DESIGN_patch.md     — v4-beta 收口 patch 段,未 merge 入 DESIGN.md,
+                                  与主档一起冻结归档
 ```
 
 ---
 
-## §11 与完整 DESIGN.md 的指针
+## §11 与归档 DESIGN.md 的指针
 
-本 LITE 涵盖 v4-beta 当前架构的关键点。完整版 DESIGN.md(4779 行)含:
+本 LITE 涵盖 v4-beta 当前架构的关键点。归档版 `docs/archive/DESIGN.md`(5,206 行,2026-05-19 docs 第二刀冻结)含:
 
 - §三~§十四:v1-v3 完整数据 schema 演进、API 设计、前端组件历史
 - §十五之A~W:各架构抽象的详细设计(Capability Registry / 双向 MCP / character_states / proactive / activity timeline / sanitize chain)的完整 motivate + alternatives 否决理由 + 实施细节。**其中 A~T = v1–v3α 架构;U/V/W = v4-alpha 期 UX-005/004/007(注意不是 Persona Engineering)。**
-- **§十五之X/Y/Z = v4-beta**:X=Persona Engineering / Y=Observability / Z=v4-beta 收口批次 —— 经 DESIGN_patch.md 的 Patch 2/3/5 paste 进 DESIGN.md(找 Persona Engineering 去 §十五之X,不是 A~T)。
+- **§十五之X/Y/Z = v4-beta**:X=Persona Engineering / Y=Observability / Z=v4-beta 收口批次 —— 注:`docs/archive/DESIGN_patch.md` 的 Patch 2/3/5 段从未 merge 入 DESIGN.md,patch 与主档一起冻结归档,内容以本 LITE §6/§7 + DESIGN.md 既有段为准。
 - §十六~§二十:测试策略 / 性能 / 平台兼容 / 隐私模型
 - 每个 chunk 的 audit 决策记录 / 实测覆盖 / 风险评估
 
-调架构 / 改 schema / 大 refactor 前应回查完整版。日常 Claude 对话用本 LITE 即可。
+追溯历史决策 / 查 chunk 详细 motivate 前可回查归档版。日常设计真源用本 LITE 即可。
 
 ---
 
-**文档版本**:LITE 1.1(2026-05-16,v4-beta 收口批次更新)— 基于 DESIGN.md 4779 行原版整合
-**完整版**:DESIGN.md 4779 行(历史档案;v4-beta 收口增量见 DESIGN_patch.md)
+**文档版本**:LITE 1.1(2026-05-16,v4-beta 收口批次更新);**2026-05-19 升为当前设计真源**(docs 第二刀)
+**归档版**:`docs/archive/DESIGN.md` 5,206 行 + `docs/archive/DESIGN_patch.md` 477 行(均冻结,不再维护)

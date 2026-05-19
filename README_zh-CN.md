@@ -212,7 +212,7 @@ python -m tools.check_moc3_version frontend/public/live2d/yae/
 
 - **第 1 层 短期** —— 进程内 short_term buffer,按 **(用户, 角色, conversation)** 三级隔离,每轮取最近 N turn(硬性 cap 最近 30 turn,token 成本治理);进程重启后从 `chat_history` 表**按 conversation 过滤**恢复(不再跨对话/跨角色串)。
 - **第 2 层 长期事实记忆** —— `memory` 表,设计入库主路径为 server-side worker(`MemoryExtractor`,每 5 min batch 提取 + 10 道 quality filter + entry_type 四分类 + extraction_source 四态来源标签);`save_memory` tool 为"用户明确说要记"的显式入口;检索按遗忘曲线 `score = relevance * (1+log(1+ac)) / (1+age*decay)` + threshold gate。**✅ v4.0.0:audit 完结,修复链已 ship 且代码核验(滚动摘要层 + 指针自愈 + prompt 重平衡 + 墓碑);待真机回归 —— 见上方更新。**
-- **第 3 层 用户画像** —— `users.profile_data` JSON schema(profession / current_projects / interests / recurring_topics / communication_style / active_hours / language_preferences),validator 严格 hard-reject 反推词;legacy `profile_summary` 自由段保留作 fallback;每日 cron 自动重生。**用户画像跨角色共享(对你的一份印象);事件/关系型长期记忆按角色隔离的归属分级(F8)是 v4.1 多角色项。**
+- **第 3 层 用户画像** —— `users.profile_data` JSON schema(profession / current_projects / interests / recurring_topics / communication_style / active_hours / language_preferences),validator 严格 hard-reject 反推词;每日 cron 自动重生。legacy `profile_summary` fallback 已在 commit `c1d65ff` (2026-05-19) 退役 ——`profile_data` 为唯一来源;`users.profile_summary` 列保留为空列（`[RETIRED]` 注释,未 DROP COLUMN）。**用户画像跨角色共享(对你的一份印象);事件/关系型长期记忆按角色隔离的归属分级(F8)是 v4.1 多角色项。**
 - **活动时间线** —— 跟 `chat_history` 平行的第二条 timeline,持久化你每天的 app/URL session(已过滤 idle 时长)。角色能在对话里自然引用今天的活动("看你 VS Code 待了 3 小时,跟昨天那个项目吧?")。默认保留 30 天。
 - **记忆/对话查看** —— 统一并入**左侧推拉 chat panel**(v4-beta UI 统一,见下);entry_type tab(事实 / 偏好 / 事件 / 承诺)+ extraction_source 角标 + confidence 显示。
 - **记忆开关** —— 长期记忆 / 用户画像 / 屏幕感知 / web search / 活动时间线 全在 Settings 可单独 toggle。
@@ -278,7 +278,7 @@ Settings → UI 风格切换:
 
 ## 架构
 
-Skyler 的架构不是凑出来的。每个大决策 —— 能力注册表、双向 MCP、persona 级 `character_states`、活动时间线、conversation 锚定绑定语义 —— 都是定位决定的直接结果。一个"可改的角色框架"必须有平权的扩展机制、生态参与、人格持久化。想知道为什么一块东西长这样,见 [DESIGN.md](DESIGN.md) / 精简版 [DESIGN_LITE.md](DESIGN_LITE.md)。
+Skyler 的架构不是凑出来的。每个大决策 —— 能力注册表、双向 MCP、persona 级 `character_states`、活动时间线、conversation 锚定绑定语义 —— 都是定位决定的直接结果。一个"可改的角色框架"必须有平权的扩展机制、生态参与、人格持久化。想知道为什么一块东西长这样,见 [DESIGN_LITE.md](DESIGN_LITE.md)(当前设计真源) 或 [docs/archive/DESIGN.md](docs/archive/DESIGN.md)(历史机构记忆档案,2026-05-19 归档)。
 
 ```
 用户输入(语音 / 文字)
