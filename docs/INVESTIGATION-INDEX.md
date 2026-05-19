@@ -11,6 +11,7 @@ INVESTIGATION.md 已封存（2086 行过长不再追加）；INVESTIGATION-2.md 
 
 | 日期 | 主题 | 一句话结论 | 位置 |
 |---|---|---|---|
+| 2026-05-20 00:21 | **INV-3 · token 治理轮 第一刀（如实收口）** | 原假设代码层双排除；主路径 40+ 轮实测封顶 ~22.7k，43-68k 未复现；tools_schema 13.25k 实测确认；summary 全 0 但 extractor 活（矛盾）；真凶疑在未观测的主动/后台链，转第二刀（⑤ 待查清单 6 条，含 fold 机制认知分歧待代码裁决） | INVESTIGATION-3.md |
 | 2026-05-19 22:21 | **docs 整理轮（归档第一刀 + 真源对齐第二刀）** | 40 份 .md 治理；A 方案：DESIGN.md 冻结归档 / DESIGN_LITE 升真源；第一刀 19 份 git mv R100 零字节改；第二刀 5 真源 6 类改动（死链 / 退役同步 / HEAD 锚 / 新成果补录 / LITE 补位 / 新挂起项）；"未 commit" 硬校验通过 | INVESTIGATION-2.md |
 | 2026-05-19 15:30 | **性能治法弹药** | persona Mai 实测 2,759 tokens（修正上一版误判，进 Top-3 最肥块）；ADDENDUM 97.8% 真增量难压；活动 timeline 有硬 cap 非膨胀；最大膨胀仍是工具 schema 11.1k（懒载理论可省 9-10k） | INVESTIGATION-2.md |
 | 2026-05-19 15:09 | LLM prompt token 分块账单 | activity timeline 8h heavy 154 tokens 有硬 cap；首要膨胀 = tool schemas 11.1k + ADDENDUM 3.2k 固定 95% | INVESTIGATION-2.md |
@@ -31,6 +32,7 @@ INVESTIGATION.md 已封存（2086 行过长不再追加）；INVESTIGATION-2.md 
 
 ### 1. 性能 / Token 治理（持续主题）
 
+- 2026-05-20 00:21 INV-3 第一刀 · 如实收口（INVESTIGATION-3.md）— 40+ 轮实测封顶 22.7k 未复现 43-68k；tools_schema 13.25k 实测；summary 全 0 ↔ extractor 活的矛盾；真凶疑在主动/后台链，转第二刀（⑤ 6 条，含 fold 机制认知分歧）
 - 2026-05-19 15:30 性能治法弹药（INVESTIGATION-2.md）— 修正 persona 误判 + 懒加载地形
 - 2026-05-19 15:09 token 分块账单（INVESTIGATION-2.md）— activity timeline cap 验证
 

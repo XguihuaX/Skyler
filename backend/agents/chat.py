@@ -1645,6 +1645,19 @@ class ChatAgent(IAgent):
             # reverse_map 给后面 tool dispatch 反查回 ToolRegistry 原 key。
             # call_llm 内部还会 defensive 再跑一次 (幂等),且打 dispatcher log。
             san_tools, tool_name_rev_map = sanitize_tools_for_llm(_get_all_tools())
+            # INVESTIGATION-3 第一刀 — token observation probe(纯观测,fail-silent,
+            # 写一行 JSON 到 logs/token_probe.jsonl)。模块本身不读 DB 不调 LLM,
+            # 任何异常 silent 吞 + debug log,绝不阻塞此 LLM 调用。
+            try:
+                from backend.agents._token_probe import emit_sync as _token_probe_emit
+                _token_probe_emit(
+                    conversation_id=conversation_id,
+                    turn_n=round_idx,
+                    messages=messages,
+                    tools=san_tools,
+                )
+            except Exception:
+                logger.debug("[token_probe] outer-guard skipped emit")
             try:
                 wrapper = await call_llm(
                     messages,
