@@ -14,13 +14,13 @@
 
 > v4-beta 收口批次(2026-05-16)的"本 session 已 ship 并真机验证"7 行成就清单已剥离归档至 [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)(2026-05-19 docs 第二刀)。
 
-### 本 session 已实现（2026-05-19，未 commit）
+### 本 session 已 ship（2026-05-19）
 
 | Status | Item | Notes |
 |---|---|---|
-| 🚧 | 左侧 ConversationList 右边缘可拖拽 resize handle | 已实现，真机验证通过，**未 commit**(改 4 文件:store/index.ts / Panel.tsx / ConversationList.tsx / ChatHistoryPanel.tsx 中 2 个);新增 `momoos.convListWidth` localStorage,clamp [160,400] |
-| 🚧 | 右侧 ChatHistoryPanel 左边缘可拖拽 resize handle | 已实现，真机验证通过，**未 commit**;新增 `momoos.chatHistoryWidth` localStorage,clamp [320,600];立绘区 flex-1 min-w-0 +Live2D ResizeObserver 自动响应 |
-| ✅ | docs 归档第一刀 | 已 git mv 归档(15 tracked R100 + 4 untracked 移到 docs/archive/，**未 commit**)。DESIGN/DESIGN_patch/AUDIT-GROUND-TRUTH/BPATH-PROGRESS/INVESTIGATION/audit_*×4/persona-audit/bugfix-*×3/chunk-15-*×4/fan-ui/stage-2 共 19 份 |
+| ✅ | 左侧 ConversationList 右边缘可拖拽 resize handle | commit `60dea57` (2026-05-19);改 4 文件:store/index.ts / Panel.tsx / ConversationList.tsx / ChatHistoryPanel.tsx 中 2 个;新增 `momoos.convListWidth` localStorage,clamp [160,400] |
+| ✅ | 右侧 ChatHistoryPanel 左边缘可拖拽 resize handle | commit `60dea57` (同上);新增 `momoos.chatHistoryWidth` localStorage,clamp [320,600];立绘区 flex-1 min-w-0 +Live2D ResizeObserver 自动响应 |
+| ✅ | docs 整理轮(归档第一刀 + 真源对齐第二刀 + 索引登记) | commit `dcd3327` (2026-05-19);19 份归档至 docs/archive/(R100 零字节改动) + 5 真源对齐(死链/退役同步/HEAD 锚点 c1d65ff) + INVESTIGATION-2/INDEX 登记 |
 
 ### 剩余 v4.0.0 收口项(按序)
 
