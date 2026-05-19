@@ -18,13 +18,14 @@ import ChatHistory from './ChatHistory';
  */
 export default function ChatHistoryPanel() {
   const collapsed = useAppStore((s) => s.chatPanelCollapsed);
+  // 2026-05-19 可拖拽宽度。collapsed=true → 强制 0;否则用 store 持久化值。
+  const chatHistoryWidth = useAppStore((s) => s.chatHistoryWidth);
 
   return (
     <div
-      className={`shrink-0 h-full flex flex-col overflow-hidden transition-[width] duration-200 ease-out ${
-        collapsed ? 'w-0' : 'w-[420px]'
-      }`}
+      className="shrink-0 h-full flex flex-col overflow-hidden transition-[width] duration-200 ease-out"
       style={{
+        width: collapsed ? 0 : chatHistoryWidth,
         background: 'color-mix(in srgb, var(--color-bg-surface) 80%, transparent)',
         borderLeft: collapsed ? 'none' : '1px solid var(--color-border-subtle)',
         backdropFilter: collapsed ? undefined : 'blur(8px)',

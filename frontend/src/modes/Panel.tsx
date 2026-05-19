@@ -1,6 +1,14 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { useAppStore } from '../store';
+import {
+  useAppStore,
+  CONV_LIST_WIDTH_MIN,
+  CONV_LIST_WIDTH_MAX,
+  CONV_LIST_WIDTH_DEFAULT,
+  CHAT_HISTORY_WIDTH_MIN,
+  CHAT_HISTORY_WIDTH_MAX,
+  CHAT_HISTORY_WIDTH_DEFAULT,
+} from '../store';
 import CapabilitiesPanel from '../components/capabilities/CapabilitiesPanel';
 import CharacterPanel from '../components/CharacterPanel';
 import CharacterStatePanel from '../components/CharacterStatePanel';
@@ -24,6 +32,85 @@ export default function Panel() {
   // 方案 1:右侧 chat panel 推拉,与左侧 conv list 对称。
   const chatPanelCollapsed   = useAppStore((s) => s.chatPanelCollapsed);
   const setChatPanelCollapsed = useAppStore((s) => s.setChatPanelCollapsed);
+
+  // 2026-05-19 — ConversationList 右边缘可拖拽 resize handle。
+  // 拖拽改 store.conversationListWidth (clamp 已在 store 内做),立绘区
+  // (Panel.tsx 中 ``flex-1 min-w-0`` 容器) 自动响应,Live2D runtime
+  // (pixiCubism4.ts:234) ResizeObserver 实时重算 canvas 尺寸,不变形。
+  const convListWidth = useAppStore((s) => s.conversationListWidth);
+  const setConvListWidth = useAppStore((s) => s.setConversationListWidth);
+  const dragStartRef = useRef<{ x: number; w: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const onResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragStartRef.current = { x: e.clientX, w: convListWidth };
+    setDragging(true);
+    // 锁住 pointer 避免拖快脱离 handle 时停掉
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }, [convListWidth]);
+
+  const onResizeMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const next = dragStartRef.current.w + dx;
+    setConvListWidth(next); // store 内部 clamp [MIN, MAX]
+  }, [setConvListWidth]);
+
+  const onResizeEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current) return;
+    dragStartRef.current = null;
+    setDragging(false);
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch { /* swallow */ }
+  }, []);
+
+  // 2026-05-19 — 右侧 ChatHistoryPanel 左边缘 resize handle (镜像左侧)。
+  // ⚠️ dx 取反:handle 在右侧栏左边缘,右拖 dx>0 → panel 应**变窄**
+  // (而左侧栏右边缘 handle 右拖 dx>0 → 它变宽,方向相反)。
+  const chatHistoryWidth = useAppStore((s) => s.chatHistoryWidth);
+  const setChatHistoryWidth = useAppStore((s) => s.setChatHistoryWidth);
+  const dragChatStartRef = useRef<{ x: number; w: number } | null>(null);
+  const [draggingChat, setDraggingChat] = useState(false);
+
+  const onChatResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragChatStartRef.current = { x: e.clientX, w: chatHistoryWidth };
+    setDraggingChat(true);
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }, [chatHistoryWidth]);
+
+  const onChatResizeMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragChatStartRef.current) return;
+    const dx = e.clientX - dragChatStartRef.current.x;
+    // 取反:右拖(dx 正)→ panel 变窄;左拖(dx 负)→ panel 变宽。
+    const next = dragChatStartRef.current.w - dx;
+    setChatHistoryWidth(next); // store 内部 clamp [MIN, MAX]
+  }, [setChatHistoryWidth]);
+
+  const onChatResizeEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragChatStartRef.current) return;
+    dragChatStartRef.current = null;
+    setDraggingChat(false);
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch { /* swallow */ }
+  }, []);
+
+  // 拖拽时给 body 设 col-resize cursor + 禁用 user-select,防止
+  // 拖出 handle 区域时光标变回箭头或选中文本。任一 handle 在拖即生效。
+  useEffect(() => {
+    if (!dragging && !draggingChat) return;
+    const prevCursor = document.body.style.cursor;
+    const prevSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevSelect;
+    };
+  }, [dragging, draggingChat]);
 
   // bugfix-2: 共享 toast 给 CapabilitiesPanel / SettingsPanelV2(老 SettingsPanel
   // 自己内置 toast,不接入)。
@@ -50,6 +137,51 @@ export default function Panel() {
         {panelView === 'chat' ? (
           <>
             <ConversationList />
+
+            {/* 2026-05-19 — ConversationList 右边缘 resize handle。
+                仅 collapsed=false 时显示;collapsed=true 时整栏 width=0,handle
+                也无意义。4px 宽热区(给鼠标足够命中面积),内部 1px 高亮线;
+                hover/dragging 时加粗加亮。pointer events 走 onResize* 三件套
+                (capture + move + release)。 */}
+            {!collapsed && (
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="拖拽调整对话列表宽度"
+                aria-valuenow={convListWidth}
+                aria-valuemin={CONV_LIST_WIDTH_MIN}
+                aria-valuemax={CONV_LIST_WIDTH_MAX}
+                onPointerDown={onResizeStart}
+                onPointerMove={onResizeMove}
+                onPointerUp={onResizeEnd}
+                onPointerCancel={onResizeEnd}
+                onDoubleClick={() => setConvListWidth(CONV_LIST_WIDTH_DEFAULT)}
+                className="shrink-0 h-full relative group"
+                style={{
+                  width: 4,
+                  cursor: 'col-resize',
+                  touchAction: 'none',
+                }}
+                title="拖拽调整宽度 · 双击重置"
+              >
+                <div
+                  className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 transition-colors"
+                  style={{
+                    width: dragging ? 2 : 1,
+                    background: dragging
+                      ? 'var(--color-accent)'
+                      : 'var(--color-border-subtle)',
+                  }}
+                />
+                <div
+                  className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
+                  style={{
+                    width: 2,
+                    background: 'var(--color-accent)',
+                  }}
+                />
+              </div>
+            )}
 
             {/* Vertical collapse toggle — always visible in chat view */}
             <button
@@ -101,6 +233,50 @@ export default function Panel() {
             >
               {chatPanelCollapsed ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
             </button>
+
+            {/* 2026-05-19 — ChatHistoryPanel 左边缘 resize handle (镜像左侧 handle)。
+                仅 chatPanelCollapsed=false 时显示。dx 取反:右拖 panel 变窄、立绘
+                变大;左拖 panel 变宽、立绘变小。同 4px 热区 + 1px/2px 灰/accent
+                高亮 + col-resize cursor + 双击重置 DEFAULT(420)。 */}
+            {!chatPanelCollapsed && (
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="拖拽调整聊天记录宽度"
+                aria-valuenow={chatHistoryWidth}
+                aria-valuemin={CHAT_HISTORY_WIDTH_MIN}
+                aria-valuemax={CHAT_HISTORY_WIDTH_MAX}
+                onPointerDown={onChatResizeStart}
+                onPointerMove={onChatResizeMove}
+                onPointerUp={onChatResizeEnd}
+                onPointerCancel={onChatResizeEnd}
+                onDoubleClick={() => setChatHistoryWidth(CHAT_HISTORY_WIDTH_DEFAULT)}
+                className="shrink-0 h-full relative group"
+                style={{
+                  width: 4,
+                  cursor: 'col-resize',
+                  touchAction: 'none',
+                }}
+                title="拖拽调整宽度 · 双击重置"
+              >
+                <div
+                  className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 transition-colors"
+                  style={{
+                    width: draggingChat ? 2 : 1,
+                    background: draggingChat
+                      ? 'var(--color-accent)'
+                      : 'var(--color-border-subtle)',
+                  }}
+                />
+                <div
+                  className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
+                  style={{
+                    width: 2,
+                    background: 'var(--color-accent)',
+                  }}
+                />
+              </div>
+            )}
 
             <ChatHistoryPanel />
           </>

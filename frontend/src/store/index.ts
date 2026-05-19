@@ -40,6 +40,18 @@ export interface ChatMessage {
 const CONV_LIST_COLLAPSED_KEY = 'momoos.convListCollapsed';
 // 方案 1(右侧 chat panel 推拉)— 与 conv list 推拉对称。同样持久化到 localStorage。
 const CHAT_PANEL_COLLAPSED_KEY = 'momoos.chatPanelCollapsed';
+// 2026-05-19 — ConversationList 可拖拽宽度。default 240 (= 旧 w-60),clamp [160,400]。
+const CONV_LIST_WIDTH_KEY = 'momoos.convListWidth';
+export const CONV_LIST_WIDTH_DEFAULT = 240;
+export const CONV_LIST_WIDTH_MIN = 160;
+export const CONV_LIST_WIDTH_MAX = 400;
+// 2026-05-19 — ChatHistoryPanel 可拖拽宽度。default 420 (= 旧 w-[420px]),
+// clamp [320,600]:MIN 320 保证聊天可读;MAX 600 给立绘区留足最小宽度,
+// 与 ConversationList MAX 400 + 各 handles/buttons 共存时立绘不会被挤没。
+const CHAT_HISTORY_WIDTH_KEY = 'momoos.chatHistoryWidth';
+export const CHAT_HISTORY_WIDTH_DEFAULT = 420;
+export const CHAT_HISTORY_WIDTH_MIN = 320;
+export const CHAT_HISTORY_WIDTH_MAX = 600;
 
 // M1 Air 小屏降级阈值。视口 inner width < SMALL_VIEWPORT_PX → 默认两侧抽屉
 // 都收起,优先保立绘 + 输入框;用户仍可手动展开。13" M1 Air 默认逻辑分辨率
@@ -85,6 +97,58 @@ function readChatPanelCollapsedFromStorage(): boolean {
 
 function writeChatPanelCollapsedToStorage(v: boolean): void {
   writeBoolStorage(CHAT_PANEL_COLLAPSED_KEY, v);
+}
+
+function clampConvListWidth(v: number): number {
+  if (!Number.isFinite(v)) return CONV_LIST_WIDTH_DEFAULT;
+  if (v < CONV_LIST_WIDTH_MIN) return CONV_LIST_WIDTH_MIN;
+  if (v > CONV_LIST_WIDTH_MAX) return CONV_LIST_WIDTH_MAX;
+  return Math.round(v);
+}
+
+function readConvListWidthFromStorage(): number {
+  try {
+    const raw = localStorage.getItem(CONV_LIST_WIDTH_KEY);
+    if (raw === null) return CONV_LIST_WIDTH_DEFAULT;
+    const n = Number(raw);
+    return clampConvListWidth(n);
+  } catch {
+    return CONV_LIST_WIDTH_DEFAULT;
+  }
+}
+
+function writeConvListWidthToStorage(v: number): void {
+  try {
+    localStorage.setItem(CONV_LIST_WIDTH_KEY, String(v));
+  } catch {
+    // localStorage unavailable — silently ignore
+  }
+}
+
+function clampChatHistoryWidth(v: number): number {
+  if (!Number.isFinite(v)) return CHAT_HISTORY_WIDTH_DEFAULT;
+  if (v < CHAT_HISTORY_WIDTH_MIN) return CHAT_HISTORY_WIDTH_MIN;
+  if (v > CHAT_HISTORY_WIDTH_MAX) return CHAT_HISTORY_WIDTH_MAX;
+  return Math.round(v);
+}
+
+function readChatHistoryWidthFromStorage(): number {
+  try {
+    const raw = localStorage.getItem(CHAT_HISTORY_WIDTH_KEY);
+    if (raw === null) return CHAT_HISTORY_WIDTH_DEFAULT;
+    const n = Number(raw);
+    return clampChatHistoryWidth(n);
+  } catch {
+    return CHAT_HISTORY_WIDTH_DEFAULT;
+  }
+}
+
+function writeChatHistoryWidthToStorage(v: number): void {
+  try {
+    localStorage.setItem(CHAT_HISTORY_WIDTH_KEY, String(v));
+  } catch {
+    // localStorage unavailable — silently ignore
+  }
 }
 
 // V2.5-D — start-up mode persistence. First-run default is 'panel' so a fresh
@@ -210,6 +274,16 @@ interface AppState {
   // 持久化到 localStorage,M1 Air 小屏首次启动默认收起）
   chatPanelCollapsed: boolean;
   setChatPanelCollapsed: (v: boolean) => void;
+
+  // 2026-05-19 — ConversationList 可拖拽宽度(px)。collapsed=false 时生效,
+  // collapsed=true 时整体 width=0(收起)。clamp [160, 400] 防过窄/过宽吞立绘。
+  conversationListWidth: number;
+  setConversationListWidth: (v: number) => void;
+
+  // 2026-05-19 — ChatHistoryPanel 可拖拽宽度(px)。chatPanelCollapsed=false 时生效。
+  // clamp [320, 600]:聊天可读下限 + 给立绘区留足最小宽度上限。
+  chatHistoryWidth: number;
+  setChatHistoryWidth: (v: number) => void;
 
   // 诊断用：用户最近一次发送 user message 的 performance.now() 时间戳
   // 仅前端 in-memory，所有前端 WS 接收 timer 都相对它计算 elapsed
@@ -419,6 +493,20 @@ export const useAppStore = create<AppState>((set) => ({
   setChatPanelCollapsed: (chatPanelCollapsed) => {
     writeChatPanelCollapsedToStorage(chatPanelCollapsed);
     set({ chatPanelCollapsed });
+  },
+
+  conversationListWidth: readConvListWidthFromStorage(),
+  setConversationListWidth: (v) => {
+    const clamped = clampConvListWidth(v);
+    writeConvListWidthToStorage(clamped);
+    set({ conversationListWidth: clamped });
+  },
+
+  chatHistoryWidth: readChatHistoryWidthFromStorage(),
+  setChatHistoryWidth: (v) => {
+    const clamped = clampChatHistoryWidth(v);
+    writeChatHistoryWidthToStorage(clamped);
+    set({ chatHistoryWidth: clamped });
   },
 
   lastSendTimestamp: 0,

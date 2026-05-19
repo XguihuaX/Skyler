@@ -155,13 +155,14 @@ export default function ConversationList() {
   };
 
   const collapsed = useAppStore((s) => s.conversationListCollapsed);
+  // 2026-05-19 可拖拽宽度。collapsed=true → 强制 0;否则用 store 持久化值。
+  const convListWidth = useAppStore((s) => s.conversationListWidth);
 
   return (
     <div
-      className={`shrink-0 h-full flex flex-col overflow-hidden transition-[width] duration-200 ease-out ${
-        collapsed ? 'w-0' : 'w-60'
-      }`}
+      className="shrink-0 h-full flex flex-col overflow-hidden transition-[width] duration-200 ease-out"
       style={{
+        width: collapsed ? 0 : convListWidth,
         background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
         borderRight: collapsed ? 'none' : '1px solid var(--color-border-subtle)',
       }}
