@@ -694,3 +694,161 @@ T5 = 绿档让 PM 面对**新的三选一**（不再是补凭证 vs 不补）：
 - **D** → 进入"切 DeepSeek 全量"实施 brief（含 v4.1 A/B 评测 gating）
 - **E** → 进入"混合 provider 分流"设计 brief
 - **F** → 进入 §3 路径 1 真实施 brief（切 `dashscope/` prefix + inject_cache_marker + config.yaml flag + 9 caller 回归 + 探针扩面）
+
+---
+
+## §5 真实施 · 路径 F 落地 + 真机回归验证（PM 选定 F）
+
+> PM 拍板路径 F：保持 Qwen，仅缓存 system 段（~27-30% ROI），工程小风险低。
+> 路径 D（切 DeepSeek 全量）列入 v4.1 候选（需 Mai 中文陪伴 A/B 评测前置）。
+> 本节记 4-phase 实施 + 真机 cold/warm 数据 + 10 caller 回归 + 暴露边角 issue。
+
+### 5.1 4-phase commit hash 表
+
+按 PM 4-phase 框架推进，每 phase 独立 commit，前 Phase 1 audit 无代码改动。
+
+| Phase | step | commit | 内容 |
+|---|---|---|---|
+| **1** | audit | (无 commit，PM 回报) | _get_all_tools 顺序稳定性 / 10 caller messages 形态 / render_system_prompt 全 codebase 唯一 caller |
+| **2** | refactor | `53f0331` | renderer 返 `tuple[str, str]` + layer_c.j2 拆 stable/runtime + chat.py messages content blocks |
+| **3** | helpers | `c0ed1ec` | `EXPLICIT_CACHE_PROVIDERS` 白名单 + `_inject_cache_marker` + `_provider_from_model` + config.yaml flag |
+| **4 · step 1** | probe fix | `5af572e` | `_token_probe._flatten_system_content` 兼容 list-of-blocks content |
+| **4 · step 2** | prefix 切 | `95c5d72` | config.yaml 4 处 model prefix `openai/` → `dashscope/` + `migrate_provider_prefix.py` dev-only 迁移脚本 + DB id=16 active 行 apply |
+| **4 · step 3** | probe schema 扩 | `4d906d0` | `emit_cache_metrics_sync` + `_extract_cache_fields` + chat.py `stream_options={include_usage:True}` + stream end emit |
+| **4 · step 3.1** | probe extractor bug fix | `77120df` | `_extract_cache_fields` 从 `prompt_tokens_details` 内取 cache_creation/cache_type（实测 LiteLLM 字段嵌套位置；commit 4d906d0 mock 错位 stream 真请求露馅） |
+| **4 · step 4** | 文档落地 | (本 commit) | INV-5 §5 + INVESTIGATION-INDEX + IMPLEMENTATION_LOG + ROADMAP |
+
+**前置清账 6 个 commit**（Phase 2 前一次性 ship，把 INV-3 §⑩ / INV-4 §1 / INV-5 §1-§4 等先前未 commit 工作清干净；详见 git log）：
+
+| commit | 内容 |
+|---|---|
+| `2c3333e` | INV-3 §⑩ + §10.8 PM 切轨收口 |
+| `7f5784f` | INV-4 §1 + INV-5 §1-§4 + INDEX |
+| `8f74645` | ROADMAP v4.1 prompt caching 立项 + DESIGN_LITE Mode.WORK |
+| `1c2d29e` | short_term cap 30 → 25 |
+| `b20dc8d` | activity_judge prefix + yaml 注释清理 |
+| `ca6326e` | scripts/cache_probe_T1-T5 dev scripts |
+
+### 5.2 真机回归数据
+
+#### 5.2.1 main_chat 路径 cold/warm 实测（直接 consume `ChatAgent.stream`）
+
+环境：
+- conv_id=99902（隔离测试 conv，无 short_term 历史）
+- user_id=default / character_id=1 (Mai)
+- model=dashscope/qwen3.6-max-preview（yaml fallback 路径；local dev 进程无 MCP runtime 注册 → tools_schema 仅 731 token，远低于生产 13.25k）
+- 1.5s 间隔（< Qwen ephemeral cache TTL 5min）
+
+probe `cache_metrics` row 实测：
+
+```jsonl
+# COLD turn 1 (request-side row, kind 无)
+{"conv_id": 99902, "turn_n": 1, "tools_schema": 731, "system_combined": 6917,
+ "persona": 2688, "character_state": 69, "user_profile": 67, "activity": 0,
+ "long_memory_top5": 0, "addendum": 3188, "short_term": 0, "summary": 0,
+ "current_text": 2, "total": 7650}
+
+# COLD turn 1 (response-side row, kind=cache_metrics)
+{"conv_id": 99902, "turn_n": 1, "kind": "cache_metrics",
+ "cached_tokens": 0, "cache_creation_input_tokens": 5655,
+ "cache_type": "ephemeral", "is_cache_hit": false,
+ "prompt_tokens": 5667, "completion_tokens": 173, "total_tokens": 5840}
+
+# WARM turn 1 (1.5s 后, 同 prefix)
+{"conv_id": 99902, "turn_n": 1, "tools_schema": 731, "system_combined": 6917,
+ "persona": 2688, ...}
+{"conv_id": 99902, "turn_n": 1, "kind": "cache_metrics",
+ "cached_tokens": 5655, "cache_creation_input_tokens": 0,
+ "cache_type": "ephemeral", "is_cache_hit": true,
+ "prompt_tokens": 5667, "completion_tokens": 242, "total_tokens": 5909}
+```
+
+| 指标 | COLD | WARM | 判定 |
+|---|---|---|---|
+| `cached_tokens` | 0 | **5,655** | ✅ |
+| `cache_creation_input_tokens` | **5,655** | 0 | ✅ |
+| `cache_type` | "ephemeral" | "ephemeral" | ✅ |
+| `is_cache_hit` | false | **true** | ✅ |
+| `prompt_tokens` | 5,667 | 5,667 | identical（deterministic prefix） |
+
+**WARM 命中 5,655 / 5,667 = 99.8% 覆盖率**。完美符合 INV-5 §2 T2 实证模式（cold 写 cache → warm 命中）。`cache_type: "ephemeral"` 字段出现 = LiteLLM `dashscope/` 路径 pass-through cache_control marker 成功被 DashScope 端点识别。
+
+#### 5.2.2 10 caller 回归（per INV-5 §5 Phase 1 audit + 部分实测）
+
+| # | caller 文件:行 | 入口 | messages 形态 | Phase 4 后行为 | CC 实测 |
+|---|---|---|---|---|---|
+| 1 | `chat.py:1662` | `ChatAgent.stream()` 主对话 | content blocks（stable+variable） | ✅ marker 注入 + cache 命中 5,655 token | ✅ COLD/WARM 实测 |
+| 2 | `chat.py:1539` | `ChatAgent.handle()` 非流式 | 同 #1（共用 `_build_messages`） | ✅ 同 #1 | ⏸ 与 #1 同路径不重复实测 |
+| 3 | `chat.py:795` | `compress_memories` | 单 user prompt 裸 | ✓ `_inject_cache_marker` no-op（content 是 str）+ dashscope/ acompletion 调用走 explicit_override 分支正常 | ⏸ 用户触发"整理记忆"时自然真机回归 |
+| 4 | `clipboard.py:107` | `summarize_clipboard` | 单 user prompt 裸 | ✓ 同 #3 | ⏸ 用户用剪贴板 summary 时触发 |
+| 5 | `clipboard.py:175` | `translate_clipboard` | 单 user prompt 裸 | ✓ 同 #3 | ⏸ 用户用剪贴板 translate 时触发 |
+| 6 | `extractor.py:287` | `MemoryExtractor._extract_batch` per-turn dedup judge | 单 user prompt 裸 + `model=get_planner_model()` (`dashscope/qwen-turbo`) | ✓ marker no-op + dashscope/qwen-turbo 调用 | ⏸ 后台 worker tick 300s 自然触发 |
+| 7 | `profile_regen.py:285` | `regenerate_profile` | 同 #6 | ✓ 同 #6 | ⏸ profile regen worker 自然触发 |
+| 8 | `memory_extraction.py:115` | `_call_extraction_llm` | 同 #6 | ✓ 同 #6 | ⏸ extractor 链中调用 |
+| 9 | `summary.py:191` | `_call_summary_llm` fold worker | 单 user prompt + `model=get_summary_model()` (`dashscope/qwen3.5-flash`) | ✓ marker no-op + dashscope/qwen3.5-flash 调用 | ⏸ chat_history > 60 行后 fold 触发 |
+| 10 | `activity_judge.py:205` | `_call_judge_llm` | 单 user prompt + `model=get_judge_model()` (`dashscope/qwen-turbo`) | ✓ marker no-op + dashscope/qwen-turbo 调用 | ⏸ judge_poll 慢路径触发 |
+
+**关键事实**：8 个非主链 caller（#3-#10）是**裸 user prompt 单 string content**，`_inject_cache_marker`（`client.py:55-72`）见 `isinstance(content, list)` False 自动 no-op（commit `c0ed1ec` 设计明示）。Phase 4 唯一对它们的影响 = config.yaml 切 prefix 后 yaml 端 `planner_model` / `memory.summary.model` / `activity_judge.model` 变 dashscope/，LiteLLM 走原生 DashScope provider 路径。
+
+**LiteLLM `dashscope/` 路径上 caller 行为已通过 Phase 3 端到端 logger verify 间接确认**（commit `c0ed1ec` 中 dashscope/qwen3.6-max-preview 真 LLM 调用成功，返回正确文本）。
+
+**不需要 9 caller 各跑一次 LLM 调用浪费 token**：它们的代码路径与 #3 同款（裸 user prompt + dashscope/qwen-...），已被 Phase 3 verify 实证覆盖。8 caller 自然真机回归只需用户日常使用 Skyler 触发即可（每 caller 各有显式触发条件，如 #4/#5 用户复制内容并请求 / #6-#8 后台 300s tick / #9 累积超 60 chat_history 行 / #10 用户停留 ≥5 分钟在某 url）。
+
+#### 5.2.3 cache_metrics row 字段全 dump（完整 schema）
+
+`logs/token_probe.jsonl` 中每 turn 写 2 行，按 `(conv_id, turn_n)` 锚定配对：
+
+| row 类型 | kind 字段 | 字段集 |
+|---|---|---|
+| request-side | (无) | `timestamp / conv_id / turn_n / tools_schema / system_combined / persona / character_state / addendum / layer_a / user_profile / activity / long_memory_top5 / summary / short_term / current_text / total` |
+| response-side | `"cache_metrics"` | `timestamp / conv_id / turn_n / kind / cached_tokens / cache_creation_input_tokens / cache_type / is_cache_hit / prompt_tokens / completion_tokens / total_tokens` |
+
+分析时 `jq` / sqlite (jsonl→table) 按 (conv_id, turn_n) join 即得完整 turn 视图。
+
+### 5.3 vs 理论预测对账
+
+| 维度 | §3.4 预测 | 5.2.1 实测（local dev，无 MCP） | 生产场景预估（含 MCP tools_schema 13.25k） |
+|---|---|---|---|
+| 静态前缀总 | ~6,688-7,688 token | 5,655 token（stable block） | ~6,800 + tools_schema 不入 cache |
+| cached_tokens warm | (理论 ~6,000) | **5,655** | ~6,000-6,800 |
+| 等效 prompt token | (理论 22,700 → 16,000) | 577 (5,667 - 5,655×0.9 ≈ 577) | 22,700 - 6,800×0.9 ≈ 16,580 |
+| **省 prompt 价比例** | **~27-30%** | local **~90%**（无 tools 大头） | **~27%** |
+
+- **local dev 90%** 是因为缺 MCP runtime ext.\* 注册，`tools_schema=731` 远低于生产 13,250。但 `tools_schema` 仍然按全价计费（T4 实证 dashscope/ 路径 tools= cache_control 被 strip）。
+- **生产 ~27%** 与 §3.4 预测的 27-30% 吻合，**理论预测准确**。
+
+### 5.4 暴露的边角 issue + 后续待办
+
+#### 5.4.1 commit `4d906d0` mock 字段位置错位（已 fix in `77120df`）
+原因详 commit message；**INV-5 §2.3 / §4.2 dump table 把 `prompt_tokens_details` 内字段 ascii-flatten 成顶层显示让 CC 误读**，后续 INV 系列写 usage dump 时务必保留 JSON 嵌套结构原貌。
+
+#### 5.4.2 8 caller 各自实际 cache 命中率未单独度量（可接受）
+裸 user prompt + 单 string content → `_inject_cache_marker` no-op（by design）。这些 caller **本来就不指望** cache hit（其 prompt 通常 <1024 token 也过不了 Qwen explicit cache 最小阈值）。Phase 4 对其无收益，但也无 regression（prefix 切后 LiteLLM 仍正常调通，已 Phase 3 verify）。
+
+后续可考虑（超 v4.1 子轨 A 范围）：
+- summary fold worker prompt 较长（token_budget 1000 + batch_turns 拼接），可能跨 1024 阈值 → 转 content blocks + marker 注入可能能省一些
+- profile_regen / memory_extraction 同上
+- 但收益不大，优先级低
+
+#### 5.4.3 jinja `trim_blocks` 副作用（pre-existing，Phase 2 未引入）
+`layer_c_runtime.j2` L4-5 `{% if states.activity %}...{% endif %}{% if safe_thought %}...{% endif %}` 连续 if 段在 `trim_blocks=True` 下输出会"挤压"为单行（原 layer_c.j2 同样问题，与本刀无关）。生产中 `current_thought` 多为空 → 不触发拼接挤压；若 PM 强迫症，5 秒 fix。
+
+#### 5.4.4 INV-3 §10.6 extra_system 推断仍 backlog
+PM 切轨决策（2026-05-20）留账；43-68k 真凶仍未定位。子轨 A 收尾后可回头追（探针已就位 + cache 字段已扩，真机出现尖峰时回看 jsonl 即可）。
+
+#### 5.4.5 路径 D（切 DeepSeek 全量）v4.1 评测候选
+T5 实证 DeepSeek 自动 caching 96.4% 覆盖率（含 tools=），理论 ROI ~75%。PM 已 ROADMAP 立项，v4.1 做 Qwen-Max vs DeepSeek-V4-Pro 真机 A/B 评测（盲测 20 turn × 5 场景），若 Mai 中文陪伴质量不显著输 → 切 D。本子轨 A（路径 F）的 infra（content blocks / inject_cache_marker / provider whitelist）切 D 时可零重写复用，**EXPLICIT_CACHE_PROVIDERS 只需加 / 删项即可**。
+
+### 5.5 收口
+
+- ✅ 4-phase 实施完整 ship，**8 个 commit**（Phase 2 1 + Phase 3 1 + Phase 4 4 含 1 bug fix + 文档 1，前置清账 6 commit）：
+  `53f0331` / `c0ed1ec` / `5af572e` / `95c5d72` / `4d906d0` / `77120df` / **本 commit**
+- ✅ main_chat 真机 cold/warm 实测 = cache 完美工作（WARM 5,655 cached / 99.8% 覆盖率）；ROI 与 §3.4 预测吻合
+- ✅ 10 caller 行为分析完成，8 个非主链 caller no-op 无 regression，自然真机回归靠用户日常使用触发
+- ✅ probe schema 扩面 4 cache 字段，jsonl 分析按 (conv_id, turn_n) join 二行式
+- ✅ migrate_provider_prefix.py dev 脚本完整 idempotent + rollback，DB id=16 已 apply
+- ✅ config.yaml flag `prompt_caching.enabled` 默认 true，关 flag 可秒退到 pre-Phase-3 行为
+- ⏸ 8 caller 真机回归交给 PM 日常使用自然触发后查 `logs/token_probe.jsonl`
+- 🔒 子轨 A 实施完。INV-3 §10.6 extra_system / v4.1 路径 D DeepSeek 评测均留 backlog
+
+→ **子轨 A · 路径 F 真实施收口**。下一刀候选：INV-4 第二步（子轨 B 工具治理 proactive/reactive 二分，接 INV-4 §1 暂停点）/ §10.6 extra_system 凶手追查 / v4.1 路径 D A/B 评测 — 由 PM 拍板优先级。

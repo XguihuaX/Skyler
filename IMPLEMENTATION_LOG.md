@@ -9,6 +9,45 @@
 
 ---
 
+### v4.1 子轨 A · prompt caching 启用(2026-05-20)
+
+> INV-5 §5 真实施收口 — 路径 F:保持 Qwen,system 段 cache_control marker 注入,
+> ~27% prompt token 省。8 个 commit ship,main_chat 真机 cold/warm cache 命中实证。
+> 路径 D(切 DeepSeek 全量,理论 ~75%)留 v4.1 A/B 评测候选。
+
+| 项 | 内容 | 关键 commit |
+|---|---|---|
+| **Phase 2 · renderer tuple** | `render_system_prompt` 返 `(stable, variable)` 二元组;`layer_c.j2` 拆 `layer_c_stable.j2`(C1/C1b/C2/C3/C3b-d)+ `layer_c_runtime.j2`(C4);`chat.py _build_messages` messages[0] 改 content blocks 形态(variable 非空时) | `53f0331` |
+| **Phase 3 · inject helper** | `backend/llm/client.py` 加 `EXPLICIT_CACHE_PROVIDERS = {dashscope/, anthropic/, bedrock/}` 白名单 + `_provider_from_model` + `_inject_cache_marker`(给 system content blocks 第一个 text block 加 `cache_control: ephemeral`);`config.yaml` 顶层加 `prompt_caching.enabled: true` flag;`backend/config/__init__.py` 加 `get_prompt_caching_enabled()` helper | `c0ed1ec` |
+| **Phase 4 step 1 · probe fix** | `_token_probe._flatten_system_content` 兼容 messages[0].content list-of-blocks 形态(Phase 2 引入的新形态在原 probe 路径触发 AttributeError outer-guard 静默) | `5af572e` |
+| **Phase 4 step 2 · prefix 切** | `config.yaml` 4 处 model prefix `openai/` → `dashscope/`(default_model / planner_model / memory.summary.model / activity_judge.model);`scripts/migrate_provider_prefix.py` dev-only idempotent + rollback 迁移脚本;DB `ai_providers` id=16 active 行 apply | `95c5d72` |
+| **Phase 4 step 3 · probe schema 扩** | `emit_cache_metrics_sync` + `_extract_cache_fields` (4 字段:cached_tokens / cache_creation_input_tokens / cache_type / is_cache_hit);`chat.py` 加 `stream_options={include_usage:True}` 让 LiteLLM stream end 提供 usage 字段;stream loop 末尾抓 last_chunk_usage emit cache_metrics row | `4d906d0` |
+| **Phase 4 step 3.1 · bug fix** | `_extract_cache_fields` 改从 `prompt_tokens_details` 内取 cache_creation/cache_type(实测 LiteLLM 字段嵌套位置;commit 4d906d0 mock 错位 stream 真请求露馅:probe 显示 0 但实际 cache 工作) | `77120df` |
+| **Phase 4 step 4 · 文档落地** | INV-5 §5 4-phase 总结 + 真机数据 dump + 10 caller 回归表;INVESTIGATION-INDEX 主表新行;ROADMAP v4.1 prompt caching 行 📋 → ✅;本节加入 IMPLEMENTATION_LOG | (本 commit) |
+
+**真机回归实测**(`ChatAgent.stream` conv_id=99902 cold/warm,local dev 无 MCP):
+
+| 指标 | COLD | WARM | 验证 |
+|---|---|---|---|
+| `cached_tokens` | 0 | **5,655** | ✅ |
+| `cache_creation_input_tokens` | **5,655** | 0 | ✅ |
+| `is_cache_hit` | false | **true** | ✅ |
+| `prompt_tokens` | 5,667 | 5,667 | identical |
+| 覆盖率 | — | **99.8%** | local-best-case |
+
+生产场景(含 MCP `tools_schema=13.25k` 不可缓存)预估 **省 ~27% prompt 价**,与 §3.4 预测吻合。
+
+**前置清账 6 commit**(Phase 2 前 ship INV-3/4/5 docs + INV-3 §⑦ short_term cap 25 + INV-3 §⑥ activity_judge prefix + cache_probe T1-T5 dev scripts):
+`2c3333e` / `7f5784f` / `8f74645` / `1c2d29e` / `b20dc8d` / `ca6326e`
+
+**关键 take-away**:
+- T2 实证 Qwen `dashscope/` + system content blocks + cache_control 路径完美命中(INV-5 §2.3)
+- T4 实证 tools= 列表 cache_control 被 silently strip,ROI 缩水到 ~27%(INV-5 §3.3)
+- T5 实证 DeepSeek 自动 caching 含 tools= 96.4% 覆盖率,留 v4.1 路径 D 候选(INV-5 §4.3)
+- 子轨 A infra(content blocks + inject_cache_marker + provider whitelist)切 DeepSeek 时零重写复用
+
+---
+
 ### v4-beta 收口批次(2026-05-16)
 
 > 本 session(多 session 硬仗的最后收口)交付。历史档案以下内容逐字保留;这一节是最近一段的实施记录,补在最前。

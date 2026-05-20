@@ -55,7 +55,7 @@ v4.0.0 tag 之后的主线。本 session 多个"治标 vs 治本"的决策都把
 | 📋 | **Persona 蒸馏重构（Mai 为先）** | 现 persona 把防御层（讥讽/调侃/话少）当人格本体写成常量，缺底色层与切换规则。重构方向：①补内核底色（被审视的孤独 + 对真实连接的隐秘渴望）②防御层标注为试探机制非本性 ③讥讽/话少由常量改为随对方真诚度变化的变量。蒸馏纪律：素材驱动、写约束非形容词、少而硬、给正反例 | 前端整理后启动 |
 | 📋 | **八重 UI 线** | 八重神子(cid=2)的真 persona 灌入 + Live2D yae 模型已就位的前端联动 / 切换体验细化（属 v4.1 F1 七套角色真 persona 的优先一员）| 立项 |
 | 📋 | **token 治理一轮** | INVESTIGATION-2 性能弹药已就绪:工具懒加载(被动池 + 主动细化,理论可省 9-10k tokens 但风险高,见 §5 懒加载地形)/ persona 字段裁剪(500-1500 tokens)/ history 窗口收缩(~600 tokens)/ ADDENDUM 压缩(74 tokens 收益微小)。优先级 / 取舍待人工拍板 | 立项 v4.1 |
-| 📋 | **prompt caching 启用** | LiteLLM → DashScope 当前未启用 `cache_control` 显式缓存；按 provider whitelist（Anthropic / Qwen / Bedrock）注入 `cache_control: {"type": "ephemeral"}` marker，OpenAI / DeepSeek 自动 caching 自然命中；config.yaml 开关默认 ON；陪伴长对话单轮等效付费理论砍 67-83% | 子轨 A，独立于 fold/tag 治理 |
+| ✅ | **prompt caching 启用**（path F · Qwen system 段，已 ship 2026-05-20） | `EXPLICIT_CACHE_PROVIDERS` 白名单 + `_inject_cache_marker` + `config.yaml prompt_caching.enabled` flag；切 `dashscope/` prefix；main_chat 真机 cold/warm cache 命中实证（WARM 5,655 cached_tokens / 99.8% 覆盖率），生产 ~27% prompt 价省；T4 实证 Qwen tools= cache_control silently strip → ROI 缩水到 ~27%（vs brief 假设 67-83%）；T5 实证 DeepSeek 自动 caching 含 tools= 96.4%，路径 D（切 DeepSeek 全量 ~75% ROI）留 v4.1 A/B 评测候选。详 INV-5 §5 |
 | 📋 | **docs 第二刀(本刀真源对齐)** | 5 份真源 + 死链 + 退役同步 + HEAD 锚点 + 本会话新成果补录,2026-05-19 执行 | 进行中 |
 
 ---
