@@ -1680,6 +1680,10 @@ class ChatAgent(IAgent):
                     stream=True,
                     tools=san_tools,
                     enable_search=enable_search,
+                    # INV-5 §5 Phase 4 step 3:让 stream 最后 chunk 含
+                    # usage 字段(LiteLLM/OpenAI 行为),便于 probe 采
+                    # cached_tokens / cache_creation_input_tokens 等。
+                    stream_options={"include_usage": True},
                 )
             except LLMError as exc:
                 logger.error("ChatAgent LLM error: %s", exc)
@@ -1690,8 +1694,13 @@ class ChatAgent(IAgent):
             finish_reason: Optional[str] = None
             first_logged = False
             raw_count = 0
+            last_chunk_usage: Optional[Any] = None  # INV-5 Phase 4: stream end usage
 
             async for chunk in wrapper:
+                # LiteLLM stream end:chunk.choices 可能为 [] 但 chunk.usage 含数据
+                _u = getattr(chunk, "usage", None)
+                if _u is not None:
+                    last_chunk_usage = _u
                 if not chunk.choices:
                     continue
                 choice = chunk.choices[0]
@@ -1751,6 +1760,21 @@ class ChatAgent(IAgent):
                 "LLM round=%d raw_chunks=%d tool_calls=%d finish=%s",
                 round_idx, raw_count, len(tool_calls_acc), finish_reason,
             )
+
+            # INV-5 §5 Phase 4 step 3:stream 完成后 emit cache metrics row
+            # (resp-side,按 conv_id + turn_n 与 pre-LLM emit 的 req row 配对)。
+            # fail-silent,任何异常 outer-guard 吞 + debug log,不阻塞 turn。
+            try:
+                from backend.agents._token_probe import (
+                    emit_cache_metrics_sync as _probe_cache_emit,
+                )
+                _probe_cache_emit(
+                    conversation_id=conversation_id,
+                    turn_n=round_idx,
+                    usage=last_chunk_usage,
+                )
+            except Exception:
+                logger.debug("[token_probe] cache_metrics outer-guard skipped")
 
             # Decide what to do next
             if tool_calls_acc:

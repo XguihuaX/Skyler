@@ -156,6 +156,98 @@ def _split_layer_d(layer_d_text: str) -> dict:
     return out
 
 
+def _extract_cache_fields(usage: Any) -> dict:
+    """Pull cache-related fields from LiteLLM response.usage object.
+
+    INV-5 §5 Phase 4 step 3 — 4 字段 schema:
+      - cached_tokens             命中缓存 token 数(0 = cold,>0 = warm hit)
+      - cache_creation_input_tokens  首次创建缓存 token 数(>0 = cold,0 = warm)
+      - cache_type                "ephemeral" 或 None
+      - is_cache_hit              boolean: cached_tokens > 0
+
+    各 provider 字段差异(INV-5 §2/§4/§5 实测):
+      - Qwen dashscope/: prompt_tokens_details.cached_tokens +
+                          cache_creation_input_tokens(顶层)+ cache_type
+      - DeepSeek deepseek/: prompt_cache_hit_tokens / prompt_cache_miss_tokens
+                            (顶层),无 cache_type 字段
+      - OpenAI openai/: 仅 prompt_tokens_details.cached_tokens
+
+    取值优先级:Qwen 字段名 → DeepSeek 字段名 → fallback。
+    任何异常 / 字段缺失 → 字段填 None,行仍写出。
+    """
+    out: dict = {
+        "cached_tokens": None,
+        "cache_creation_input_tokens": None,
+        "cache_type": None,
+        "is_cache_hit": False,
+    }
+    if usage is None:
+        return out
+
+    def _get(obj, key):
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    # cached_tokens: 优先 Qwen / OpenAI 路径 prompt_tokens_details.cached_tokens
+    details = _get(usage, "prompt_tokens_details")
+    cached = _get(details, "cached_tokens") if details is not None else None
+    if cached is None:
+        # DeepSeek alt path
+        cached = _get(usage, "prompt_cache_hit_tokens")
+    out["cached_tokens"] = cached
+
+    # cache_creation: Qwen 顶层字段
+    out["cache_creation_input_tokens"] = _get(usage, "cache_creation_input_tokens")
+    # cache_type: Qwen 顶层(details 内也可能有,Qwen 实测 details 内带)
+    ct = _get(usage, "cache_type")
+    if ct is None and details is not None:
+        ct = _get(details, "cache_type")
+    out["cache_type"] = ct
+
+    out["is_cache_hit"] = bool(cached) and cached > 0
+    return out
+
+
+def emit_cache_metrics_sync(
+    *,
+    conversation_id: Optional[int],
+    turn_n: int,
+    usage: Any,
+) -> None:
+    """Append a per-turn response-side row with cache fields only.
+
+    INV-5 §5 Phase 4 step 3 — 配对 emit_sync 写的 request-side row;按
+    (conv_id, turn_n) 锚定。Sync + fail-silent — **never** raises。
+
+    分析 jsonl 时按 (conv_id, turn_n) 把 req / resp 两行 join 起来,合并视图
+    含 prompt 各段 token 数 + cache 命中数据。
+    """
+    try:
+        row: dict = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "conv_id": conversation_id,
+            "turn_n": turn_n,
+            "kind": "cache_metrics",  # 区分 req row (无 kind) / resp row
+        }
+        row.update(_extract_cache_fields(usage))
+        # 也带上 prompt_tokens 便于快速看占比
+        if usage is not None:
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                if isinstance(usage, dict):
+                    val = usage.get(k)
+                else:
+                    val = getattr(usage, k, None)
+                if val is not None:
+                    row[k] = val
+
+        os.makedirs(os.path.dirname(_path()), exist_ok=True)
+        with open(_path(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.debug("[token_probe] cache_metrics emit failed: %s", exc)
+
+
 def emit_sync(
     *,
     conversation_id: Optional[int],
