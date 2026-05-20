@@ -736,7 +736,8 @@ T5 = 绿档让 PM 面对**新的三选一**（不再是补凭证 vs 不补）：
 环境：
 - conv_id=99902（隔离测试 conv，无 short_term 历史）
 - user_id=default / character_id=1 (Mai)
-- model=dashscope/qwen3.6-max-preview（yaml fallback 路径；local dev 进程无 MCP runtime 注册 → tools_schema 仅 731 token，远低于生产 13.25k）
+- model=**`dashscope/qwen3.5-plus`** —— 路径走 client.py `_resolve_db_provider_kwargs` 优先取 DB `ai_providers` is_active 行（Phase 4 migration 后 id=16 = `dashscope/qwen3.5-plus`），**不是** `config.yaml:1 default_model` 的 `dashscope/qwen3.6-max-preview`（那个是 DB 无 active 时的 yaml fallback，当前 DB 有 active 不走它）。响应 `model_returned` 字段实证此 model
+- local dev 进程无 MCP runtime 注册 → tools_schema 仅 731 token，远低于生产 13.25k
 - 1.5s 间隔（< Qwen ephemeral cache TTL 5min）
 
 probe `cache_metrics` row 实测：
@@ -773,26 +774,37 @@ probe `cache_metrics` row 实测：
 
 **WARM 命中 5,655 / 5,667 = 99.8% 覆盖率**。完美符合 INV-5 §2 T2 实证模式（cold 写 cache → warm 命中）。`cache_type: "ephemeral"` 字段出现 = LiteLLM `dashscope/` 路径 pass-through cache_control marker 成功被 DashScope 端点识别。
 
-#### 5.2.2 10 caller 回归（per INV-5 §5 Phase 1 audit + 部分实测）
+#### 5.2.2 10 caller 回归（per INV-5 §5 Phase 1 audit + direct trigger 实测）
 
-| # | caller 文件:行 | 入口 | messages 形态 | Phase 4 后行为 | CC 实测 |
+| # | caller 文件:行 | 入口 | messages 形态 | 实际跑的 model | direct trigger 实测 |
 |---|---|---|---|---|---|
-| 1 | `chat.py:1662` | `ChatAgent.stream()` 主对话 | content blocks（stable+variable） | ✅ marker 注入 + cache 命中 5,655 token | ✅ COLD/WARM 实测 |
-| 2 | `chat.py:1539` | `ChatAgent.handle()` 非流式 | 同 #1（共用 `_build_messages`） | ✅ 同 #1 | ⏸ 与 #1 同路径不重复实测 |
-| 3 | `chat.py:795` | `compress_memories` | 单 user prompt 裸 | ✓ `_inject_cache_marker` no-op（content 是 str）+ dashscope/ acompletion 调用走 explicit_override 分支正常 | ⏸ 用户触发"整理记忆"时自然真机回归 |
-| 4 | `clipboard.py:107` | `summarize_clipboard` | 单 user prompt 裸 | ✓ 同 #3 | ⏸ 用户用剪贴板 summary 时触发 |
-| 5 | `clipboard.py:175` | `translate_clipboard` | 单 user prompt 裸 | ✓ 同 #3 | ⏸ 用户用剪贴板 translate 时触发 |
-| 6 | `extractor.py:287` | `MemoryExtractor._extract_batch` per-turn dedup judge | 单 user prompt 裸 + `model=get_planner_model()` (`dashscope/qwen-turbo`) | ✓ marker no-op + dashscope/qwen-turbo 调用 | ⏸ 后台 worker tick 300s 自然触发 |
-| 7 | `profile_regen.py:285` | `regenerate_profile` | 同 #6 | ✓ 同 #6 | ⏸ profile regen worker 自然触发 |
-| 8 | `memory_extraction.py:115` | `_call_extraction_llm` | 同 #6 | ✓ 同 #6 | ⏸ extractor 链中调用 |
-| 9 | `summary.py:191` | `_call_summary_llm` fold worker | 单 user prompt + `model=get_summary_model()` (`dashscope/qwen3.5-flash`) | ✓ marker no-op + dashscope/qwen3.5-flash 调用 | ⏸ chat_history > 60 行后 fold 触发 |
-| 10 | `activity_judge.py:205` | `_call_judge_llm` | 单 user prompt + `model=get_judge_model()` (`dashscope/qwen-turbo`) | ✓ marker no-op + dashscope/qwen-turbo 调用 | ⏸ judge_poll 慢路径触发 |
+| 1 | `chat.py:1662` | `ChatAgent.stream()` 主对话 | content blocks（stable+variable） | DB active = `dashscope/qwen3.5-plus` | ✅ COLD/WARM 实测 cache 命中 5,655 token（§5.2.1） |
+| 2 | `chat.py:1539` | `ChatAgent.handle()` 非流式 | 同 #1（共用 `_build_messages`） | 同 #1 | ⏸ 与 #1 同路径不重复实测 |
+| 3 | `chat.py:795` | `compress_memories` | 单 user prompt 裸 | DB active = `dashscope/qwen3.5-plus` ※ | ✅ direct trigger 2026-05-20（24,271ms / 8 chars `"收到，测试成功。"`） |
+| 4 | `clipboard.py:107` | `summarize_clipboard` | 单 user prompt 裸 | DB active = `dashscope/qwen3.5-plus` | ✅ direct trigger 2026-05-20（13,137ms / 18 chars） |
+| 5 | `clipboard.py:175` | `translate_clipboard` | 单 user prompt 裸 | DB active = `dashscope/qwen3.5-plus` | ✅ direct trigger 2026-05-20（6,238ms / 5 chars `"Hello"`） |
+| 6 | `extractor.py:287` | `MemoryExtractor._extract_batch` per-turn dedup judge | 单 user prompt + planner_model | yaml planner_model = `dashscope/qwen-turbo` | ✅ direct trigger 2026-05-20（1,045ms / 2 chars `"NO"`） |
+| 7 | `profile_regen.py:285` | `regenerate_profile` | 同 #6 | 同 #6 = `dashscope/qwen-turbo` | ✅ direct trigger 2026-05-20（509ms / 20 chars） |
+| 8 | `memory_extraction.py:115` | `_call_extraction_llm` | 同 #6 | 同 #6 = `dashscope/qwen-turbo` | ✅ direct trigger 2026-05-20（474ms / 2 chars `"[]"`） |
+| 9 | `summary.py:191` | `_call_summary_llm` fold worker | 单 user prompt + summary_model | yaml memory.summary.model = `dashscope/qwen3.5-flash` | ✅ direct trigger 2026-05-20（9,131ms / 26 chars，调底层 `_call_summary_llm` helper） |
+| 10 | `activity_judge.py:205` | `_call_judge_llm` | 单 user prompt + judge_model | yaml activity_judge.model = `dashscope/qwen-turbo` | ✅ direct trigger 2026-05-20（4,790ms / 50 chars JSON，调底层 `_call_judge_llm` helper） |
 
-**关键事实**：8 个非主链 caller（#3-#10）是**裸 user prompt 单 string content**，`_inject_cache_marker`（`client.py:55-72`）见 `isinstance(content, list)` False 自动 no-op（commit `c0ed1ec` 设计明示）。Phase 4 唯一对它们的影响 = config.yaml 切 prefix 后 yaml 端 `planner_model` / `memory.summary.model` / `activity_judge.model` 变 dashscope/，LiteLLM 走原生 DashScope provider 路径。
+**※ #3 model 备注**（per PM 2026-05-20 补充指令）：PM brief 写"verification 期间 #3 用 `dashscope/qwen3.5-plus` 替代生产的 `dashscope/qwen3.6-max-preview` 省成本",但实测发现:`compress_memories` 不传 model → client.py `_resolve_db_provider_kwargs` 优先取 DB `ai_providers` is_active 行 = `dashscope/qwen3.5-plus`(Phase 4 commit `95c5d72` migration 后)。**生产路径本来就用 qwen3.5-plus,不存在"替代"概念**;`config.yaml:1 default_model: dashscope/qwen3.6-max-preview` 只是 DB 无 active 时的 yaml fallback。本表 #3 列实际用 model 与生产一致。
 
-**LiteLLM `dashscope/` 路径上 caller 行为已通过 Phase 3 端到端 logger verify 间接确认**（commit `c0ed1ec` 中 dashscope/qwen3.6-max-preview 真 LLM 调用成功，返回正确文本）。
+**关键事实**:8 个非主链 caller(#3-#10)是**裸 user prompt 单 string content**,`_inject_cache_marker`(`client.py:55-72`)见 `isinstance(content, list)` False 自动 no-op(commit `c0ed1ec` 设计明示)。Phase 4 唯一对它们的影响 = config.yaml 切 prefix 后 yaml 端 `planner_model` / `memory.summary.model` / `activity_judge.model` 变 dashscope/,LiteLLM 走原生 DashScope provider 路径。
 
-**不需要 9 caller 各跑一次 LLM 调用浪费 token**：它们的代码路径与 #3 同款（裸 user prompt + dashscope/qwen-...），已被 Phase 3 verify 实证覆盖。8 caller 自然真机回归只需用户日常使用 Skyler 触发即可（每 caller 各有显式触发条件，如 #4/#5 用户复制内容并请求 / #6-#8 后台 300s tick / #9 累积超 60 chat_history 行 / #10 用户停留 ≥5 分钟在某 url）。
+**direct trigger 实测覆盖 3 个独立 model**(每 model 至少一个 caller 验过):
+
+| model | 验过的 caller | acceptance |
+|---|---|---|
+| `dashscope/qwen3.5-plus` (DB active) | #3 / #4 / #5(+ #1 main_chat) | ✅ |
+| `dashscope/qwen-turbo` (planner / judge) | #6 / #7 / #8 / #10 | ✅ |
+| `dashscope/qwen3.5-flash` (summary fold) | #9 | ✅ |
+
+**8 caller direct trigger 全 PASS**,LiteLLM `dashscope/` 路径在 3 个 Qwen 子型号上全部调通。
+
+实测脚本:`scripts/verify_callers_post_prefix.py`(248 行,dev-only 一次性)。
+首次跑遇 DashScope 端点偶发 `Connection error`(#7/#8 timeout + #9/#10 helper 返 None 被吞错),第二次重跑全 PASS,**不是 prefix 切换的兼容性问题** —— 是 DashScope 网络抖动,8 caller 各自的 prefix 路由 / 端点 / 凭证 chain 全部 OK。
 
 #### 5.2.3 cache_metrics row 字段全 dump（完整 schema）
 
@@ -844,7 +856,7 @@ T5 实证 DeepSeek 自动 caching 96.4% 覆盖率（含 tools=），理论 ROI ~
 - ✅ 4-phase 实施完整 ship，**8 个 commit**（Phase 2 1 + Phase 3 1 + Phase 4 4 含 1 bug fix + 文档 1，前置清账 6 commit）：
   `53f0331` / `c0ed1ec` / `5af572e` / `95c5d72` / `4d906d0` / `77120df` / **本 commit**
 - ✅ main_chat 真机 cold/warm 实测 = cache 完美工作（WARM 5,655 cached / 99.8% 覆盖率）；ROI 与 §3.4 预测吻合
-- ✅ 10 caller 行为分析完成，8 个非主链 caller no-op 无 regression，自然真机回归靠用户日常使用触发
+- ✅ 10 caller 全部 acceptance 闭环：#1 main_chat cold/warm 实测 cache 命中；#2 与 #1 同路径；**#3-#10 direct trigger 全 PASS**（`scripts/verify_callers_post_prefix.py`），覆盖 `dashscope/qwen3.5-plus` / `qwen-turbo` / `qwen3.5-flash` 3 个 Qwen 子型号
 - ✅ probe schema 扩面 4 cache 字段，jsonl 分析按 (conv_id, turn_n) join 二行式
 - ✅ migrate_provider_prefix.py dev 脚本完整 idempotent + rollback，DB id=16 已 apply
 - ✅ config.yaml flag `prompt_caching.enabled` 默认 true，关 flag 可秒退到 pre-Phase-3 行为
