@@ -15,10 +15,60 @@ from typing import Any, AsyncGenerator, List, Optional, Union
 from litellm import acompletion
 import litellm.exceptions as llm_exc
 
-from backend.config import get_default_model, settings
+from backend.config import (
+    get_default_model,
+    get_prompt_caching_enabled,
+    settings,
+)
 from backend.llm.tool_name_sanitize import sanitize_tools_for_llm
 
 logger = logging.getLogger(__name__)
+
+
+# INV-5 §5 Phase 3 — provider whitelist for explicit prompt caching。
+# 仅这三个 LiteLLM provider 路径下 cache_control marker pass-through 给端点:
+#   - dashscope/   : Qwen explicit cache, T2 实证 1214 cached_tokens 完美命中
+#   - anthropic/   : Anthropic Claude 原生 cache_control 语义
+#   - bedrock/     : LiteLLM 自动把 OpenAI-format cache_control 翻 cachePoint
+# 名单外 provider 下注入逻辑 no-op:
+#   - openai/      : T1 实证 silently strip
+#   - deepseek/    : T5 实证全自动 caching 不需 marker(96.4% 覆盖率)
+EXPLICIT_CACHE_PROVIDERS: set[str] = {"dashscope/", "anthropic/", "bedrock/"}
+
+
+def _provider_from_model(model: str) -> str:
+    """Return provider prefix (with trailing slash) or empty string."""
+    if "/" in model:
+        return model.split("/", 1)[0] + "/"
+    return ""
+
+
+def _inject_cache_marker(messages: List[dict]) -> List[dict]:
+    """Mark the FIRST text block of system message with cache_control: ephemeral.
+
+    Phase 2 把 system messages 拆 content blocks(stable / variable 二块);
+    Phase 3 在 stable 块(即第一块)上标 cache_control marker,让 LiteLLM
+    `dashscope/ / anthropic/ / bedrock/` 路径透传给端点。
+
+    Safe regardless of message shape:
+      - messages 空 / messages[0] 非 system / content 非 list → 原样返回
+      - content list 内无 text block → 原样返回
+    Returns a NEW messages list (input not mutated)。
+    """
+    if not messages or messages[0].get("role") != "system":
+        return messages
+    content = messages[0].get("content")
+    if not isinstance(content, list) or not content:
+        return messages
+
+    new_messages = [dict(m) for m in messages]
+    new_content = [dict(b) for b in content]
+    for i, block in enumerate(new_content):
+        if block.get("type") == "text":
+            new_content[i] = {**block, "cache_control": {"type": "ephemeral"}}
+            break
+    new_messages[0]["content"] = new_content
+    return new_messages
 
 
 def _dashscope_kwargs() -> dict:
@@ -179,6 +229,20 @@ async def call_llm(
                 len(rev_map), sample,
             )
         merged["tools"] = san_tools
+
+    # INV-5 §5 Phase 3 — provider-aware cache_control marker injection。
+    # 仅当 (1) config.prompt_caching.enabled=true 且 (2) provider 在
+    # EXPLICIT_CACHE_PROVIDERS 白名单时,给 messages[0] 第一个 text block
+    # 标 cache_control: ephemeral。content=single-string 路径自动 no-op。
+    _provider = _provider_from_model(resolved_model)
+    if get_prompt_caching_enabled() and _provider in EXPLICIT_CACHE_PROVIDERS:
+        _orig_messages = messages
+        messages = _inject_cache_marker(messages)
+        if messages is not _orig_messages:
+            logger.info(
+                "[llm.dispatcher] cache_control marker injected (provider=%s)",
+                _provider,
+            )
 
     try:
         response = await acompletion(

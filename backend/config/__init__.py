@@ -80,6 +80,20 @@ def get_planner_model() -> str:
     return get_default_model()
 
 
+def get_prompt_caching_enabled() -> bool:
+    """Whether to inject explicit cache_control marker on supported providers.
+
+    INV-5 §5 Phase 3:provider-aware,仅对 ``EXPLICIT_CACHE_PROVIDERS``
+    (dashscope/ / anthropic/ / bedrock/)生效;其它 provider 下注入逻辑
+    自动 no-op。详 ``backend/llm/client.py::_inject_cache_marker``。
+
+    Read on every call so caller always sees latest value after
+    ``reload_config_yaml()``. Do not cache.
+    """
+    cfg = config_yaml.get("prompt_caching") or {}
+    return bool(cfg.get("enabled", True))
+
+
 # bugfix-3.3: ``get_available_models()`` 已下线。yaml ``available_models``
 # 字段一并删除 — DB ai_providers (bugfix-3.1+) 是新唯一 LLM 路由路径,前端
 # 走 /api/ai-providers 拉 vendor / model 卡片。``default_model`` (上面)
