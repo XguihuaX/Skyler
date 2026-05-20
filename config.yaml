@@ -1,9 +1,6 @@
 default_model: openai/qwen3.6-max-preview
 planner_model: openai/qwen-turbo
 default_user_id: default
-# bugfix-3.3: available_models 字段下线。LLM 列表 / 切换由 DB ai_providers
-# (bugfix-3.1+) 统一管,前端走 /api/ai-providers。default_model 保留作 yaml
-# fallback (LLM dispatcher 无 DB active 时用)。
 base_instruction: 回复简短克制，通常不超过3句话，除非用户明确需要详细解释。不总结、不复述用户说的话。不用"当然"、"没问题"、"好的"等开场白。不在句尾加多余的关心语。像真实的人一样说话，不像客服或AI助手。
 memory:
   long_term_enabled: true
@@ -29,27 +26,11 @@ memory:
     min_confidence: 0.5
     dup_threshold: 0.9
     llm_judge_enabled: false
-  # v4-beta Stage 2:有界滚动摘要层(audit_z5 + diag_z5_report.md)
-  # - 范围:(user_id, character_id, conversation_id) 三级隔离(对齐 path-7 / Bug 1)
-  # - 触发:被动,跟 extractor 同一 worker tick,interval 复用 extractor.interval_seconds
-  # - 更新:**有界重压缩**(非 append)→ 取 (现有摘要 + 新挤出 batch) 重新压回 budget
-  # - 独立状态:用 conversation_summary.last_folded_chat_history_id,**完全不读
-  #   memory_extractor_state**(那个 pointer 卡死会顺带卡死摘要)
-  # - 失败可见:LLM 调用失败 → logger.error 醒目日志,不静默 swallow,不推 pointer
-  # - 不复用主聊天 model(default_model);独立 summary_model
   summary:
     enabled: true
-    # Qwen3.5-Flash(用户指定):不留存/不训练的正式 DashScope 端点。
-    # 注:如 LiteLLM 上识别不到 'qwen3.5-flash' 这个 model 名(各 DashScope 账号
-    # 可用 model 列表可能不同),call_llm 会抛 LLMError → 我们的 except 醒目 log + skip
-    # batch,不污染状态。Ernestmk 可改成本账号实际可用的 flash 串(如 qwen-flash /
-    # qwen3.6-flash 等)。
     model: openai/qwen3.5-flash
-    # 单 conv 摘要的 token 预算上限(LLM 输出长度硬约束)。1000 token ≈ 1500 中文字。
     token_budget: 1000
-    # 单 tick 最多 fold 多少条挤出窗口的 turn。10 = 一批不大,防卡顿。
     batch_turns: 10
-    # 挤出 batch < 该值时本 tick 不动(降抖动)。
     min_batch: 4
 search:
   enable_search: true
@@ -219,7 +200,7 @@ activity_watcher:
   max_daily_triggers: 5
 activity_judge:
   enabled: true
-  model: qwen-turbo
+  model: openai/qwen-turbo
   min_stay_minutes: 5
   throttle_minutes: 10
   prompt_max_chars: 2000
