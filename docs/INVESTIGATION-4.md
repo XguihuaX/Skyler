@@ -451,3 +451,418 @@ INV-4 §1 表里有些 description >300 char(如 `xhs.parse_url` 548 / `netease.
 
 → **§2 完成。等 PM 看完分类 + 候选评估优先级建议后再开 §3。**
 
+---
+
+## §3 三类候选评估（第三步 · 纯只读）
+
+> 接 §2 分类（1 proactive / 5 hybrid / 52 reactive）。本节对 P1 入口折叠 / P2 描述精简 / P3 character.set_activity 退役 三类做评估，**产出 v4.1 实施清单**。
+>
+> 估算口径(per INV-5 §3 实测数据):tools_schema 实测 13,250 token / 58 cap ≈ **平均 228 tokens/cap**(包含 function-calling wrap + JSON-serialized parameters_schema)。每个折叠后入口 cap ≈ **250-350 token**(union schema 加 action enum 多一些参数)。
+
+### 3.1 P1 入口折叠评估
+
+#### 3.1.1 Group A · bilibili 11 cap → 1
+
+**当前 11 cap**(总 schema chars 3,460 / ~2,500 token est):
+
+| # | cap name | desc chars | ps chars | 主要参数维度 |
+|---|---|---|---|---|
+| 26 | `bilibili.search_video` | 233 | 153 | keyword / page / page_size |
+| 27 | `bilibili.get_video_info` | 326 | 90 | bvid |
+| 28 | `bilibili.search_user` | 160 | 119 | keyword / page |
+| 29 | `bilibili.get_user_videos` | 237 | 146 | mid / page / page_size |
+| 30 | `bilibili.hot_videos` | 146 | 97 | page / page_size |
+| 31 | `bilibili.get_ranking` | 209 | 148 | rank_type / day |
+| 32 | `bilibili.get_subtitles` | 461 | 90 | bvid |
+| 33 | `bilibili.get_my_history` | 182 | 68 | page_size |
+| 34 | `bilibili.get_my_followings` | 156 | 97 | mid / page_size |
+| 35 | `bilibili.get_later_watch` | 136 | 36 | (无参) |
+| 36 | `bilibili.get_favorites` | 134 | 36 | (无参) |
+
+**折叠后入口设计** `bilibili(action: enum, ...params)`:
+
+```python
+@register_capability(
+    name="bilibili",
+    description=(
+        "B 站全功能入口。按 action 选具体操作:\n"
+        "- search_video / search_user: 搜索视频或 UP 主(keyword)\n"
+        "- get_video_info / get_subtitles: 视频元数据 / 字幕(bvid)\n"
+        "- get_user_videos / get_my_followings: 看 UP 主投稿 / 关注列表(mid)\n"
+        "- hot_videos / get_ranking: 热门 / 排行\n"
+        "- get_my_history / get_later_watch / get_favorites: 个人数据"
+    ),
+    parameters_schema={
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": [
+                "search_video","get_video_info","search_user","get_user_videos",
+                "hot_videos","get_ranking","get_subtitles","get_my_history",
+                "get_my_followings","get_later_watch","get_favorites",
+            ]},
+            "keyword": {"type": "string"},
+            "bvid": {"type": "string"},
+            "mid": {"type": "integer"},
+            "page": {"type": "integer", "default": 1},
+            "page_size": {"type": "integer", "default": 20},
+            "rank_type": {"type": "string"},
+        },
+        "required": ["action"],
+    },
+)
+async def bilibili(action: str, **params): ...
+```
+
+**后端 dispatcher 草图**:
+```python
+async def bilibili(action: str, **params):
+    handlers = {
+        "search_video": _search_video,
+        "get_video_info": _get_video_info,
+        # ... 11 个
+    }
+    handler = handlers.get(action)
+    if handler is None:
+        return {"error": f"unknown action: {action}"}
+    return await handler(**params)
+```
+
+参数校验位置:每个 sub-handler 自己校验(沿用原 11 cap 的现有校验逻辑,**最小重写**)。
+
+**估省**:
+- 折叠后单 cap ≈ 350 token(union schema 加 action enum + 7 个 union 参数)
+- 省 ~2,500 - 350 = **~2,150 token**
+
+**实施风险**:**中**
+- `tool_addendum.py:103-115` 含 11 个 bilibili cap name 引导文(`"用户说『B 站搜 X』→ bilibili.search_video"`),折叠后需重写成 `→ bilibili(action="search_video", keyword=X)` 形式
+- `tool_call_resilience.py:87-89` 含 `<netease.daily_recommend>` 这类 capability-name-as-tag fallback,bilibili 同款 fallback 也可能存在;折叠后 fallback 形式变化
+- B 站 API 反爬变化敏感(常见 SESSDATA cookie 过期 / 风控弹窗),但与本折叠无关
+
+#### 3.1.2 Group B · netease 13 cap → 2(web+local)
+
+**当前 13 cap**(总 schema chars 3,796 / ~2,960 token est) 分两套独立 path:
+
+| 子组 | cap | desc chars | ps chars | 备注 |
+|---|---|---|---|---|
+| **web (7 cap)** | netease.daily_recommend / personal_fm / play_song / play_playlist / play_playlist_by_id / like_current / search | 总 1,611 | 总 1,011 | 借助原生网易云 App URL Scheme |
+| **local (6 cap)** | netease.local_play_song / local_play_playlist / local_pause / local_resume / local_stop / local_next_in_queue | 总 1,052 | 总 322 | mpv 自解码自动播放 |
+
+**两路径底层不同**(per tool_addendum.py:88-97 引导),**不应当合成单一 cap**;折叠成 2 个入口:
+
+- `netease_web(action: enum, ...)` — 现有 web API path
+- `netease_local(action: enum, ...)` — mpv 本地播放 path
+
+**估省**:
+- web 7 cap → 1: ~1,600 → ~350 token,省 ~1,250
+- local 6 cap → 1: ~1,360 → ~250 token(参数维度简单),省 ~1,110
+- **总省 ~2,360 token**
+
+**实施风险**:**中-高**
+- web/local 两路径 LLM 切换语义需保留(tool_addendum.py:97 `"何时用 chunk 1 netease.play_song(旧 URL Scheme 路径):仅当用户..."` 决策逻辑),折叠后 LLM 仍需选 `netease_web(action="play_song")` vs `netease_local(action="play_song")`
+- like_current 需 media.now_playing 前置(`tool_addendum.py:48-49`),跨 cap 协议保留
+- `<netease.daily_recommend>` capability-name-as-tag fallback(tool_call_resilience hotfix-3)需配套迁移
+
+#### 3.1.3 Group C · media 5 cap → 1
+
+**当前 5 cap**(总 schema chars 887 / ~1,140 token est):
+
+| # | cap | desc chars | ps chars | 参数 |
+|---|---|---|---|---|
+| 21 | media.next_track | 105 | 52 | (无) |
+| 22 | media.previous_track | 38 | 52 | (无) |
+| 23 | media.play_pause | 79 | 52 | (无) |
+| 24 | media.now_playing | 180 | 52 | (无) |
+| 25 | media.set_volume | 123 | 154 | volume 0-100 |
+
+折叠成 `media(action: enum, volume?: int)`:
+
+```python
+parameters_schema={
+    "type": "object",
+    "properties": {
+        "action": {"type":"string","enum":[
+            "next_track","previous_track","play_pause","now_playing","set_volume",
+        ]},
+        "volume": {"type":"integer","minimum":0,"maximum":100,
+                   "description":"action=set_volume 时必填"},
+    },
+    "required": ["action"],
+}
+```
+
+**估省**:5 cap × 228 - 1 cap × 250 = **~890 token**
+
+**实施风险**:**低**
+- 5 个 action 参数维度极简(只 set_volume 有 volume 参数)
+- 全是系统级 media control,行为稳定无 API 兼容性问题
+- tool_addendum.py:57-61 引导段重写为 `media(action="next_track")` 形式
+
+#### 3.1.4 Group D · apple_calendar 4 cap → 1 + calendar router 整合选项
+
+**当前 4 cap**(总 schema chars 1,425 / ~910 token est):
+
+| # | cap | desc chars | ps chars | 参数 |
+|---|---|---|---|---|
+| 8 | apple_calendar.today_events | 106 | 52 | (无) |
+| 9 | apple_calendar.upcoming_events | 97 | 152 | days_ahead |
+| 10 | apple_calendar.create_event | 217 | **506** | title / start_iso / duration / desc / cal_name |
+| 11 | apple_calendar.delete_event | 134 | 161 | event_id |
+
+折叠成 `apple_calendar(action: enum, ...)`:
+
+```python
+parameters_schema={
+    "type": "object",
+    "properties": {
+        "action": {"type":"string","enum":[
+            "today_events","upcoming_events","create_event","delete_event",
+        ]},
+        "days_ahead": {"type":"integer","default":7,"minimum":1,"maximum":30,
+                       "description":"action=upcoming_events 时用"},
+        "title": {"type":"string","description":"action=create_event 时必填"},
+        "start_iso": {"type":"string","description":"ISO 8601 含时区"},
+        "duration_minutes": {"type":"integer","default":30},
+        "description": {"type":"string"},
+        "calendar_name": {"type":"string"},
+        "event_id": {"type":"string","description":"action=delete_event 时必填"},
+    },
+    "required": ["action"],
+}
+```
+
+**估省**:4 × 228 - 1 × 350 = **~560 token**(create_event 参数多,折叠后 schema 较大)
+
+**实施风险**:**低**
+- 4 个 action 参数维度同源(全是日历 CRUD)
+- 与 `apple_calendar.py` 现有实现路径同源,折叠仅在 dispatcher 层
+
+**`calendar router` 整合决策(留 PM 拍板)**:
+
+当前 `calendar.today_events` / `upcoming_events` 是 router 层,内部决定 data source(`apple_calendar.*` / `google_calendar.*`)。整合选项:
+
+| 选项 | 描述 | 优劣 |
+|---|---|---|
+| **D1** | 仅折 apple_calendar 内 4 cap,保留 `calendar.today_events / upcoming_events` router | 改动小;LLM 仍能用 `calendar.today_events` 自动路由 |
+| **D2** | 折 apple_calendar 4 + calendar router 2 + google_calendar 2(S-only)→ 单 `calendar(action, source?: enum)` | 改动大;统一入口,LLM 不再纠结 router/具体源;但 router 业务逻辑 + source 选择参数侵入 |
+| **D3** | 折 apple_calendar 4 → 1 + 保留 calendar router 2 不动 + google_calendar 2 SCHEDULER-only 不动 | 与 D1 等价 |
+
+→ **CC 倾向 D1/D3**(只动 apple_calendar 4 cap),理由:`calendar.today_events` router 是 LLM 默认入口(per `tool_addendum.py:20-23` 引导),不破坏现有路由约定;`google_calendar.*` 已 SCHEDULER-only 不进 tools=,无 token 收益空间。
+
+#### 3.1.5 P1 入口折叠汇总表
+
+| Group | 当前 cap 数 | 折叠后 cap 数 | 估省 tokens | 实施风险 | 工程量估 |
+|---|---|---|---|---|---|
+| bilibili | 11 | 1 | **~2,150** | 中 | 2 day |
+| netease (web+local) | 13 | 2 | **~2,360** | 中-高 | 2-3 day |
+| media | 5 | 1 | **~890** | 低 | 1 day |
+| apple_calendar | 4 | 1 | **~560** | 低 | 1 day |
+| **总计** | **33** | **5** | **~5,960** | | **~6-7 day** |
+
+**vs PM §2.5 早期估"8-10k"**:实际 ~6k 更准。早期估偏乐观因未扣"折叠后 union schema 含 action enum + 多 union 参数"的开销。即便如此,~6k 减幅是 tools_schema 13.25k 的 **~45%**,与子轨 A 27% 叠加 → 主路径 prompt 22.7k 砍至 ~11k 量级,约 **52% 总 reduction**。
+
+### 3.2 P2 描述精简评估
+
+按 `desc + ps` 总长排,top 10 长 cap:
+
+| # | cap | desc | ps | 总 | 长在哪 |
+|---|---|---|---|---|---|
+| 54 | `xhs.parse_url` | 548 | 141 | 689 | **被动 URL 解析**段过长,含 4 段语义说明 |
+| 10 | `apple_calendar.create_event` | 217 | **506** | 723 | ps 内 5 个参数各自 description 字段累积 |
+| 32 | `bilibili.get_subtitles` | **461** | 90 | 551 | 杀手 use case 描述 + 30k 字符截断逻辑说明 |
+| 14 | `activity.get_today_summary` | 345 | 52 | 397 | 返回结构 + 隐私语义说明 |
+| 18 | `docx.create` | 293 | 297 | 590 | desc 用法说明 + ps 内 file_name/title 等参数注释 |
+| 37 | `netease.daily_recommend` | 393 | 52 | 445 | mpv 路径 + URL Scheme 路径双说明 |
+| - | `proactive.snooze_wake_call` | 377 | 163 | 540 | wake_call 流程上下文 + 拒绝起床信号枚举 |
+| 16 | `activity.search_history` | 326 | 255 | 581 | 隐私(双重黑名单 + idle 过滤)说明 |
+| 27 | `bilibili.get_video_info` | 326 | 90 | 416 | 元数据字段枚举 |
+| 38 | `netease.personal_fm` | 304 | 52 | 356 | 实际路径 + 历史 chunk 引用 |
+
+**精简策略**:
+
+- 删历史 chunk 引用(`"chunk 1 / chunk 6b hotfix-3"` 等,LLM 不需要 archeology)
+- 合并语义重复段(`"用户说『X』时调"` 已在引导文,description 内再写一次冗余)
+- 截参数字段 description 到 1 句话(参数名 + 类型 + 主要约束,不重复 description)
+- 保留杀手 use case 短句(如 bilibili.get_subtitles 的 `"⭐ 帮我总结这个 B 站视频"`)
+- 删 verbose 用法举例(LLM 看 1-2 个例子就够)
+
+**精简前后对照示例 - `xhs.parse_url`**:
+
+```
+当前(548 chars):
+**只做被动 URL 解析**。用户主动贴小红书笔记链接(xiaohongshu.com / xhslink.com 域名)
+时调用,返回 title / text / 图片 url 列表。**注意**:
+1. 不能搜索小红书,不能拿 feed,不能模拟登录 — 只解析单条 URL
+2. 不接受 share id;必须完整 URL
+3. 返 401 / 403 → 该笔记可能私密 / 删除,跟用户解释
+4. 长 text 可能含表情 emoji,前端会渲染
+5. 图片 url 列表前端会自动渲染图集
+6. 解析失败时返 error,跟用户解释"链接可能无效"
+
+建议精简(~150 chars):
+小红书笔记 URL 解析。仅接受 xiaohongshu.com / xhslink.com 完整链接,返
+{title, text, images}。不支持搜索 / feed / 私密笔记(401/403 时跟用户说明)。
+```
+
+**估省**:top 10 长 cap 各砍 ~150-300 chars ≈ 平均 70 token / cap → **~700 tokens**
+
+**实施风险**:**零**(纯文字精简,不动 ps 字段约束 / handler 逻辑)
+
+### 3.3 P3 character.set_activity 退役评估
+
+#### 当前状态
+
+`backend/capabilities/character_state.py:67-138`:
+- desc 282 chars + ps 206 chars ≈ ~150 tokens
+- handler 行为:接 `activity` / `thought` → 调 `update_character_state` 写 DB → push WS `state_update` event 给前端
+
+#### 与 `<state_update>` tag 完全功能重叠
+
+`<state_update>` tag 路径(`chat.py:219-260 _parse_state_update`):
+
+| 字段 | tool path (character.set_activity) | tag path (`<state_update>`) |
+|---|---|---|
+| activity | ✅ required | ✅ optional |
+| thought | ✅ optional | ✅ optional |
+| mood | ❌ 不支持 | ✅ optional |
+| intimacy_delta | ❌ 不支持 | ✅ optional |
+| 触发场景 | LLM 自主调(proactive,需 schema 常驻) | LLM 输出尾部内嵌 tag(无 schema,模式约定) |
+| DB 写入 | services.update_character_state | services.update_character_state(同函数) |
+| WS push | character_state.py 内手动 push | ws.py 主路径已挂 _apply_and_push_state_update |
+| Layer A 模板引导 | tool_addendum.py:64(可偶尔调) | layer_a.j2:9 输出格式规范第 2 项 |
+
+→ **tag 路径完全覆盖 tool 路径的 activity/thought 功能,且多支持 mood/intimacy_delta**。`character.set_activity` cap 100% 冗余。
+
+#### Migration path
+
+**Step 1** · 移除 LLM 引导:
+- `tool_addendum.py:64-65` 删 `"你可以偶尔调 character.set_activity 更新自己「当前在做什么 / 在想什么」"` 段
+- 替换为(可选)`"使用 <state_update activity='...' thought='...' /> 标签即可,不要调 tool"`
+- 实际更简洁:layer_a.j2:9 已有 state_update 引导,**直接删 tool_addendum 那段**就行
+
+**Step 2** · 退役 cap:
+- 选项 A(clean cut):`backend/capabilities/character_state.py:67-138` 整段删
+- 选项 B(consumers 移除):把 `consumers=[Consumer.CHAT_AGENT]` 改为 `consumers=[]`(cap 仍 register 但不进 LLM tools=)— 不优雅,与无 consumer 的 cap 设计风格不一致
+- → **选 A**
+
+**Step 3**(可选 · backward-compat 短期):
+- ToolRegistry 保留 dispatch 兼容(若 LLM 误调 character.set_activity,fallback 到 update_character_state)
+- 1 周观察期后(LLM 完全不再尝试调),再删 backward-compat
+- → CC 倾向**跳过 backward-compat**,因 LLM 看不到 schema 就不会调;若误调走 tool_call_resilience 已有 unknown-tool 兜底
+
+#### 估省 + 风险
+
+- **省 ~150 tokens**(cap 单独的 schema)
+- **风险**:极低
+  - tag 路径已成熟(INV-3 §6 / §7 / §8 多次引用 + chat.py:219-260 解析齐全 + ws.py:1320 主路径处理已 fork 给 proactive `_apply_proactive_state_update`)
+  - tool_addendum.py:64 删段后 LLM 不再被引导调,但即便 LLM 尝试调,unknown-tool fallback 返 error 后会自然 retry 用 `<state_update>` tag(LLM 自身有 fallback 能力)
+
+### 3.4 P4 · MCP ext.* lazy-load(挂 v4.1+ backlog,不入本节评估)
+
+> 当前 prod 仅 `filesystem-skyler` 1 个 MCP enabled(per §1.1),lazy-load 收益小(单 MCP 注册的 ext.* 总 token < 1k)。若未来启用多 MCP(Notion / Brave search / 等),re-evaluate。本节不做评估。
+
+### 3.5 v4.1 token 治理子轨 B 实施清单（待 PM 拍板后逐条改代码）
+
+按"风险 × 工程量 × 收益"排序的 PM 决策视图。**总计估省 ~6,800 tokens(子轨 B 单独),与子轨 A 叠加主路径砍 ~52%**。
+
+#### 实施动作 1 · P2 描述精简 top 10 长 cap
+
+- **工程量**:0.5-1 day
+- **改动文件**:`backend/capabilities/*.py`(8 个 module 各改 1-2 处 description / parameters_schema)
+- **风险**:**零**(纯文字精简,不动行为)
+- **估省**:**~700 tokens**
+- **触发要求**:无前置
+- **何时做**:**先做**(零风险快速收益,且不动接口)
+
+#### 实施动作 2 · P3 character.set_activity 退役
+
+- **工程量**:0.5 day
+- **改动文件**:
+  - `backend/capabilities/character_state.py`(删 L67-138 cap)
+  - `backend/agents/prompt/tool_addendum.py`(删 L64-65 引导段)
+- **风险**:**极低**(`<state_update>` tag 已成熟,functionally 重叠)
+- **估省**:**~150 tokens**
+- **触发要求**:无前置
+- **何时做**:**第二做**(独立短工)
+
+#### 实施动作 3 · P1 Group C media 5 → 1
+
+- **工程量**:1 day
+- **改动文件**:
+  - `backend/capabilities/media_control.py`(5 个 cap 合并为 1,内部 dispatch)
+  - `backend/agents/prompt/tool_addendum.py:57-61`(引导段重写为 `media(action="X")` 形式)
+- **风险**:**低**(参数维度极简 + 系统级 stable API)
+- **估省**:**~890 tokens**
+- **触发要求**:dispatcher pattern 走通后,Group D / A / B 可复用
+
+#### 实施动作 4 · P1 Group D apple_calendar 4 → 1
+
+- **工程量**:1 day
+- **改动文件**:
+  - `backend/capabilities/apple_calendar.py`(4 cap → 1 + dispatcher)
+  - `backend/agents/prompt/tool_addendum.py:20-30`(引导段重写)
+  - `backend/capabilities/calendar.py`(router 保留 `calendar.today_events / upcoming_events` 不动 — 选 D1)
+- **风险**:**低**
+- **估省**:**~560 tokens**
+- **触发要求**:Action 3 dispatcher pattern 走通
+
+#### 实施动作 5 · P1 Group A bilibili 11 → 1
+
+- **工程量**:2 days
+- **改动文件**:
+  - `backend/capabilities/bilibili.py`(11 cap → 1 + dispatcher;最大改动)
+  - `backend/agents/prompt/tool_addendum.py:103-115`(引导段重写)
+  - `backend/agents/tool_call_resilience.py`(若有 `<bilibili.*>` capability-name-as-tag fallback,同步迁移)
+- **风险**:**中**
+- **估省**:**~2,150 tokens**(最大头)
+- **触发要求**:Action 3 dispatcher pattern 走通
+
+#### 实施动作 6 · P1 Group B netease 13 → 2(web+local)
+
+- **工程量**:2-3 days
+- **改动文件**:
+  - `backend/capabilities/netease_music.py`(7 web cap → `netease_web`)
+  - `backend/capabilities/netease_playback.py`(6 local cap → `netease_local`)
+  - `backend/agents/prompt/tool_addendum.py:40-50 / 88-97`(双路径引导重写)
+  - `backend/agents/tool_call_resilience.py`(`<netease.daily_recommend>` etc. fallback 迁移)
+- **风险**:**中-高**(双路径语义切换 + like_current 需 media.now_playing 前置协议)
+- **估省**:**~2,360 tokens**
+- **触发要求**:Action 5 跑通后,bilibili dispatch pattern 验证可复用;netease 是双 path,设计需仔细
+
+#### 实施动作 7 · v4.1 路径 D A/B 评测(切 DeepSeek 候选,留 v4.1 后期议)
+
+per INV-5 §4.5 + §5.4.5,v4.1 候选,与本子轨 B 正交。
+
+#### 总收益预估表
+
+| 动作 | 收益 (tokens) | 工程量 | 累计收益 | 累计工程量 |
+|---|---|---|---|---|
+| 1 · P2 desc 精简 | ~700 | 0.5-1 d | 700 | 1 d |
+| 2 · P3 set_activity 退役 | ~150 | 0.5 d | 850 | 1.5 d |
+| 3 · media 5→1 | ~890 | 1 d | 1,740 | 2.5 d |
+| 4 · apple_calendar 4→1 | ~560 | 1 d | 2,300 | 3.5 d |
+| 5 · bilibili 11→1 | ~2,150 | 2 d | 4,450 | 5.5 d |
+| 6 · netease 13→2 | ~2,360 | 2-3 d | **~6,810** | **~8 d** |
+
+→ **总计 ~6.8k tokens(子轨 B)**,加子轨 A 5.6k cache 收益,主路径 prompt 22.7k → ~10.3k(**减幅 ~55%**)。
+
+### 3.6 收口
+
+- ✅ P1 / P2 / P3 三类候选评估完,实施清单 6 动作排好序
+- ✅ 估省 token 与 PM §2.5 早期估 ~8-10k 校正为更准的 **~6.8k**(扣折叠后 union schema 开销)
+- ✅ P3 `character.set_activity` 与 `<state_update>` tag 100% 功能重叠,clean cut 删除可
+- ✅ P4 MCP lazy-load 挂 v4.1+ backlog
+- 🔒 本节零代码 / config / DB 改动,纯只读评估 + 设计草图
+
+**v4.1 实施清单优先级总结**(给 PM 决策视图):
+
+| 排序 | 动作 | 风险 | 收益 | 备注 |
+|---|---|---|---|---|
+| 1 | P2 desc 精简 | 零 | ~700 | 先做(无前置)|
+| 2 | P3 set_activity 退役 | 极低 | ~150 | 第二(独立短工)|
+| 3 | media 5→1 | 低 | ~890 | dispatcher pattern 试水 |
+| 4 | apple_calendar 4→1 | 低 | ~560 | 复用 pattern |
+| 5 | bilibili 11→1 | 中 | ~2,150 | 最大头 |
+| 6 | netease 13→2 | 中-高 | ~2,360 | 双路径设计仔细 |
+
+→ **§3 完成。等 PM 拍板后启动逐条改代码刀(4-phase 框架 per 子轨 A 经验)**。
+
