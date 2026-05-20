@@ -62,15 +62,12 @@ async def search_video(
     name="bilibili.get_video_info",
     display_name="获取 B 站视频详情",
     description=(
-        "拿 B 站视频元数据（标题 / UP 主 / 描述 / 时长 / 播放数 / 点赞 / 收藏 / "
-        "弹幕 / 评论 等）。用户说「这个视频是谁发的」「这视频多长」「视频简介」"
-        "或粘了 B 站链接（bilibili.com/video/BVxxx / BV 开头编号）时**默认**调"
-        "本 capability 拿信息。\n\n"
-        "参数（二选一）：\n"
-        "- bvid: BV 号（推荐，B 站新版主流）\n"
-        "- aid: AV 号（兼容老链接）\n\n"
-        "返回 ``{bvid, aid, cid, title, description, duration, owner: {mid, name}, "
-        "stat: {view, like, favorite, ...}, url}``。"
+        "拿 B 站视频元数据(标题/UP 主/描述/时长/播放数/点赞/弹幕/评论等)。"
+        "用户说『这个视频是谁发的/视频多长/简介』或粘 B 站链接(bilibili.com/"
+        "video/BVxxx)时**默认**调本 cap 拿信息。\n\n"
+        "参数二选一:bvid(BV 号,新版主流) / aid(AV 号,老链接兼容)。"
+        "返 {bvid, title, description, duration, owner: {mid, name}, "
+        "stat: {view, like, favorite, ...}, url}。"
     ),
     category="media",
     consumers=[Consumer.CHAT_AGENT],
@@ -232,18 +229,12 @@ async def get_ranking(
     name="bilibili.get_subtitles",
     display_name="获取 B 站视频字幕（用于 LLM 总结）",
     description=(
-        "拿 B 站视频字幕用于内容总结。⭐ 杀手 use case：用户说「帮我总结这"
-        "个 B 站视频」「这个视频讲了啥」「太长不看」「3 分钟讲完」「视频内容"
-        "概括一下」时调用，拿到字幕后用你自己的话**总结**（不要原样输出字幕，"
-        "字幕有时间戳 / 重复 / 口语化）。\n\n"
-        "策略：优先 AI 字幕（多数视频有）；无 AI 字幕取 UP 主上传字幕；都没"
-        "有返 ``source='none'`` —— 此时回话告诉用户「这个视频没有字幕，我没"
-        "法看到内容」，**不要瞎编内容**。\n\n"
-        "**需要 cookie**（B 站 2024-2025 风控限制）：未配 BILIBILI_SESSDATA 时"
-        "返 ``cookie_required``，直接转告用户去 docs/bilibili-setup.md 配。\n\n"
-        "参数（二选一）：\n- bvid / aid\n\n"
-        "返回 ``{bvid, title, subtitle_text, source: 'ai'|'manual'|'none', "
-        "duration, lan, lan_doc}``。"
+        "B 站视频字幕用于内容总结。⭐ 杀手 use case:用户说『帮我总结这个 "
+        "B 站视频/讲了啥/太长不看』时调用,拿字幕后用自己话总结(字幕有时间戳/"
+        "重复/口语化,别原样输出)。\n\n"
+        "策略:AI 字幕 → UP 主字幕 → source='none'(后者跟用户说『没字幕看不到』)。"
+        "需 BILIBILI_SESSDATA cookie,未配返 cookie_required。\n\n"
+        "参数 bvid / aid 二选一。返 {bvid, title, subtitle_text, source, duration}。"
     ),
     category="media",
     consumers=[Consumer.CHAT_AGENT],

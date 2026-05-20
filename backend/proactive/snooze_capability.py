@@ -45,16 +45,11 @@ def _now_aware() -> datetime:
     name="proactive.snooze_wake_call",
     display_name="推迟早晨叫醒",
     description=(
-        "推迟下次「叫醒」简报触发 N 分钟。当用户在 wake_call 早晨叫醒后"
-        "明确表示拒绝起床（'再睡' / '还早' / '困' / '不想起' / '再睡 X 分钟'）"
-        "时主动调用。minutes 参数：用户说'再睡 X 分钟'则 minutes=X，没明说"
-        "用 config 默认（一般 30）。范围 5-120。\n\n"
-        "调用前不需要询问'要推迟多久' —— 从用户原话推断或用默认即可。"
-        "不要在用户没明确拒绝起床时调用（如'今天天气如何'是切换话题，"
-        "不是拒绝，应直接回答天气，**不**调本 capability）。\n\n"
-        "返回 ``{ok, run_at, message}``：``run_at`` 是即将触发的 ISO 时间；"
-        "``ok=false`` 一般是 snooze 时间超过了下一次正常 cron（用户已经"
-        "睡过头，下次正常叫醒就够了，不需要重复）。"
+        "推迟下次「叫醒」简报触发 N 分钟。用户在 wake_call 早晨明确拒绝起床"
+        "('再睡'/'还早'/'困'/'不想起'/'再睡 X 分钟')时调用。"
+        "minutes:用户说'再睡 X 分钟'则 X,否则用 config 默认(一般 30),范围 5-120。\n\n"
+        "⚠️ 用户切换话题(如'今天天气如何')不是拒绝,**不调**本 cap。\n\n"
+        "返 {ok, run_at, message};ok=false = snooze 跨过了下次正常 cron 不需重复。"
     ),
     category="system",
     consumers=[Consumer.CHAT_AGENT],

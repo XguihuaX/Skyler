@@ -61,13 +61,12 @@ async def _combined_health() -> dict:
     name="netease.local_play_song",
     display_name="播放网易云单曲",
     description=(
-        "本地 mpv 自解码播放网易云单曲。用户说「放 X 这首歌」「来一首 Y」"
-        "「听一下 Z」时（先用 netease.search 拿 song_id 再调本 capability）"
-        "触发。**自动播放真闭环**——不依赖 NCM 客户端是否打开。\n\n"
-        "VIP / 付费下架歌曲返试听片段（~30s），返回字段 ``is_trial=True``，"
-        "如实告诉用户「这是试听片段」。\n\n"
-        "参数：\n- song_id: NCM 歌曲 ID（必填）\n\n"
-        "返回 ``{status, url, is_trial, song_id}``；URL 失效 → ``{error: 'url_unavailable'}``。"
+        "本地 mpv 自解码播放网易云单曲(自动播放闭环,不依赖 NCM 客户端)。"
+        "用户说『放 X / 来一首 Y / 听一下 Z』时调(先 netease.search 拿 "
+        "song_id 再调本 cap)。\n\n"
+        "VIP/付费下架返试听片段 ~30s,is_trial=True 时如实告诉用户『这是试听片段』。\n\n"
+        "参数 song_id 必填。返 {status, url, is_trial, song_id};"
+        "URL 失效 → {error: 'url_unavailable'}。"
     ),
     category="music",
     consumers=[Consumer.CHAT_AGENT],

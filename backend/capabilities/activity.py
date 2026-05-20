@@ -60,13 +60,11 @@ def _fmt_duration(seconds: int) -> str:
     name="activity.get_today_summary",
     display_name="今日活动摘要",
     description=(
-        "查用户今天(本地日)在各 app / URL 的总停留时长 + 类别分布。当用户问"
-        "「今天累不累」「今天都干了啥」「我今天看了多久 B 站」时调。返"
-        "``{available, total_active_seconds, total_active_pretty, top_apps[], "
-        "by_category{}, recent_focus}``;无数据 → ``{available: false}``。"
-        "**不会泄露**已被用户拉黑的 app / URL,也**不**包含 idle 期间(用户 AFK)的"
-        "session。ChatAgent 默认会自动在 system prompt 注入简短今日摘要;本 capability "
-        "用于用户问具体细节时(如「我今天在 B 站待了多久」)主动查。"
+        "查用户今天在各 app / URL 的总停留时长 + 类别分布。用户问『今天累不累/"
+        "都干了啥/看了多久 X』时调。返 {available, total_active_seconds, "
+        "top_apps[], by_category, recent_focus};无数据 → {available: false}。\n\n"
+        "不返黑名单 app/URL,不含 idle session(双重隐私)。"
+        "ChatAgent 已在 system prompt 注入简短摘要,本 cap 用于查具体细节。"
     ),
     category="activity",
     consumers=[Consumer.CHAT_AGENT],
@@ -251,12 +249,11 @@ async def get_recent_apps(days: int = 7, **_kwargs) -> dict:
     name="activity.search_history",
     display_name="搜索活动历史",
     description=(
-        "在历史 session 的 ``browser_url / browser_title / app_name`` 字段里搜"
-        "关键词(case-insensitive substring)。用户问「我之前在哪个网站看过 X」"
-        "「我那篇 B 站视频是啥时候看的」时调。参数 ``keyword: str``(必填)+ "
-        "``days: int``(默 30,clamp [1, 90])。返 ``{available, keyword, matches[]}``"
-        ",每个 match 含 ``id / app / url / title / start_at / duration_seconds``。"
-        "黑名单 / idle session 不在返值内(双重隐私)。"
+        "在历史 session 的 browser_url / browser_title / app_name 字段搜关键词。"
+        "用户问『我之前在哪个网站看过 X / 那篇 B 站视频是啥时候看的』时调。\n\n"
+        "参数 keyword(必填) + days(默 30,clamp 1-90)。"
+        "返 {available, matches[]} 每 match 含 id/app/url/title/start_at/duration_seconds。"
+        "黑名单 / idle session 不返(双重隐私)。"
     ),
     category="activity",
     consumers=[Consumer.CHAT_AGENT],

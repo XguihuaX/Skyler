@@ -84,15 +84,11 @@ def _normalize_filename(filename: str) -> str:
     name="docx.create",
     display_name="创建 Word 文档",
     description=(
-        "创建一份新的 Word 文档（.docx），保存到 Skyler 文档沙箱目录。"
-        "适用场景：用户说「帮我写一份…」「起草一个文档」「做个周报」。\n\n"
-        "参数：\n"
-        "- filename: 文件名（你按内容自己起名，如 ``周报_2026年05月.docx``。"
-        "可不带后缀，会自动补 .docx；不能含路径分隔符）\n"
-        "- title: 文档一级大标题（一句话，不能为空）\n"
-        "- paragraphs: 正文段落列表（list[str]，每段一项；可为空表示只要标题）\n\n"
-        "返回 ``{path, size_bytes}``。若 filename 重复会**覆盖原文件**——需要"
-        "保留旧版本时让用户先确认。"
+        "创建新 Word 文档(.docx),保存到 Skyler 文档沙箱目录。"
+        "适用:用户说『帮我写一份/起草个文档/做个周报』。\n\n"
+        "参数:filename(自起,可不带后缀,不含路径分隔符) / title(一句话非空) / "
+        "paragraphs(段落 list[str],可空只要标题)。\n\n"
+        "返 {path, size_bytes}。filename 重复会**覆盖原文件**,需保留旧版时先让用户确认。"
     ),
     category="files",
     consumers=[Consumer.CHAT_AGENT],

@@ -264,16 +264,12 @@ def _mpv_unavailable_hint() -> str:
     name="netease.daily_recommend",
     display_name="网易云日推",
     description=(
-        "拉取网易云今日推荐歌单（30 首）并**自动播放**。当用户说\"放日推 / "
-        "听今天的推荐 / 给我来点新歌\"时调用，**不**需要用户给关键词。\n\n"
-        "实际播放路径优先级（自动 fall through）：\n"
-        "  1. **mpv 装好 + MUSIC_U cookie OK** → Skyler 内嵌 mpv 自解码真"
-        "自动播放（``autoplay: true`` 诚实生效）；\n"
-        "  2. **mpv 没装 / cookie 缺 / song URL 失败** → 唤起 NCM 客户端作"
-        "fallback，返 ``autoplay: false`` + ``hint`` 引导用户装 mpv。\n\n"
-        "**调用后看返回的 ``autoplay`` 字段决定回话**：true 时直说"
-        "「已经在播第 X 首日推」；false 时如实告诉用户「网易云客户端"
-        "已经打开，但自动播放需要装 mpv...」。"
+        "拉网易云今日推荐歌单(30 首)并自动播放。用户说『放日推/听今天的推荐/"
+        "给我来点新歌』时调,不需要关键词。\n\n"
+        "路径优先:mpv 装好 + MUSIC_U cookie OK → 内嵌 mpv 真自动播(autoplay=true);"
+        "否则唤起 NCM 客户端 fallback(autoplay=false + hint 装 mpv)。\n\n"
+        "按 autoplay 字段回话:true 直说『在播第 X 首日推』;false 如实说"
+        "『NCM 已打开但自动播放需装 mpv』。"
     ),
     category="music",
     consumers=[Consumer.CHAT_AGENT],
@@ -329,13 +325,11 @@ async def daily_recommend(**_kwargs) -> dict:
     name="netease.personal_fm",
     display_name="网易云私人 FM",
     description=(
-        "开启网易云私人 FM / 心动模式（无限流推荐）。用户说\"随便放点 / "
-        "听点新的 / 私人电台\"等无明确目标时调用。\n\n"
-        "实际路径：mpv 装好 → Skyler 内嵌播 FM 首批 ~5 首 + 队列；mpv 没装"
-        " → 唤起 NCM 客户端 ``orpheus://personalFM`` （NCM 接管 FM 模式，"
-        "原生支持 autoplay），``autoplay: false`` 但 NCM 自己会播。\n\n"
-        "看 ``autoplay`` 字段：true 是 Skyler mpv 在播；false 是 NCM 客户端"
-        "在播（也 OK，FM scheme 是 NCM 自带 autoplay 语义之一）。"
+        "开启网易云私人 FM / 心动模式(无限流推荐)。用户说『随便放点/听点新的/"
+        "私人电台』等无明确目标时调用。\n\n"
+        "路径:mpv 装好 → 内嵌播 FM 首批 ~5 首(autoplay=true);mpv 没装 → "
+        "唤起 NCM 客户端 FM 模式(autoplay=false 但 NCM 自己播)。\n\n"
+        "看 autoplay 字段回话(false 是 NCM 在播,也算 OK)。"
     ),
     category="music",
     consumers=[Consumer.CHAT_AGENT],

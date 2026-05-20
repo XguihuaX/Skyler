@@ -29,18 +29,13 @@ from backend.integrations import xiaohongshu as _xhs
     name="xhs.parse_url",
     display_name="解析小红书笔记 URL",
     description=(
-        "**只做被动 URL 解析**。用户主动贴小红书笔记链接（xiaohongshu.com / "
-        "xhslink.com 域名）时调用，返回 title / text / images / author / tags。"
-        "**没有**主动搜索 / 推荐流 / 抓评论 / 账号自动化 capability——如果"
-        "用户问「帮我搜小红书 X」「拉一下小红书首页」，**如实告诉用户**："
-        "「Skyler 不主动爬小红书；你贴具体笔记链接给我就能解析」，**不要瞎编**"
-        "结果或假装调了什么 capability。\n\n"
-        "拿到内容后用你自己的话总结 / 翻译 / 回答用户问题——不要原样输出 "
-        "tags 列表 / 完整 text（小红书笔记常有大量 emoji / 标签噪声）。\n\n"
-        "参数：\n- url: 笔记链接（短链 xhslink.com 也支持，自动 follow redirect）\n\n"
-        "返回 ``{title, text, images, author, tags, url, source}``；error 字段："
-        "``invalid_url`` / ``blocked_by_antibot``（反爬限流） / ``parse_failed``"
-        " / ``timeout`` / ``http_error``。"
+        "小红书笔记 URL 解析(仅 xiaohongshu.com / xhslink.com 域名,被动解析"
+        "不主动爬)。用户贴笔记链接时调用,返 {title, text, images, author, tags}。"
+        "用户问『搜小红书/拉首页』等主动场景如实告知『不主动爬,贴具体链接才解析』,"
+        "不要假装调用。\n\n"
+        "拿到内容后用自己话总结,别原样输出 tag 噪声。\n\n"
+        "参数 url:完整笔记链接(短链自动 follow)。"
+        "失败 error:invalid_url / blocked_by_antibot / parse_failed / timeout。"
     ),
     category="social",
     consumers=[Consumer.CHAT_AGENT],

@@ -1093,3 +1093,15 @@ per INV-5 §4.5 + §5.4.5,v4.1 候选,与本子轨 B 正交。
 
 → **§3 完成。等 PM 拍板后启动逐条改代码刀(4-phase 框架 per 子轨 A 经验)**。
 
+### 3.7 P2 实施已 ship(子轨 B 实施第 1 刀,2026-05-21)
+
+P2 描述精简(top 10 长 cap)实施完成。
+
+- **Stage 1 草稿**:commit `7234afc`(INV-4 §3.2.1 10 条 current vs proposed 对照,PM 拍板回填 xhs ⚠️ 后)
+- **Stage 2 落代码**:commit `(本次 commit)`,10 .py 文件改 description 字符串
+  - `backend/capabilities/xiaohongshu.py` / `bilibili.py`(×2) / `netease_music.py`(×2) / `netease_playback.py` / `activity.py`(×2) / `docx_ops.py` / `backend/proactive/snooze_capability.py`
+  - **零 parameter_schema / handler / call site 改动**
+- **实测**:tools_schema 13,250 → **10,336 tokens**(-2,914 / **22.0% reduction**)
+- **估 vs 实测差异**:§3.2 估 ~700 tokens,实测 ~2,914 tokens,**实际是预估 4 倍**。原因:§3.2 用 chars × 0.4 估,但 Qwen tokenizer 对长 description(含大量中文 + markdown + 特殊字符)实际密度接近 chars × 1.0-2.0,**长 desc 比线性 chars 估算更"重"**。这是子轨 B 真正的 ROI 放大器
+- **Mai smoke**:`<thinking>` + `<state_update>` + `<motion>` 全套 tag 正常输出,persona 还原零 regression
+
