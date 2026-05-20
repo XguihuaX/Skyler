@@ -707,6 +707,233 @@ parameters_schema={
 
 **实施风险**:**零**(纯文字精简,不动 ps 字段约束 / handler 逻辑)
 
+#### 3.2.1 P2 desc 精简改动提案(Stage 1 草稿,2026-05-21)
+
+> 实施第 1 刀 Stage 1 产出。每条产出 current vs proposed 对照 + 删除内容标注 + 信息丢失评估。**纯文档草稿,Stage 2 PM 拍板后才落代码改 .py。**
+>
+> Top 10 按 description chars 长度排(排除 `character.set_activity` 因 P3 退役)。
+
+##### 1. `xhs.parse_url` (548 → ~220 chars)
+
+**Current**(548 chars):
+> **只做被动 URL 解析**。用户主动贴小红书笔记链接(xiaohongshu.com / xhslink.com 域名)时调用,返回 title / text / images / author / tags。**没有**主动搜索 / 推荐流 / 抓评论 / 账号自动化 capability——如果用户问「帮我搜小红书 X」「拉一下小红书首页」,**如实告诉用户**:「Skyler 不主动爬小红书;你贴具体笔记链接给我就能解析」,**不要瞎编**结果或假装调了什么 capability。
+> 拿到内容后用你自己的话总结 / 翻译 / 回答用户问题——不要原样输出 tags 列表 / 完整 text(小红书笔记常有大量 emoji / 标签噪声)。
+> 参数:
+> - url: 笔记链接(短链 xhslink.com 也支持,自动 follow redirect)
+> 返回 ``{title, text, images, author, tags, url, source}``;error 字段:``invalid_url`` / ``blocked_by_antibot``(反爬限流) / ``parse_failed`` / ``timeout`` / ``http_error``。
+
+**Proposed**(~250 chars,PM 拍板回填后):
+> 小红书笔记 URL 解析(仅 xiaohongshu.com / xhslink.com 域名,被动解析不主动爬)。用户贴笔记链接时调用,返 {title, text, images, author, tags}。
+> 用户问"搜小红书/拉首页"等主动场景如实告知"不主动爬,贴具体链接才解析",不要假装调用。
+> 拿到内容后用自己话总结,别原样输出 tag 噪声。
+> 参数 url:完整笔记链接(短链自动 follow)。失败 error:invalid_url / blocked_by_antibot / parse_failed / timeout。
+
+**删了什么**:
+- 删 "不要瞎编结果" 强调(LLM 一般行为)
+- 合并 5 个 error code 枚举到一行
+- 删 source 字段(error 文案足够)
+- 保留 "用自己话总结,别原样输出 tag 噪声"(PM 2026-05-21 拍板回填:小红书 tag 噪声 LLM 易 dump,30 chars 成本免费规避事故)
+
+**信息丢失评估**:✅(PM 回填后)。tool_addendum 全局兜底 + cap-specific 短引导双保险。
+
+##### 2. `bilibili.get_subtitles` (461 → ~215 chars)
+
+**Current**(461 chars):
+> 拿 B 站视频字幕用于内容总结。⭐ 杀手 use case:用户说「帮我总结这个 B 站视频」「这个视频讲了啥」「太长不看」「3 分钟讲完」「视频内容概括一下」时调用,拿到字幕后用你自己的话**总结**(不要原样输出字幕,字幕有时间戳 / 重复 / 口语化)。
+> 策略:优先 AI 字幕(多数视频有);无 AI 字幕取 UP 主上传字幕;都没有返 ``source='none'`` —— 此时回话告诉用户「这个视频没有字幕,我没法看到内容」,**不要瞎编内容**。
+> **需要 cookie**(B 站 2024-2025 风控限制):未配 BILIBILI_SESSDATA 时返 ``cookie_required``,直接转告用户去 docs/bilibili-setup.md 配。
+> 参数(二选一):
+> - bvid / aid
+> 返回 ``{bvid, title, subtitle_text, source: 'ai'|'manual'|'none', duration, lan, lan_doc}``。
+
+**Proposed**(~215 chars):
+> B 站视频字幕用于内容总结。⭐ 杀手 use case:用户说"帮我总结这个 B 站视频/讲了啥/太长不看"时调用,拿字幕后用自己话总结(字幕有时间戳/重复/口语化,别原样输出)。
+> 策略:AI 字幕 → UP 主字幕 → source='none'(后者跟用户说"没字幕看不到")。需 BILIBILI_SESSDATA cookie,未配返 cookie_required。
+> 参数 bvid / aid 二选一。返 {bvid, title, subtitle_text, source, duration}。
+
+**删了什么**:
+- 5 个触发例缩成 3 个核心
+- 删 "B 站 2024-2025 风控限制" 历史背景
+- 删 "docs/bilibili-setup.md 配" 路径引用(用户配置不是 LLM 问题)
+- 删 "不要瞎编内容" 重复强调
+- 返字段去 lan / lan_doc(次要)
+
+**信息丢失评估**:✅ 关键策略 + 兜底语义 + cookie 信号全保留。
+
+##### 3. `netease.daily_recommend` (393 → ~200 chars)
+
+**Current**(393 chars):
+> 拉取网易云今日推荐歌单(30 首)并**自动播放**。当用户说"放日推 / 听今天的推荐 / 给我来点新歌"时调用,**不**需要用户给关键词。
+> 实际播放路径优先级(自动 fall through):
+>   1. **mpv 装好 + MUSIC_U cookie OK** → Skyler 内嵌 mpv 自解码真自动播放(``autoplay: true`` 诚实生效);
+>   2. **mpv 没装 / cookie 缺 / song URL 失败** → 唤起 NCM 客户端作fallback,返 ``autoplay: false`` + ``hint`` 引导用户装 mpv。
+> **调用后看返回的 ``autoplay`` 字段决定回话**:true 时直说「已经在播第 X 首日推」;false 时如实告诉用户「网易云客户端已经打开,但自动播放需要装 mpv...」。
+
+**Proposed**(~200 chars):
+> 拉网易云今日推荐歌单(30 首)并自动播放。用户说"放日推/听今天的推荐/给我来点新歌"时调,不需要关键词。
+> 路径优先:mpv 装好 + MUSIC_U cookie OK → 内嵌 mpv 真自动播(autoplay=true);否则唤起 NCM 客户端 fallback(autoplay=false + hint 装 mpv)。
+> 按 autoplay 字段回话:true 直说"在播第 X 首日推";false 如实说"NCM 已打开但自动播放需装 mpv"。
+
+**删了什么**:
+- 编号 1/2 fallback 流程缩成一行
+- 删 markdown 加粗字符(LLM 一样能读)
+- 例子语缩短
+
+**信息丢失评估**:✅ 全保留(autoplay 字段语义是核心)。
+
+##### 4. `proactive.snooze_wake_call` (377 → ~210 chars)
+
+**Current**(377 chars):
+> 推迟下次「叫醒」简报触发 N 分钟。当用户在 wake_call 早晨叫醒后明确表示拒绝起床('再睡' / '还早' / '困' / '不想起' / '再睡 X 分钟')时主动调用。minutes 参数:用户说'再睡 X 分钟'则 minutes=X,没明说用 config 默认(一般 30)。范围 5-120。
+> 调用前不需要询问'要推迟多久' —— 从用户原话推断或用默认即可。不要在用户没明确拒绝起床时调用(如'今天天气如何'是切换话题,不是拒绝,应直接回答天气,**不**调本 capability)。
+> 返回 ``{ok, run_at, message}``:``run_at`` 是即将触发的 ISO 时间;``ok=false`` 一般是 snooze 时间超过了下一次正常 cron(用户已经睡过头,下次正常叫醒就够了,不需要重复)。
+
+**Proposed**(~215 chars):
+> 推迟下次"叫醒"简报触发 N 分钟。用户在 wake_call 早晨明确拒绝起床('再睡'/'还早'/'困'/'不想起'/'再睡 X 分钟')时调用。minutes:用户说'再睡 X 分钟'则 X,否则用 config 默认(一般 30),范围 5-120。
+> ⚠️ 用户切换话题(如'今天天气如何')不是拒绝,**不调**本 cap。
+> 返 {ok, run_at, message};ok=false = snooze 跨过了下次正常 cron 不需重复。
+
+**删了什么**:
+- 删 "调用前不需要询问'要推迟多久' —— 从用户原话推断或用默认即可"(冗余,minutes 参数说明已含)
+- "应直接回答天气" 例子保留为 "切换话题不是拒绝" 通用规则
+- ok=false 详注精简
+
+**信息丢失评估**:✅ negation 信号(切换话题不调)的关键 ⚠️ 保留显眼。
+
+##### 5. `activity.get_today_summary` (345 → ~190 chars)
+
+**Current**(345 chars):
+> 查用户今天(本地日)在各 app / URL 的总停留时长 + 类别分布。当用户问「今天累不累」「今天都干了啥」「我今天看了多久 B 站」时调。返``{available, total_active_seconds, total_active_pretty, top_apps[], by_category{}, recent_focus}``;无数据 → ``{available: false}``。**不会泄露**已被用户拉黑的 app / URL,也**不**包含 idle 期间(用户 AFK)的session。ChatAgent 默认会自动在 system prompt 注入简短今日摘要;本 capability 用于用户问具体细节时(如「我今天在 B 站待了多久」)主动查。
+
+**Proposed**(~190 chars):
+> 查用户今天在各 app / URL 的总停留时长 + 类别分布。用户问"今天累不累/都干了啥/看了多久 X"时调。返 {available, total_active_seconds, top_apps[], by_category, recent_focus};无数据 → {available: false}。
+> 不返黑名单 app/URL,不含 idle session(双重隐私)。ChatAgent 已在 system prompt 注入简短摘要,本 cap 用于查具体细节。
+
+**删了什么**:
+- 返字段 `total_active_pretty` 删(LLM 不需细到 pretty 字段)
+- 触发例 3 个缩成 1 行
+- "本 capability 用于用户问具体细节时主动查" 缩短
+
+**信息丢失评估**:✅ 全保留。
+
+##### 6. `activity.search_history` (326 → ~190 chars)
+
+**Current**(326 chars):
+> 在历史 session 的 ``browser_url / browser_title / app_name`` 字段里搜关键词(case-insensitive substring)。用户问「我之前在哪个网站看过 X」「我那篇 B 站视频是啥时候看的」时调。参数 ``keyword: str``(必填)+ ``days: int``(默 30,clamp [1, 90])。返 ``{available, keyword, matches[]}``,每个 match 含 ``id / app / url / title / start_at / duration_seconds``。黑名单 / idle session 不在返值内(双重隐私)。
+
+**Proposed**(~190 chars):
+> 在历史 session 的 browser_url / browser_title / app_name 字段搜关键词。用户问"我之前在哪个网站看过 X / 那篇 B 站视频是啥时候看的"时调。
+> 参数 keyword(必填) + days(默 30,clamp 1-90)。返 {available, matches[]} 每 match 含 id/app/url/title/start_at/duration_seconds。黑名单 / idle session 不返(双重隐私)。
+
+**删了什么**:
+- "case-insensitive substring" 实现细节删(LLM 默认知道字符串搜索)
+- 返字段顶层删 `keyword`(冗余,参数已有)
+- 参数类型注释精简
+
+**信息丢失评估**:✅ 全保留。
+
+##### 7. `bilibili.get_video_info` (326 → ~205 chars)
+
+**Current**(326 chars):
+> 拿 B 站视频元数据(标题 / UP 主 / 描述 / 时长 / 播放数 / 点赞 / 收藏 / 弹幕 / 评论 等)。用户说「这个视频是谁发的」「这视频多长」「视频简介」或粘了 B 站链接(bilibili.com/video/BVxxx / BV 开头编号)时**默认**调本 capability 拿信息。
+> 参数(二选一):
+> - bvid: BV 号(推荐,B 站新版主流)
+> - aid: AV 号(兼容老链接)
+> 返回 ``{bvid, aid, cid, title, description, duration, owner: {mid, name}, stat: {view, like, favorite, ...}, url}``。
+
+**Proposed**(~205 chars):
+> 拿 B 站视频元数据(标题/UP 主/描述/时长/播放数/点赞/弹幕/评论等)。用户说"这个视频是谁发的/视频多长/简介"或粘 B 站链接(bilibili.com/video/BVxxx)时**默认**调本 cap 拿信息。
+> 参数二选一:bvid(BV 号,新版主流) / aid(AV 号,老链接兼容)。返 {bvid, title, description, duration, owner: {mid, name}, stat: {view, like, favorite, ...}, url}。
+
+**删了什么**:
+- 元数据字段枚举:收藏 删(stat.favorite 已含),`cid` 删(LLM 不用)
+- 触发例 3 个缩成 2 个
+- 参数详注合并一行
+
+**信息丢失评估**:✅ 全保留。
+
+##### 8. `netease.personal_fm` (304 → ~180 chars)
+
+**Current**(304 chars):
+> 开启网易云私人 FM / 心动模式(无限流推荐)。用户说"随便放点 / 听点新的 / 私人电台"等无明确目标时调用。
+> 实际路径:mpv 装好 → Skyler 内嵌播 FM 首批 ~5 首 + 队列;mpv 没装 → 唤起 NCM 客户端 ``orpheus://personalFM`` (NCM 接管 FM 模式,原生支持 autoplay),``autoplay: false`` 但 NCM 自己会播。
+> 看 ``autoplay`` 字段:true 是 Skyler mpv 在播;false 是 NCM 客户端在播(也 OK,FM scheme 是 NCM 自带 autoplay 语义之一)。
+
+**Proposed**(~180 chars):
+> 开启网易云私人 FM / 心动模式(无限流推荐)。用户说"随便放点/听点新的/私人电台"等无明确目标时调用。
+> 路径:mpv 装好 → 内嵌播 FM 首批 ~5 首(autoplay=true);mpv 没装 → 唤起 NCM FM 模式(autoplay=false 但 NCM 自己播)。
+> 看 autoplay 字段回话(false 是 NCM 在播,也算 OK)。
+
+**删了什么**:
+- "orpheus://personalFM" URL scheme 删(实现细节)
+- "NCM 接管 FM 模式,原生支持 autoplay" 注释合并
+- "FM scheme 是 NCM 自带 autoplay 语义之一" 解释删
+
+**信息丢失评估**:✅ 全保留。
+
+##### 9. `netease.local_play_song` (297 → ~190 chars)
+
+**Current**(297 chars):
+> 本地 mpv 自解码播放网易云单曲。用户说「放 X 这首歌」「来一首 Y」「听一下 Z」时(先用 netease.search 拿 song_id 再调本 capability)触发。**自动播放真闭环**——不依赖 NCM 客户端是否打开。
+> VIP / 付费下架歌曲返试听片段(~30s),返回字段 ``is_trial=True``,如实告诉用户「这是试听片段」。
+> 参数:
+> - song_id: NCM 歌曲 ID(必填)
+> 返回 ``{status, url, is_trial, song_id}``;URL 失效 → ``{error: 'url_unavailable'}``。
+
+**Proposed**(~190 chars):
+> 本地 mpv 自解码播放网易云单曲(自动播放闭环,不依赖 NCM 客户端)。用户说"放 X / 来一首 Y / 听一下 Z"时调(先 netease.search 拿 song_id 再调本 cap)。
+> VIP/付费下架返试听片段 ~30s,is_trial=True 时如实告诉用户"这是试听片段"。
+> 参数 song_id 必填。返 {status, url, is_trial, song_id};URL 失效 → {error: 'url_unavailable'}。
+
+**删了什么**:
+- 触发例 3 个缩成单行
+- "自动播放真闭环" 改成括号注释
+- 参数详注合并
+
+**信息丢失评估**:✅ 全保留。
+
+##### 10. `docx.create` (293 → ~195 chars)
+
+**Current**(293 chars):
+> 创建一份新的 Word 文档(.docx),保存到 Skyler 文档沙箱目录。适用场景:用户说「帮我写一份…」「起草一个文档」「做个周报」。
+> 参数:
+> - filename: 文件名(你按内容自己起名,如 ``周报_2026年05月.docx``。可不带后缀,会自动补 .docx;不能含路径分隔符)
+> - title: 文档一级大标题(一句话,不能为空)
+> - paragraphs: 正文段落列表(list[str],每段一项;可为空表示只要标题)
+> 返回 ``{path, size_bytes}``。若 filename 重复会**覆盖原文件**——需要保留旧版本时让用户先确认。
+
+**Proposed**(~195 chars):
+> 创建新 Word 文档(.docx),保存到 Skyler 文档沙箱目录。适用:用户说"帮我写一份/起草个文档/做个周报"。
+> 参数:filename(自起,可不带后缀,不含路径分隔符)/ title(一句话非空)/ paragraphs(段落 list[str],可空只要标题)。
+> 返 {path, size_bytes}。filename 重复会**覆盖原文件**,需保留旧版时先让用户确认。
+
+**删了什么**:
+- 3 段参数详注合并一行
+- 触发例缩短
+- 文件名举例 "`周报_2026年05月.docx`" 删
+
+**信息丢失评估**:✅ 全保留(覆盖警告醒目保留)。
+
+#### 3.2.2 P2 改动汇总(Stage 1)
+
+| # | cap | current | proposed | 节省 chars | 信息丢失 |
+|---|---|---|---|---|---|
+| 1 | xhs.parse_url | 548 | ~250 | -298 | ✅(PM 拍板回填"用自己话总结,别原样输出 tag 噪声") |
+| 2 | bilibili.get_subtitles | 461 | ~215 | -246 | ✅ |
+| 3 | netease.daily_recommend | 393 | ~200 | -193 | ✅ |
+| 4 | proactive.snooze_wake_call | 377 | ~215 | -162 | ✅ |
+| 5 | activity.get_today_summary | 345 | ~190 | -155 | ✅ |
+| 6 | activity.search_history | 326 | ~190 | -136 | ✅ |
+| 7 | bilibili.get_video_info | 326 | ~205 | -121 | ✅ |
+| 8 | netease.personal_fm | 304 | ~180 | -124 | ✅ |
+| 9 | netease.local_play_song | 297 | ~190 | -107 | ✅ |
+| 10 | docx.create | 293 | ~195 | -98 | ✅ |
+| **合计** | | **3,670** | **~2,030** | **~-1,640** | **10 ✅ / 0 ⚠️**(PM 拍板回填 xhs ⚠️ 后) |
+
+**估省 token**:~1,640 chars × ~0.4 token/char(Qwen tokenizer 中文均值) ≈ **~656 tokens**(与 §3.2 估 ~700 tokens 吻合,偏低 ~6% 正常)。
+
+→ **Stage 1 完成 + PM 拍板回填(2026-05-21),进 Stage 2 落代码**。
+
 ### 3.3 P3 character.set_activity 退役评估
 
 #### 当前状态
