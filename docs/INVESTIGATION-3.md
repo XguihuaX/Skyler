@@ -1098,3 +1098,14 @@ _agent_stream = chat_agent.stream(chat_msg)
 - ➡️ **下一步等 PM 裁定 A/B 方案 + 字段裁剪后**才写探针挂载代码
 
 → **PM 决策（2026-05-20）**：43-68k 真凶推断转 backlog，§10.6 三项验证项延后；token 治理重点转 tools_schema（13,250）砍肥；详 INV-4 §1。
+
+### 10.9 backlog 落档（2026-05-21 子轨 A/B 期间散落项）
+
+> 子轨 A · prompt caching + 子轨 B · 工具治理 实施期间在 PM-CC 对话中发现的次要项,集中落档供未来 archaeology / 单独刀次议。
+
+- **DashScope 偶发 Connection error → 各 worker retry/fallback 行为审计**
+  来源:INV-5 §5.2.2 8 caller direct trigger 首次跑撞到 `LLMServiceError: DashscopeException - Connection error / aiohappyeyeballs sock_connect timeout`(profile_regen / memory_extraction / summary fold / activity_judge 4 个 worker 受影响)。第二次重跑全 PASS,判定是公网端点偶发抖动,不是 prefix 切换兼容性问题。但**生产环境后台 worker 遇此错误时 retry/fallback 行为未审计** —— extractor 主循环 300s tick 自然重试;summary fold pointer 不前进等下次;activity_judge 静默吞返 None 等节流过期;profile_regen 单次失败无重试机制。建议单独刀审计各 worker error-recovery 路径,可能需加 exponential backoff retry。
+
+- **Skyler 历史 model 名错位 archaeology 记录**
+  `config.yaml:1 default_model: dashscope/qwen3.6-max-preview` 仅作 yaml fallback(DB 无 active 时才用)。Phase 4 prefix 切之后 DB ai_providers id=16 active 行 = `dashscope/qwen3.5-plus`。**main_chat 生产路径实际走 qwen3.5-plus,不是 qwen3.6-max-preview**。所有从 INV-3 §1.1 起的 cost 估算基于 max 价位 — 与 qwen-plus 实际价位约偏高 **~5x**(Qwen-max ~¥0.04/1k input vs Qwen-plus ~¥0.008/1k input)。INV-5 §5.2.2 已注解此事,本条挂在 INV-3 backlog 区供未来 archaeology 用,避免重复踩坑。
+  → 影响:子轨 B INV-4 §3.5 实施清单的"~6.8k tokens 收益"按 max 价位换算约 ¥0.27/turn 节省,按 plus 真实价位约 ¥0.054/turn,**绝对成本节省比预估低 5x**。仍有意义但 ROI 量级需调整预期。详 ROADMAP 路径 D 条目下备注。
