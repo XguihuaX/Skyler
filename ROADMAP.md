@@ -65,6 +65,7 @@ v4.0.0 tag 之后的主线。本 session 多个"治标 vs 治本"的决策都把
 | 📋 | Qwen-Max → Qwen-Plus 降本评测 | INV-3 §10.9 archaeology 揭示生产 DB active = Qwen-Plus(qwen3.5-plus),所有早期估算基于 Qwen-Max 偏高 5x。建议补一次 Mai 中文陪伴盲测确认 Plus 质量满足陪伴需求(若未来 PM 想升回 Max 也有 baseline 对照) | 立项 backlog |
 | 📋 | Qwen-Plus vs DeepSeek-V4-Pro 中文陪伴 A/B | path D 评测的具体动作:Mai persona 盲测 20 turn × 5 场景,判 persona 还原度 / `<state_update>` tag 遵循 / voice_samples 风格学习 / `<emotion>`/`<motion>` 标记一致性 / 中文 colloquial 与古风混用准度。详 INV-5 §4.5 | 立项 backlog |
 | 📋 | DashScope 偶发 Connection error · worker retry 行为审计 | INV-5 §5.2.2 8 caller direct trigger 首次跑撞到 `LLMServiceError: DashscopeException - Connection error` 抖动(profile_regen / memory_extraction / summary / activity_judge 4 worker 受影响)。生产环境各 worker 遇此错误时 retry/fallback 路径未审计;建议加 exponential backoff retry。详 INV-3 §10.9 | 立项 backlog |
+| 📋 | DESIGN_LITE §5.7 补 model 解析路径文档 | config.yaml fallback vs DB active 当前未文档化,导致历史 model 名错位 archaeology(INV-3 §10.9) | 文档增量,低优先级 |
 | 📋 | **docs 第二刀(本刀真源对齐)** | 5 份真源 + 死链 + 退役同步 + HEAD 锚点 + 本会话新成果补录,2026-05-19 执行 | 进行中 |
 
 ---
