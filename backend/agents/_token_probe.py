@@ -165,15 +165,18 @@ def _extract_cache_fields(usage: Any) -> dict:
       - cache_type                "ephemeral" 或 None
       - is_cache_hit              boolean: cached_tokens > 0
 
-    各 provider 字段差异(INV-5 §2/§4/§5 实测):
-      - Qwen dashscope/: prompt_tokens_details.cached_tokens +
-                          cache_creation_input_tokens(顶层)+ cache_type
-      - DeepSeek deepseek/: prompt_cache_hit_tokens / prompt_cache_miss_tokens
-                            (顶层),无 cache_type 字段
+    各 provider 字段位置(LiteLLM ModelResponse.usage.model_dump() 实测):
+      - Qwen dashscope/: 全 4 字段都嵌在 prompt_tokens_details 内:
+            cached_tokens / cache_creation_input_tokens / cache_type
+            (本刀 Phase 4 实测; 之前 INV-5 §2.3 / §4.2 dump 表格把字段
+             从 prompt_tokens_details ascii-flatten 显示让人误以为在顶层)
+      - DeepSeek deepseek/: 顶层 prompt_cache_hit_tokens + 兼容字段
+            prompt_tokens_details.cached_tokens (LiteLLM 1.x+ 也填上)
       - OpenAI openai/: 仅 prompt_tokens_details.cached_tokens
 
-    取值优先级:Qwen 字段名 → DeepSeek 字段名 → fallback。
-    任何异常 / 字段缺失 → 字段填 None,行仍写出。
+    取值策略:全部从 prompt_tokens_details 内部取;顶层 fallback 防御
+    不同 SDK 版本字段位置变动。任何异常 / 字段缺失 → 字段填 None,
+    行仍写出。
     """
     out: dict = {
         "cached_tokens": None,
@@ -185,24 +188,32 @@ def _extract_cache_fields(usage: Any) -> dict:
         return out
 
     def _get(obj, key):
+        if obj is None:
+            return None
         if isinstance(obj, dict):
             return obj.get(key)
         return getattr(obj, key, None)
 
-    # cached_tokens: 优先 Qwen / OpenAI 路径 prompt_tokens_details.cached_tokens
     details = _get(usage, "prompt_tokens_details")
-    cached = _get(details, "cached_tokens") if details is not None else None
+
+    # cached_tokens: prompt_tokens_details.cached_tokens (Qwen/OpenAI/DeepSeek)
+    cached = _get(details, "cached_tokens")
     if cached is None:
-        # DeepSeek alt path
+        # DeepSeek 顶层 alt: prompt_cache_hit_tokens
         cached = _get(usage, "prompt_cache_hit_tokens")
     out["cached_tokens"] = cached
 
-    # cache_creation: Qwen 顶层字段
-    out["cache_creation_input_tokens"] = _get(usage, "cache_creation_input_tokens")
-    # cache_type: Qwen 顶层(details 内也可能有,Qwen 实测 details 内带)
-    ct = _get(usage, "cache_type")
-    if ct is None and details is not None:
-        ct = _get(details, "cache_type")
+    # cache_creation_input_tokens: prompt_tokens_details 内 (Qwen 实测路径)
+    # 顶层 fallback 防御 SDK 版本差异
+    cci = _get(details, "cache_creation_input_tokens")
+    if cci is None:
+        cci = _get(usage, "cache_creation_input_tokens")
+    out["cache_creation_input_tokens"] = cci
+
+    # cache_type: prompt_tokens_details 内 (Qwen 实测路径)
+    ct = _get(details, "cache_type")
+    if ct is None:
+        ct = _get(usage, "cache_type")
     out["cache_type"] = ct
 
     out["is_cache_hit"] = bool(cached) and cached > 0
