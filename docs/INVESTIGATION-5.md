@@ -864,3 +864,10 @@ T5 实证 DeepSeek 自动 caching 96.4% 覆盖率（含 tools=），理论 ROI ~
 - 🔒 子轨 A 实施完。INV-3 §10.6 extra_system / v4.1 路径 D DeepSeek 评测均留 backlog
 
 → **子轨 A · 路径 F 真实施收口**。下一刀候选：INV-4 第二步（子轨 B 工具治理 proactive/reactive 二分，接 INV-4 §1 暂停点）/ §10.6 extra_system 凶手追查 / v4.1 路径 D A/B 评测 — 由 PM 拍板优先级。
+
+### 5.6 子轨 A 后续评测候选（backlog,纪律对齐:调查/audit/评测 → INV files）
+
+> 2026-05-21 PM 立讨论纪律:「调查/audit/评测 → INV files;新增功能/架构修改 → ROADMAP/README/DESIGN_LITE」。本节 2 行从 ROADMAP v4.1 backlog 表挪入(原 commit `1b88e0f` 加进 ROADMAP 后,按规则重定位)。
+
+- **Qwen-Max → Qwen-Plus 降本评测**(生产真用的是 qwen3.5-plus 而非 yaml 字面 qwen3.6-max-preview;评测同 persona / 同 prompt / 20 turn × 5 场景盲测 plus vs max 看 Mai 角色保留度;若 plus 不显著输 → 长期省 ~75% 单 turn 主对话成本)。详 INV-3 §10.9 archaeology 记录。
+- **Qwen-Plus vs DeepSeek-V4-Pro A/B 评测**(path D 具体动作;DeepSeek 全自动 caching 覆盖 tools= 已 T5 实证 §4.2-§4.3,但 Mai 中文陪伴质量未知;同上盲测框架;若 DeepSeek 不显著输 → 切 D 收 ~82% 总成本)。详 §4.5 路径 D 决策。

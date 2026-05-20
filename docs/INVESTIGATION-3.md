@@ -1109,3 +1109,5 @@ _agent_stream = chat_agent.stream(chat_msg)
 - **Skyler 历史 model 名错位 archaeology 记录**
   `config.yaml:1 default_model: dashscope/qwen3.6-max-preview` 仅作 yaml fallback(DB 无 active 时才用)。Phase 4 prefix 切之后 DB ai_providers id=16 active 行 = `dashscope/qwen3.5-plus`。**main_chat 生产路径实际走 qwen3.5-plus,不是 qwen3.6-max-preview**。所有从 INV-3 §1.1 起的 cost 估算基于 max 价位 — 与 qwen-plus 实际价位约偏高 **~5x**(Qwen-max ~¥0.04/1k input vs Qwen-plus ~¥0.008/1k input)。INV-5 §5.2.2 已注解此事,本条挂在 INV-3 backlog 区供未来 archaeology 用,避免重复踩坑。
   → 影响:子轨 B INV-4 §3.5 实施清单的"~6.8k tokens 收益"按 max 价位换算约 ¥0.27/turn 节省,按 plus 真实价位约 ¥0.054/turn,**绝对成本节省比预估低 5x**。仍有意义但 ROI 量级需调整预期。详 ROADMAP 路径 D 条目下备注。
+
+- **extractor 5-min 频率 audit**(来源:PM-CC 讨论怀疑活跃时段 ticks 成本可优化;待 audit `extractor.py:287` 是否 differential / skip-on-empty / 单 tick token 量级,决定是否降频或改 trigger 逻辑)。2026-05-21 从 ROADMAP v4.1 backlog 表挪入(per 纪律:调查/audit → INV files)。
