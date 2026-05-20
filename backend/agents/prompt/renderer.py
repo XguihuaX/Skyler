@@ -128,14 +128,21 @@ def _render_layer_b(
     )
 
 
-def _render_layer_c(
+def _render_layer_c_stable(
     persona: LoadedPersona,
     states: LoadedState,
-    safe_thought: Optional[str],
     llm_vendor: str,
     filtered_samples: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
-    """渲染 Layer C。
+    """渲染 Layer C 稳定段(C1/C1b/C2/C3/C3b/C3c/C3d) — 不含 C4 运行时状态。
+
+    INV-5 子轨 A 路径 1:为 prompt caching 把 Layer C 拆 stable + runtime
+    两段,stable 段进 messages[0] content blocks 第一块,标 cache_control。
+
+    依赖:persona 全字段 + states.intimacy(用于 C1b self_intro 阈值切换)+
+         llm_vendor(forbidden_phrases 分支) + filtered_samples。
+    ⚠️ intimacy 跨过 70 阈值时 C1b 文字段会切换 → 单次 cache miss(已知,
+    INV-5 §1.2 矩阵已识别为预期 thrash)。
 
     ``filtered_samples``:已按 ``speech_style.cliche_tolerance`` 过滤过的
     voice_samples 列表。None → 默认用 ``persona.voice_samples`` 全集
@@ -143,12 +150,25 @@ def _render_layer_c(
     """
     if filtered_samples is None:
         filtered_samples = persona.voice_samples or []
-    return _jinja_env.get_template("layer_c.j2").render(
+    return _jinja_env.get_template("layer_c_stable.j2").render(
         persona=persona,
         states=states,
-        safe_thought=safe_thought,
         llm_vendor=llm_vendor,
         filtered_samples=filtered_samples,
+    )
+
+
+def _render_layer_c_runtime(
+    states: LoadedState,
+    safe_thought: Optional[str],
+) -> str:
+    """渲染 Layer C 运行时段(C4 [当前状态]) — 每 turn 可变,放 variable 段。
+
+    依赖:states.mood / intimacy / activity + safe_thought。
+    """
+    return _jinja_env.get_template("layer_c_runtime.j2").render(
+        states=states,
+        safe_thought=safe_thought,
     )
 
 
@@ -191,26 +211,38 @@ async def render_system_prompt(
     available_motions: Optional[List[str]] = None,
     llm_vendor: str = "qwen",
     tts_language: str = "zh",
-) -> str:
-    """渲染 5 层 system prompt。
+) -> tuple[str, str]:
+    """渲染 5 层 system prompt,返 (stable_prefix, variable_suffix) 二元组。
+
+    INV-5 子轨 A 路径 1 重构:把 system prompt 切成 stable + variable 两段,
+    便于 caller 拼 messages[0] content blocks 并在 stable 块上标 cache_control。
 
     Args:
         character_id: 当前角色 id。None → 调用方应在外层 fallback(本函数会
             ``raise RuntimeError``)。
         turn_origin: 见 ``mode.determine_mode`` doc。
-        just_switched_variant: 是否刚切 variant,True 时尾部加 transition 段。
+        just_switched_variant: 是否刚切 variant,True 时 variable 末尾加
+            transition 段(transition 是 per-turn 一次性内容,自然属 variable)。
         tool_prompt_addendum: D-1 sign-off,原 ``_TOOL_PROMPT_ADDENDUM`` 字符串
-            直接传入,本侧不拆分不重构。
+            直接传入,本侧不拆分不重构。属 stable 段。
         user_profile / today_activity / long_memory_top5 / tool_results /
             temp_instructions / proactive_briefing_raw: 见 Layer D 模板各 if 段。
-            None / 空 → 该段跳过渲染。
-        available_motions: Layer A 第 3 项注入 Live2D 可用动作清单。
-            None / 空 → 不出现该子项。
+            None / 空 → 该段跳过渲染。全属 variable 段。
+        available_motions: Layer A 第 3 项注入 Live2D 可用动作清单。属 stable 段。
         llm_vendor: ``"qwen"`` / ``"deepseek"`` / 其他。Layer C 的
-            ``forbidden_phrases`` vendor-aware 注入用。
+            ``forbidden_phrases`` vendor-aware 注入用。属 stable 段。
 
     Returns:
-        完整 system prompt 字符串(已 "\n\n".join)。
+        ``(stable, variable)`` —— 两个 string,各自已 ``"\\n\\n".join``。
+
+        stable: Layer A + Layer B + Layer C stable 段(C1/C1b/C2/C3/C3b-d)+
+                addendum。per-turn 字节稳定(除非 mode / vendor / intimacy
+                跨阈值 / variant 切换;见 INV-5 §1.2 矩阵)。
+        variable: Layer C runtime 段(C4 [当前状态])+ Layer D + transition(若 just_switched_variant)。
+                每 turn 可变,不进 cache 前缀。
+
+        若 variable 空(罕见:Layer D 全无内容 + 未切 variant),caller 可
+        按 single-string 路径回退(直接拼 stable 作 messages[0].content)。
     """
     if character_id is None:
         # caller 决定 fallback:这里 fast-fail 比静默渲染 default persona 安全
@@ -236,21 +268,28 @@ async def render_system_prompt(
         persona.voice_samples or [], _tolerance,
     )
 
-    parts: List[str] = [
+    # ── stable 段:Layer A + B + C stable + (addendum 已在 B 内) ──────────
+    stable_parts: List[str] = [
         _render_layer_a(available_motions, tts_language),
         _render_layer_b(mode, tool_prompt_addendum),
-        _render_layer_c(persona, states, safe_thought, llm_vendor, filtered_samples),
+        _render_layer_c_stable(persona, states, llm_vendor, filtered_samples),
+    ]
+    stable = "\n\n".join(p.strip() for p in stable_parts if p and p.strip())
+
+    # ── variable 段:Layer C runtime + Layer D + (transition 若有) ────────
+    variable_parts: List[str] = [
+        _render_layer_c_runtime(states, safe_thought),
         _render_layer_d(
             user_profile, today_activity, long_memory_top5,
             tool_results, temp_instructions, briefing,
         ),
     ]
     if just_switched_variant:
-        parts.append(_render_transition(persona.variant_name))
+        variable_parts.append(_render_transition(persona.variant_name))
+    variable = "\n\n".join(p.strip() for p in variable_parts if p and p.strip())
 
-    out = "\n\n".join(p.strip() for p in parts if p and p.strip())
     logger.debug(
-        "[renderer] mode=%s variant=%s character_id=%s chars=%d",
-        mode.value, persona.variant_name, character_id, len(out),
+        "[renderer] mode=%s variant=%s character_id=%s stable_chars=%d variable_chars=%d",
+        mode.value, persona.variant_name, character_id, len(stable), len(variable),
     )
-    return out
+    return stable, variable

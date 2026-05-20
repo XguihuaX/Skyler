@@ -1,0 +1,6 @@
+{# C4 运行时状态(per-turn 变化,放 variable 段,不进 cache 前缀)#}
+[当前状态]
+心情: {{ states.mood }}
+亲密度: {{ states.intimacy }}/100
+{% if states.activity %}正在做的事: {{ states.activity }}{% endif %}
+{% if safe_thought %}内心独白(不直接说出): {{ safe_thought }}{% endif %}

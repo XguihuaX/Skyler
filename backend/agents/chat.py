@@ -1230,7 +1230,10 @@ async def _build_messages(
                 )
 
             from backend.agents.prompt import render_system_prompt
-            system_prompt = await render_system_prompt(
+            # INV-5 §5 Phase 2:renderer 返 (stable, variable) 二元组,
+            # 便于 caller 拼 messages[0] content blocks 并在 Phase 3 给
+            # stable 块标 cache_control marker。
+            stable_prompt, variable_prompt = await render_system_prompt(
                 character_id=character_id,
                 turn_origin=turn_origin,
                 tool_prompt_addendum=_TOOL_PROMPT_ADDENDUM,
@@ -1243,16 +1246,29 @@ async def _build_messages(
                 tts_language=tts_language,
             )
             logger.info(
-                "[renderer] mode_origin=%s character_id=%s prompt_chars=%d "
+                "[renderer] mode_origin=%s character_id=%s "
+                "stable_chars=%d variable_chars=%d "
                 "profile=%s activity=%s memories=%d stage2=%s tts_lang=%s",
-                turn_origin, character_id, len(system_prompt),
+                turn_origin, character_id,
+                len(stable_prompt), len(variable_prompt),
                 bool(profile_str), bool(activity_str), len(memory_top5),
                 bool(stage2_addendum), tts_language,
             )
 
-            messages: List[dict] = [
-                {"role": "system", "content": system_prompt}
-            ]
+            # variable 非空 → content blocks 形态;空 → 单 string 回退
+            # (避免空 block 浪费 wire byte / token,且与 pre-Phase-2 行为兼容)
+            if variable_prompt:
+                messages: List[dict] = [{
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": stable_prompt},
+                        {"type": "text", "text": variable_prompt},
+                    ],
+                }]
+            else:
+                messages: List[dict] = [
+                    {"role": "system", "content": stable_prompt}
+                ]
             # v4-beta Stage 2:滚动摘要层独立 system 块,排在 system_prompt
             # (含人设/事实)之后、short_term 最近轮之前。空摘要(短对话期)→ 跳过,
             # 零成本零干扰。
