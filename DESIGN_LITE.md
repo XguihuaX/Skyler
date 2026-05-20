@@ -302,6 +302,8 @@ _BOUNDARY_PAIRED_TAGS = {
 - Tool name auto-sanitize(`.` → `_` for DeepSeek 等 strict-schema providers,LLM 看原始名 via 反向 mapping)
 - `provider_kind`:builtin(系统预设)/ custom(用户加)
 
+> **v4.1 待启用 · prompt caching**：按 provider whitelist（Anthropic / Qwen / Bedrock）显式注入 `cache_control: {"type": "ephemeral"}` marker；OpenAI / DeepSeek 自动 caching 自然命中。`config.yaml` 开关默认 ON。陪伴长对话场景，静态前缀（~19k tokens：tools_schema + addendum + persona Layer C1-3 + Layer A/B）按 10% 价缓存，单轮等效付费理论砍 67-83%。详 ROADMAP v4.1。
+
 ### 5.8 Observability(v4-beta Bugfix-4)
 - tts_call_log + 4 source bucket(chat/proactive/activity_smart/preview)
 - input_chars > 500 anomaly 红色高亮
@@ -404,6 +406,8 @@ PROACTIVE_ORIGINS = {'cron', 'activity_smart', 'wake_call',
 mode = PROACTIVE if turn_origin in PROACTIVE_ORIGINS else ROLEPLAY
 ```
 TASK 留 enum 口子,v1 fallback to roleplay。不用 LLM classifier(省 100-300ms)。
+
+> **远期立项 · `Mode.WORK` + Toolset by Mode**：v4.1 token 治理一轮完成后单独议。用户显式触发进入工作模式 → toolset 切到精简 dev 子集（砍娱乐类工具）→ 主动陪伴近关 → emotion/motion 表达克制。是 Skyler 的最低 schema 成本运行态。详 ROADMAP "长期技术能力扩展"。
 
 ### 6.8 关键决策留账
 - **D-1**(seg1):_TOOL_PROMPT_ADDENDUM 70 行原样搬迁到 Layer B,refactor 留 v4.1
