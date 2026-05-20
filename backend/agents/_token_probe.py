@@ -110,6 +110,32 @@ def _split_layer_c(layer_c_text: str) -> dict:
     return {"persona": layer_c_text, "character_state": ""}
 
 
+def _flatten_system_content(content: Any) -> str:
+    """Normalize messages[0].content to string for marker-based layer splitting.
+
+    INV-5 §5 Phase 4 fix:Phase 2 给 messages[0].content 引入 list-of-blocks
+    形态(stable / variable 双 text block)便于 Phase 3 在 stable 块标
+    cache_control;但 _split_system_layers 用 ``str.find(marker)`` 切层,
+    list 形态会触发 AttributeError → outer except 静默吞 → row 不写出。
+
+    本 helper 把 list-form 拼回 string(用 ``"\\n\\n".join`` 与 renderer
+    `_build_messages` 的 stable/variable 拼接同 separator,marker 字面
+    位置与 pre-Phase-2 一致,切层逻辑 work 不变)。
+
+    - str 形态(pre-Phase-2 / variable 为空 fallback 路径)→ 原样
+    - list 形态 → join 内 text blocks
+    - 其它(None / dict / 非预期)→ ``""``
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n\n".join(
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return ""
+
+
 def _split_layer_d(layer_d_text: str) -> dict:
     """Layer D 内用 ``用户画像:`` / ``今日活动:`` / ``长期记忆(Top 5):`` 切。"""
     out = {"user_profile": "", "activity": "", "long_memory_top5": ""}
@@ -156,7 +182,10 @@ def emit_sync(
         current_text = ""
         if messages:
             if messages[0].get("role") == "system":
-                system_text = messages[0].get("content", "") or ""
+                # Phase 2 起 content 可能是 list-of-blocks;归一化后再切层
+                system_text = _flatten_system_content(
+                    messages[0].get("content", "")
+                )
             for m in messages[1:-1] if len(messages) > 1 else []:
                 role = m.get("role")
                 content = m.get("content", "") or ""
