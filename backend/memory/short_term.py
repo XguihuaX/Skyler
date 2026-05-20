@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 #: 上限 turns 数(用户语义层)。1 turn ≈ 1 user + 1 assistant message。
 #: 30 turns = 60 messages —— 实测 Mai 复刻 voice 场景下足以覆盖近 5-10 min
 #: 对话上下文,同时把单次 LLM input 控制在 ~5-8k token 历史预算内。
-SHORT_TERM_MAX_TURNS: int = 30
+SHORT_TERM_MAX_TURNS: int = 25
 
 #: 上限 messages 数(实际 trim 比较值)= turns × 2(user + assistant)。
 #: 暴露的 canonical constant —— 部分 caller(test 之类)按 message-count 校验。
