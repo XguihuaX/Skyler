@@ -1,5 +1,5 @@
-default_model: openai/qwen3.6-max-preview
-planner_model: openai/qwen-turbo
+default_model: dashscope/qwen3.6-max-preview
+planner_model: dashscope/qwen-turbo
 default_user_id: default
 # INV-5 §5 子轨 A 路径 1:provider-aware explicit prompt caching。
 # - true → call_llm 在 system messages content blocks 第一块标
@@ -37,7 +37,7 @@ memory:
     llm_judge_enabled: false
   summary:
     enabled: true
-    model: openai/qwen3.5-flash
+    model: dashscope/qwen3.5-flash
     token_budget: 1000
     batch_turns: 10
     min_batch: 4
@@ -209,7 +209,7 @@ activity_watcher:
   max_daily_triggers: 5
 activity_judge:
   enabled: true
-  model: openai/qwen-turbo
+  model: dashscope/qwen-turbo
   min_stay_minutes: 5
   throttle_minutes: 10
   prompt_max_chars: 2000
