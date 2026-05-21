@@ -1,22 +1,18 @@
 """v3.5 chunk 6b — 网易云 mpv 本地自解码播放 capability。
 
-6 个 capability:
-  - netease.play_song(song_id)
-  - netease.play_playlist(playlist_id)
-  - netease.pause
-  - netease.resume
-  - netease.stop
-  - netease.next_in_queue
+(2026-05-21 INV-7 §2 P1.netease fold) 6 个旧 cap `netease.local_*` 折叠为
+单一 `netease_local` dispatcher,LLM 调用形态:
+  netease_local(action="play_song", song_id=N)
+  netease_local(action="play_playlist", playlist_id=N, limit=50)
+  netease_local(action="pause" | "resume" | "stop" | "next_in_queue")
 
-与 chunk 1 ``netease.*`` 数据查询 capability 并列（chunk 1 那些走 NCM 客户
-端 URL Scheme 启动播放；本 chunk 走 mpv 子进程自解码播放）。两套并存：
-* chunk 1 路径：NCM 客户端有歌词 / 动画 / 完整曲库，但 URL Scheme 不可
-  靠（chunk 1 partial 已封存）
-* chunk 6b 路径：mpv 自解码，自动播放真闭环，无歌词 / 动画，会员歌曲走
+与 chunk 1 ``netease_web`` web URL Scheme 路径并列。两套并存:
+* netease_web 路径:NCM 客户端有歌词 / 动画 / 完整曲库,URL Scheme 不可靠
+* netease_local 路径:mpv 自解码,自动播放真闭环,无歌词 / 动画,会员歌曲走
   试听片段
 
-chunk 1 ``netease.like_current`` 仍 work：现在能从 mpv state 拿当前 song_id
-（前提是本 chunk capability 启动的播放）。
+chunk 1 ``netease_web.like_current`` 仍 work:能从 mpv state 拿当前 song_id
+(前提是本 chunk capability 启动的播放)。
 """
 from __future__ import annotations
 
@@ -32,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Health：mpv health + NCM cookie 双重
+# Health:mpv health + NCM cookie 双重
 # ---------------------------------------------------------------------------
 
 async def _combined_health() -> dict:
@@ -42,7 +38,6 @@ async def _combined_health() -> dict:
         return mpv_h
     if nem_h.get("status") == "error":
         return nem_h
-    # 两侧任一 warn 都退化整体 warn，给 UI 完整 detail
     overall = "healthy"
     if mpv_h.get("status") != "healthy" or nem_h.get("status") != "healthy":
         overall = "warn"
@@ -54,43 +49,23 @@ async def _combined_health() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 1. play_song
+# 6 internal handlers (per INV-7 §2 P1.netease fold, 2026-05-21):
+# play_song / play_playlist / pause / resume / stop / next_in_queue
+# 走 dispatcher `netease_local(action=...)`,不再单独 @register_capability。
 # ---------------------------------------------------------------------------
 
-@register_capability(
-    name="netease.local_play_song",
-    display_name="播放网易云单曲",
-    description=(
-        "本地 mpv 自解码播放网易云单曲(自动播放闭环,不依赖 NCM 客户端)。"
-        "用户说『放 X / 来一首 Y / 听一下 Z』时调(先 netease.search 拿 "
-        "song_id 再调本 cap)。\n\n"
-        "VIP/付费下架返试听片段 ~30s,is_trial=True 时如实告诉用户『这是试听片段』。\n\n"
-        "参数 song_id 必填。返 {status, url, is_trial, song_id};"
-        "URL 失效 → {error: 'url_unavailable'}。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="play",
-    health_check=_combined_health,
-    parameters_schema={
-        "type": "object",
-        "properties": {"song_id": {"type": "integer"}},
-        "required": ["song_id"],
-    },
-)
-async def play_song(song_id: int = 0, **_kwargs: Any) -> dict:
+
+async def _handle_play_song(song_id: int = 0, **_kwargs: Any) -> dict:
     if not song_id:
         return {"error": "missing_song_id"}
     mpv_h = await _mpv.health_check()
     if mpv_h.get("status") == "error":
-        return mpv_h  # mpv_not_installed + hint
+        return mpv_h
     if not _nem.get_client().has_credentials:
         return {
             "error": "cookie_required",
             "hint": "请在 .env 配置 NETEASE_MUSIC_U（详见 docs/netease-music-setup.md）",
         }
-    # 拿 song/url
     try:
         info = await asyncio.to_thread(
             _nem.get_client().get_song_url, int(song_id),
@@ -104,10 +79,9 @@ async def play_song(song_id: int = 0, **_kwargs: Any) -> dict:
             "song_id": int(song_id),
             "detail": "VIP 下架 / 地区限制 / 已下线",
         }
-    # 喂 mpv 播
     try:
         await _mpv.get_player().play(url, meta={
-            "title": f"NCM {song_id}",  # capability 层没拿 song name，由 LLM 自填
+            "title": f"NCM {song_id}",
             "artist": "网易云音乐",
         })
     except Exception as exc:
@@ -122,36 +96,7 @@ async def play_song(song_id: int = 0, **_kwargs: Any) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# 2. play_playlist
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="netease.local_play_playlist",
-    display_name="播放网易云歌单",
-    description=(
-        "本地 mpv 播放网易云歌单全曲。用户说「放 X 歌单」「听一下我的 Y 歌单」"
-        "时调用（先用 netease.my_playlists 或 netease.search 拿 playlist_id 再调）。\n\n"
-        "实施：拿歌单全曲 → 第一首立刻 play + 其余入 mpv 内部队列。后续"
-        "调 netease.next_in_queue 切下一首；stop 清队列。\n\n"
-        "参数：\n- playlist_id: 歌单 ID\n- limit: 最多入队曲数（缺省 50）\n\n"
-        "返回 ``{status, playlist_id, queued, first_song_id}``。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="list-music",
-    health_check=_combined_health,
-    parameters_schema={
-        "type": "object",
-        "properties": {
-            "playlist_id": {"type": "integer"},
-            "limit": {"type": "integer"},
-        },
-        "required": ["playlist_id"],
-    },
-)
-async def play_playlist(
+async def _handle_play_playlist(
     playlist_id: int = 0, limit: int = 50, **_kwargs: Any,
 ) -> dict:
     if not playlist_id:
@@ -164,7 +109,6 @@ async def play_playlist(
             "error": "cookie_required",
             "hint": "请在 .env 配置 NETEASE_MUSIC_U",
         }
-    # 拿歌单详情
     try:
         detail = await asyncio.to_thread(
             _nem.get_client().playlist_detail, int(playlist_id),
@@ -175,15 +119,12 @@ async def play_playlist(
     if not tracks:
         return {"error": "empty_playlist", "playlist_id": int(playlist_id)}
     tracks = tracks[: int(limit)]
-    # 拿第一首 URL + 余下批量 URL（playlist 多首串行拿 song/url；并发不是必须，
-    # NCM API 实测 weapi 串行 50 首 ~3s 在可接受范围内）
     player = _mpv.get_player()
     player.queue_clear()
     first_song = tracks[0]
     first_id = first_song.get("id") or first_song.get("song_id")
     if not first_id:
         return {"error": "playlist_track_no_id"}
-    # 第一首立即 play
     try:
         first_info = await asyncio.to_thread(
             _nem.get_client().get_song_url, int(first_id),
@@ -200,7 +141,6 @@ async def play_playlist(
     except Exception as exc:
         return {"error": "mpv_play_failed", "detail": str(exc)[:200]}
 
-    # 后续入队（best-effort：单曲拉 URL 失败跳过）
     queued = 1
     for t in tracks[1:]:
         sid = t.get("id") or t.get("song_id")
@@ -233,68 +173,21 @@ async def play_playlist(
     }
 
 
-# ---------------------------------------------------------------------------
-# 3-6. transport controls
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="netease.local_pause",
-    display_name="暂停 mpv 播放",
-    description=(
-        "暂停当前 mpv 播放（保留进度，可 resume）。用户说「暂停 / 停一下"
-        " / 等等」时调用。仅作用于 mpv（chunk 6b）。NCM 客户端 / Apple "
-        "Music / Spotify 走 chunk 1 ``media.play_pause``（跨来源系统媒体键）。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="pause",
-    health_check=_combined_health,
-    parameters_schema={"type": "object", "properties": {}},
-)
-async def pause(**_kwargs: Any) -> dict:
+async def _handle_pause(**_kwargs: Any) -> dict:
     try:
         return await _mpv.get_player().pause()
     except Exception as exc:
         return {"error": "mpv_command_failed", "detail": str(exc)[:200]}
 
 
-@register_capability(
-    name="netease.local_resume",
-    display_name="恢复 mpv 播放",
-    description=(
-        "恢复暂停的 mpv 播放。用户说「继续 / 接着放 / 恢复播放」时调用。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="play",
-    health_check=_combined_health,
-    parameters_schema={"type": "object", "properties": {}},
-)
-async def resume(**_kwargs: Any) -> dict:
+async def _handle_resume(**_kwargs: Any) -> dict:
     try:
         return await _mpv.get_player().resume()
     except Exception as exc:
         return {"error": "mpv_command_failed", "detail": str(exc)[:200]}
 
 
-@register_capability(
-    name="netease.local_stop",
-    display_name="停止 mpv 播放 + 清队列",
-    description=(
-        "停止 mpv 播放并清空播放队列。用户说「停止 / 关掉音乐 / 别放了」时调用。"
-        "区别于 ``pause``：stop 清队列，不可 resume；后续重新 play_song / "
-        "play_playlist。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="square",
-    health_check=_combined_health,
-    parameters_schema={"type": "object", "properties": {}},
-)
-async def stop(**_kwargs: Any) -> dict:
+async def _handle_stop(**_kwargs: Any) -> dict:
     try:
         player = _mpv.get_player()
         player.queue_clear()
@@ -303,30 +196,93 @@ async def stop(**_kwargs: Any) -> dict:
         return {"error": "mpv_command_failed", "detail": str(exc)[:200]}
 
 
-@register_capability(
-    name="netease.local_next_in_queue",
-    display_name="播放队列下一首",
-    description=(
-        "切到 play_playlist 入队的下一首。用户说「下一首 / 切歌（在 mpv "
-        "播歌单时）」时调用。区别于 chunk 1 ``media.next_track``——后者"
-        "走系统媒体键转发给 NCM/Apple Music 等前端 app；本 capability 只"
-        "在 mpv 自解码模式下用。\n\n队列空时返 ``{status: 'queue_empty'}``。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="skip-forward",
-    health_check=_combined_health,
-    parameters_schema={"type": "object", "properties": {}},
-)
-async def next_in_queue(**_kwargs: Any) -> dict:
+async def _handle_next_in_queue(**_kwargs: Any) -> dict:
     try:
         return await _mpv.get_player().play_next()
     except Exception as exc:
         return {"error": "mpv_command_failed", "detail": str(exc)[:200]}
 
 
+# ---------------------------------------------------------------------------
+# netease_local dispatcher (INV-7 §2 P1.netease template reuse #3 · local path)
+# ---------------------------------------------------------------------------
+
+_NETEASE_LOCAL_ACTION_HANDLERS = {
+    "play_song":     _handle_play_song,
+    "play_playlist": _handle_play_playlist,
+    "pause":         _handle_pause,
+    "resume":        _handle_resume,
+    "stop":          _handle_stop,
+    "next_in_queue": _handle_next_in_queue,
+}
+
+
+@register_capability(
+    name="netease_local",
+    display_name="网易云本地播放(mpv)",
+    description=(
+        "网易云本地 mpv 自解码播放(自动播放闭环,不依赖 NCM 客户端)。"
+        "按 action 选具体操作:\n"
+        "- play_song:放单曲(用户说『放 X / 来一首 Y』,先 netease_web "
+        "action=search 拿 song_id 再调本 cap;需 song_id)\n"
+        "- play_playlist:放歌单全曲(先 netease_web action=play_playlist "
+        "拿 playlist_id 再调本 cap;需 playlist_id,limit 默 50)\n"
+        "- pause:暂停 mpv(保留进度,可 resume)\n"
+        "- resume:恢复暂停的 mpv 播放\n"
+        "- stop:停止 mpv 播放 + 清队列(不可 resume)\n"
+        "- next_in_queue:切到 play_playlist 入队的下一首\n\n"
+        "VIP/付费下架返试听片段 ~30s(is_trial=True),如实告诉用户。"
+    ),
+    category="music",
+    consumers=[Consumer.CHAT_AGENT],
+    trigger_modes=[TriggerMode.ON_DEMAND],
+    icon="play",
+    health_check=_combined_health,
+    parameters_schema={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": list(_NETEASE_LOCAL_ACTION_HANDLERS.keys()),
+                "description": "本地 mpv 播放操作类型",
+            },
+            "song_id": {
+                "type": "integer",
+                "description": "仅 action=play_song 必填,NCM 歌曲 ID",
+            },
+            "playlist_id": {
+                "type": "integer",
+                "description": "仅 action=play_playlist 必填,NCM 歌单 ID",
+            },
+            "limit": {
+                "type": "integer",
+                "default": 50,
+                "description": "仅 action=play_playlist 可选,最多入队曲数(默 50)",
+            },
+        },
+        "required": ["action"],
+    },
+)
+async def netease_local_dispatch(action: str = "", **params: Any) -> dict:
+    """Dispatcher: 按 action 路由到 _handle_*,含 2 类必填校验。"""
+    handler = _NETEASE_LOCAL_ACTION_HANDLERS.get(action)
+    if handler is None:
+        return {
+            "ok": False,
+            "error": (
+                f"unknown action: {action!r}; "
+                f"valid: {list(_NETEASE_LOCAL_ACTION_HANDLERS.keys())}"
+            ),
+        }
+    if action == "play_song":
+        if not params.get("song_id"):
+            return {"ok": False, "error": "song_id required when action=play_song"}
+    elif action == "play_playlist":
+        if not params.get("playlist_id"):
+            return {"ok": False, "error": "playlist_id required when action=play_playlist"}
+    return await handler(**params)
+
+
 __all__ = [
-    "play_song", "play_playlist",
-    "pause", "resume", "stop", "next_in_queue",
+    "netease_local_dispatch",
 ]

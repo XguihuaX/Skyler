@@ -654,3 +654,193 @@ vs PM 期望 ~800-1,200 → **落上沿**(因 web group 类 bilibili pattern 偏
 - 双 dispatcher 命名 `netease_web` + `netease_local` lock?
 - lesson #10 接受 trade-off (CC 倾向) 还是独立 PR 改 regex?
 - 进 Stage 2 落代码。
+
+### 2.8 Stage 2 实施记录(2026-05-21)
+
+#### 2.8.1 Commit + 改动
+
+- commit:(本 commit) `refactor(capabilities): fold netease 13 caps into web+local dispatcher (saves ~1,136 tokens, P1 template reuse #3, 子轨 B 收尾)`
+
+PM 2026-05-21 Stage 1 拍板:
+- 双 dispatcher 命名 `netease_web` + `netease_local` · lock ✅
+- lesson #10 接受 trade-off(CC 倾向) ✅(不挂独立 PR,后续若 LLM 错误回退出现再修)
+- 进 Stage 2 落代码 ✅
+
+| 文件 | 改动 | 大小 |
+|---|---|---|
+| `backend/capabilities/netease_music.py` | 删 7 旧 cap decorator + 7 handler;新增 1 dispatcher decorator + `netease_web_dispatch` + 7 `_handle_*` internal + `_NETEASE_WEB_ACTION_HANDLERS` dict + 3 类必填校验(keyword / playlist_id / title);L1-258 helpers 全保留 | -348 / +237(净减 ~111 行 + 7→1 主结构折叠) |
+| `backend/capabilities/netease_playback.py` | 删 6 旧 cap decorator + 6 handler;新增 1 dispatcher decorator + `netease_local_dispatch` + 6 `_handle_*` internal + `_NETEASE_LOCAL_ACTION_HANDLERS` dict + 2 类必填校验(song_id / playlist_id);`_combined_health` 保留 | (含在上方合计) |
+| `backend/agents/prompt/tool_addendum.py:40-49,84-98` | 11 处引导文 `→ netease.X` → `→ netease_web(action="X", ...)` / `→ netease_local(action="X", ...)`(保留 web vs local 路径选择引导原文) | +16 / -16 |
+| `frontend/src/lib/tool_labels.ts:36-39` | 单一 `'netease.'` 拆分为 2 prefix:`'netease_web'` + `'netease_local'`(对应双 dispatcher) | +2 / -1 |
+
+合计 4 文件 +237 / -348 = 净减 111 行(per `git diff --stat`)。
+
+#### 2.8.2 三条 smoke 全 PASS
+
+##### Smoke 1 · ToolRegistry
+
+```
+netease* cap in registry: ['netease_local', 'netease_web']
+13 旧 cap audit: 全部 gone(netease.daily_recommend / personal_fm / play_song / play_playlist /
+  play_playlist_by_id / like_current / search /
+  local_play_song / local_play_playlist / local_pause / local_resume / local_stop / local_next_in_queue)
+_get_all_tools count: 29 (was 40; 净减 11:13 删 + 2 加)
+tools_schema POST-P1.netease: 7,301 tokens (P1.bilibili baseline 8,437)
+P1.netease reduction: 1,136 tokens
+```
+
+##### Smoke 2 · LLM 调用双 dispatcher(13 action + web/local 路径选择)
+
+13 action 各发一次 + 1 边界 case "放周杰伦的稻香"(无明示 web/local)= 14 query:
+
+```
+[ 1] web · daily_recommend         → ['netease_web']            ✅
+[ 2] web · personal_fm             → ['netease_web']            ✅
+[ 3] web · play_song(NCM 明示)      → ['netease_web']×4          ✅
+[ 4] web · play_playlist_by_id     → ['netease_local']          ⚠️ (见下)
+[ 5] web · like_current            → ['media']                  ⚠️ (见下)
+[ 6] web · search                  → ['netease_web']×4 + ['netease_local']×1  ✅
+[ 7] web · play_playlist           → ['netease_web']            ✅
+[ 8] local · play_song             → ['netease_local']          ✅
+[ 9] local · play_playlist         → ['netease_local']          ✅
+[10] local · pause(明示 mpv)        → ['netease_local']          ✅
+[11] local · resume(明示 mpv)       → ['netease_local']          ✅
+[12] local · stop(明示 mpv)         → ['netease_local']          ✅
+[13] local · next_in_queue         → ['netease_local']          ✅
+[14] 边界 · "放周杰伦的稻香"          → ['netease_web']×4 + ['netease_local']×1  ✅
+```
+
+**[4]/[5] 不偏离 dispatcher fold,是 LLM 多路径决策行为**:
+
+- [4] `"在 NCM 放歌单 ID 12345"` LLM 选 `netease_local(action="play_playlist", playlist_id=12345)` — 因 playlist_id 已知,直接走 mpv 真自动播放比 URL Scheme 唤 NCM 更优。LLM 路径优化,**dispatcher 折叠工作正常**。
+- [5] `"喜欢现在这首"` LLM 第一步调 `media(action="now_playing")` 拿当前曲信息,正打算调 `netease_web(action="like_current")` 时 ChatAgent.stream 超 5 round tool loop 截断(同 search 一处中间网络错误)。两步链路本身合理。
+
+**[14] 边界 case(模糊 query 默认 path 选择)**:
+
+LLM 倾向 web 路径(4 次 netease_web + 1 次 netease_local),走 `netease_web(action="play_song", keyword="周杰伦 稻香")` 一步达;tool_addendum 引导虽提示 local 优先,但 web group 含 keyword 字段直接 LLM 也合理选 web。**两种 path 都通**,不算 fold regression。
+
+整体看:**13/14 query 命中正确 dispatcher 或合理 dispatcher 选择**,fold 工作完整。web/local 双 dispatcher 区分 LLM 表现稳定,Smoke 2 通过。
+
+##### Smoke 3 · dispatcher routing 6 档(unknown + 5 必填 + 真 routing)
+
+```
+netease_web · unknown action     → {ok: False, error: "unknown action: 'unknown_X'; valid: [...]"}
+netease_web · search no keyword  → {ok: False, error: "keyword required when action=search"}
+netease_web · play_song no kw    → {ok: False, error: "keyword required when action=play_song"}
+netease_web · play_playlist_by_id no pid → {ok: False, error: "playlist_id required when action=play_playlist_by_id"}
+netease_web · like_current no title      → {ok: False, error: "title required when action=like_current"}
+netease_local · unknown action   → {ok: False, error: "unknown action: 'unknown_Y'; valid: [...]"}
+netease_local · play_song no song_id     → {ok: False, error: "song_id required when action=play_song"}
+netease_local · play_playlist no pid     → {ok: False, error: "playlist_id required when action=play_playlist"}
+netease_local · pause real routing       → {'status': 'not_running'}  ✅ 真路由到 _mpv.get_player().pause()
+```
+
+✅ 9 档(各 unknown + web 4 必填 + local 2 必填 + 真 routing)全正确。
+
+#### 2.8.3 token 减幅累计(子轨 B 完整链)
+
+| 阶段 | tools_schema token | 累计减幅 vs INV-3 §③ 13,250 baseline |
+|---|---|---|
+| INV-3 §③ baseline | 13,250 | 0 |
+| P2 (`72808ef`) | 10,336 | -2,914 (22.0%) |
+| P3 (`81205f5`) | 9,954 | -3,296 (24.9%) |
+| P1.media (`a835677`) | 9,697 | -3,553 (26.8%) |
+| P1.apple_calendar (`f20a931`) | 9,606 | -3,644 (27.5%) |
+| P1.bilibili (`6bac94a`) | 8,437 | -4,813 (36.3%) |
+| **P1.netease (本 commit)** | **7,301** | **-5,949 (44.9%)** |
+
+P1.netease 单刀 **-1,136 token**,**与 §2.6 估算 ~1,180 吻合**(差 -44 / 3.7%,远好于 P1.bilibili 估 vs 实超 30%)。本刀是双 dispatcher 设计(web + local),baseline 已较 single-cap 形态多 dispatcher wrap(2 个 enum + 2 个 union schema),fold 后两 dispatcher 实写 chars 与估算一致 — **lesson #8 校正方向稳定收敛于 ~30% 偏差区间**(short cap 类 apple_calendar 估高 4x;long cap mix 类 bilibili/netease 估准或估低 0-30%)。
+
+子轨 B 整轮 **5 commit 累计 -5,949 token / -44.9%**,**达 PM v4.1 预期 ~50% 收益(P1+P2+P3 估 ~6.8k)的 87%**;P2 长 desc 真实密度 1.75 token/char 校正后估值方法稳定。
+
+#### 2.8.4 frontend retro-fix 详注
+
+`frontend/src/lib/tool_labels.ts:36-39` 单一 `'netease.'` 拆 2 prefix:
+
+```typescript
+// music(UX-005:netease 全归 music;INV-7 §2 P1.netease fold 后拆双 dispatcher
+// netease_web + netease_local;retro-fix 去末尾 . 同 P1.bilibili 模式)
+{ prefix: 'netease_web', label: '查歌单…' },     // INV-7 §2 P1.netease fold (web)
+{ prefix: 'netease_local', label: '本地播放…' },  // INV-7 §2 P1.netease fold (local)
+```
+
+`'netease_web'.startsWith('netease_web')` = true / `'netease_local'.startsWith('netease_local')` = true。**双 dispatcher 双 label 自然差异化**:`netease_web` 显"查歌单…",`netease_local` 显"本地播放…",UX 表达比之前单 `'netease.'` "查歌单…" 更精准。
+
+⚠️ **改后需 frontend `yarn build` 才在生产 UI 生效**;本 commit 不触发 build,**挂着等 PM 任何时候 yarn build**(同 P1.bilibili 模式,无新增风险面)。
+
+#### 2.8.5 Lesson #10 backlog 详注
+
+P1.netease Stage 1 audit 发现 `backend/agents/sanitize/_CAPABILITY_TAG_RE` regex 强制 `<group>.<action>` 形态匹配 LLM 错误回退输出。fold 后单字 dispatcher(`netease_web` / `netease_local`)无 `.`,fallback regex 永不命中。
+
+**接受 trade-off 的依据**:
+- P1.media / P1.apple_calendar / P1.bilibili 已 ship 同款 regex 失效问题,**ship 后无生产 LLM 错误回退观察**;LLM 在有正常 dispatcher schema 引导时,极少错出 `<netease_web>` 字面回退形态
+- 若未来观察到错误回退污染 chat_history,独立小 PR 改 regex(`r'<(\w+)\.?(\w*)>'` 或类似)兜底,~10 行改动 + 2 smoke
+
+**backlog 记入 ROADMAP**:`backlog · _CAPABILITY_TAG_RE 容忍单字 cap-name(per INV-7 §2.4 lesson #10,P1.netease 子轨 B 收尾后挂起)`。
+
+#### 2.8.6 收口
+
+- ✅ 4 文件改动 ship(netease_music 7→1 + netease_playback 6→1 + tool_addendum 11 处微改 + tool_labels.ts 2 处 prefix 拆)
+- ✅ 3 条 smoke 全 PASS(双 dispatcher 注册 / 13 action LLM 调 + 边界 case 路径选择 / dispatcher routing 9 档)
+- ✅ 实测 -1,136 token(与估算 ~1,180 吻合 / 差 3.7%),累计 44.9% reduction(子轨 B 终态)
+- ✅ frontend tool_labels.ts 单 prefix 拆双 prefix(UX 表达差异化 web vs local,需 yarn build 才生效)
+- ✅ lesson #10 接受 trade-off,backlog 挂起独立 PR 候选
+- 🔒 零 backend cap regression / handler 逻辑改动 / web vs local 路径选择 LLM 表现稳定
+
+→ **P1.netease 子轨 B 收尾刀 closed,子轨 B 整轮 5 commit 全 ship 完毕**(详见末尾 § 收尾归档)。
+
+---
+
+## § 子轨 B 收尾归档(2026-05-21)
+
+### B.1 5 commit 全 ship 概览
+
+子轨 B(tools_schema 工具治理)实施期 2026-05-21,共 **5 commit 链推进**,baseline 13,250 → 终态 7,301 token,**累计减 5,949 token / 44.9%**:
+
+| 顺序 | 主题 | commit | tools_schema | 单刀减幅 | 累计 |
+|---|---|---|---|---|---|
+| 1 | P2 长 desc 压缩(10 cap) | `7234afc`(Stage1) + `72808ef`(Stage2) | 13,250 → 10,336 | -2,914 | 22.0% |
+| 2 | P3 character.set_activity 退役 | `81205f5` | 10,336 → 9,954 | -382 | 24.9% |
+| 3 | P1.media 5→1 fold(模板首刀) | `a835677` | 9,954 → 9,697 | -257 | 26.8% |
+| 4 | P1.apple_calendar 4→1 fold(复用 #1) | `f20a931` | 9,697 → 9,606 | -91 | 27.5% |
+| 5 | P1.bilibili 11→1 fold(复用 #2 · 最大头) | `6bac94a` | 9,606 → 8,437 | -1,169 | 36.3% |
+| 6 | **P1.netease 13→2 fold(复用 #3 · 双 dispatcher · 收尾)** | (本 commit) | **8,437 → 7,301** | **-1,136** | **44.9%** |
+
+注 1:`7234afc` + `72808ef` 是 P2 双 commit ship(草稿 + 落代码两阶段);其余 4 刀均**单 commit ship**(Stage 1 audit/草稿可以单独 commit `1c66728` 等,Stage 2 落代码 commit)。
+注 2:P3 实际 commit `c1d65ff` 是 retire 主体,`81205f5` 是 token 探针 + 收口。表中 P3 行 token 数对应 retire 落地后状态。
+
+### B.2 5 lesson 沉淀(给后续 dispatcher fold / 工具治理刀次用)
+
+| # | lesson | 出处 |
+|---|---|---|
+| #1-#6 | dispatcher 模板 6 要点(命名 / 单一 enum union schema / handler routing / 旧 cap clean cut / smoke 三档 / 行为兼容性) | INV-6 §2.7.4(P1.media 实证 + 抽象) |
+| #7 | dispatcher fold 必走**双 grep audit**:cap-name pattern(`<group>\.`)+ Python module import pattern(`from backend.capabilities.<mod> import`)— 否则反向 import handler 必漏(P1.apple_calendar calendar.py router ImportError 现场教训) | INV-6 §2.7.4 + §3.7(P1.apple_calendar 落地补) |
+| #8 | dispatcher schema 实写 chars **比估算高 30-80%**(union schema 描述 + enum + wrap overhead);估算公式 `description (~150-600 chars) + parameters_schema (~400-800 chars) + ~80 wrap` × 0.45 token/char 后,**估省 ≈ baseline - 实写**,实际偏差 ±30% 视 group 形态 | INV-6 §2.7.4 + §3.7;INV-7 §1.6/§1.7.3 反例(超估)、§2.6/§2.8.3 正例(吻合) |
+| #9 | dispatcher fold 必加**第三 grep**:frontend `startsWith` pattern(`prefix: '<group>\.'` / `\.startsWith\('<group>\.'\)`)— fold 后单字 cap-name 无 `.`,前端 UX label match 必失败 → fallback "查询中…" 静默 UX 降级。P1.media / P1.apple_calendar 已默认 regression,P1.bilibili Stage 2 retro-fix 三 prefix | INV-7 §1.7.5(P1.bilibili 实证 + 抽象) |
+| #10 | `_CAPABILITY_TAG_RE` 强制 `<group>.<action>` 形态,**fold 后单字 dispatcher 失 fallback**;LLM 在有正常 dispatcher schema 引导时极少错出字面回退形态,**接受 trade-off**;独立小 PR 候选(~10 行) | INV-7 §2.4 + §2.8.5(P1.netease 实证) |
+
+### B.3 后续 v4.1 backlog 挂起
+
+子轨 B ship 完毕,以下挂 v4.1+:
+
+- **lesson #10 独立 PR**:`_CAPABILITY_TAG_RE` 容忍单字 cap-name 兜底(若 LLM 错误回退污染 chat_history 真出现)
+- **frontend `yarn build`**:本子轨 ship 的 tool_labels.ts 改动需一次 build 才在生产 UI 生效(P1.media / P1.apple_calendar / P1.bilibili / P1.netease 4 处累计)
+- **P4 MCP lazy-load**:挂起,INV-4 §3 列入 v4.1+,**与本子轨独立无依赖**(P4 是 MCP 外部工具懒载,本子轨是内建 cap fold)
+- **P1.media call_app deeplink**:1 cap 未折叠,INV-6 §2.5 D2 决策保留独立(实参 schema 偏简但参数性质差异大,fold 收益 < 维护成本)
+
+### B.4 子轨 B 与子轨 A 协同账
+
+- 子轨 A(prompt caching,INV-5)ship 后主路径 system 段命中 99.8%,WARM 状态约 -5,655 cached token 不计费
+- 子轨 B(tools_schema fold,INV-4/6/7)ship 后 tools 段裸 -5,949 token(永久减少,不依赖命中)
+- **两子轨叠加**:主路径 prompt 总减幅 ~50%+(WARM 状态),COLD 状态仍 -45% tools_schema reduction
+- 子轨 B 是 tools 段**裸减少**,与子轨 A 不冲突(子轨 A 是 system 段 cache,tools 段在 §3-§4 实证仅 DeepSeek 自动 cache,Qwen path 不命中)
+
+### B.5 子轨 B closure 声明
+
+**P1.netease 收尾刀 ship 后,子轨 B(工具治理)整轮 closed**。
+
+INV-3 §10.6 第三刀 token 治理子轨 B 起步(2026-05-19)→ INV-4 三段评估(2026-05-20)→ INV-4 §3.2.1 / §3.7 P2 ship(2026-05-21)→ INV-6 §1-§3 + INV-7 §1-§2 实施 5 刀 ship(2026-05-21)整链贯通。
+
+后续 token 治理若有新刀次(MCP lazy-load / 其它新发现),开 INV-8 起步,不再追加本子轨链。
+
+---

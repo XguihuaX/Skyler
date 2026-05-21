@@ -256,36 +256,22 @@ def _mpv_unavailable_hint() -> str:
     )
 
 
+
 # ---------------------------------------------------------------------------
-# 1. 今日推荐
+# 7 internal handlers (per INV-7 §2 P1.netease fold, 2026-05-21):
+# daily_recommend / personal_fm / play_song / play_playlist /
+# play_playlist_by_id / like_current / search
+# 走 dispatcher `netease_web(action=...)`,不再单独 @register_capability。
 # ---------------------------------------------------------------------------
 
-@register_capability(
-    name="netease.daily_recommend",
-    display_name="网易云日推",
-    description=(
-        "拉网易云今日推荐歌单(30 首)并自动播放。用户说『放日推/听今天的推荐/"
-        "给我来点新歌』时调,不需要关键词。\n\n"
-        "路径优先:mpv 装好 + MUSIC_U cookie OK → 内嵌 mpv 真自动播(autoplay=true);"
-        "否则唤起 NCM 客户端 fallback(autoplay=false + hint 装 mpv)。\n\n"
-        "按 autoplay 字段回话:true 直说『在播第 X 首日推』;false 如实说"
-        "『NCM 已打开但自动播放需装 mpv』。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="music",
-    parameters_schema={"type": "object", "properties": {}, "required": []},
-    health_check=nm.health_check,
-)
-async def daily_recommend(**_kwargs) -> dict:
+
+async def _handle_daily_recommend(**_kwargs) -> dict:
     songs = await asyncio.to_thread(_client().daily_recommend)
     if not songs:
         return {"opened": False, "autoplay": False, "songs": [],
                 "error": "日推为空（账号未登录或当日数据缺失）"}
     first = songs[0]
 
-    # 优先 mpv 自动播放
     if await _mpv_available_and_cookie_ok():
         res = await _try_mpv_play_song_queue(songs[:30])
         if res.get("played"):
@@ -298,13 +284,11 @@ async def daily_recommend(**_kwargs) -> dict:
                 "queued": res.get("queued"),
                 "is_trial": res.get("is_trial", False),
             }
-        # mpv 路径失败 → 落 URL Scheme fallback
         logger.warning(
             "[netease daily_recommend] mpv play failed (%s), falling back to URL Scheme",
             res.get("reason"),
         )
 
-    # URL Scheme fallback：开 NCM 客户端，autoplay 诚实置 False
     url = nm.NeteaseClient.play_url_scheme("song", int(first["id"]))
     opened = await _open_url(url)
     return {
@@ -317,28 +301,7 @@ async def daily_recommend(**_kwargs) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# 2. 私人 FM
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="netease.personal_fm",
-    display_name="网易云私人 FM",
-    description=(
-        "开启网易云私人 FM / 心动模式(无限流推荐)。用户说『随便放点/听点新的/"
-        "私人电台』等无明确目标时调用。\n\n"
-        "路径:mpv 装好 → 内嵌播 FM 首批 ~5 首(autoplay=true);mpv 没装 → "
-        "唤起 NCM 客户端 FM 模式(autoplay=false 但 NCM 自己播)。\n\n"
-        "看 autoplay 字段回话(false 是 NCM 在播,也算 OK)。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="radio",
-    parameters_schema={"type": "object", "properties": {}, "required": []},
-    health_check=nm.health_check,
-)
-async def personal_fm(**_kwargs) -> dict:
+async def _handle_personal_fm(**_kwargs) -> dict:
     songs = await asyncio.to_thread(_client().personal_fm)
 
     if await _mpv_available_and_cookie_ok():
@@ -357,8 +320,6 @@ async def personal_fm(**_kwargs) -> dict:
             res.get("reason"),
         )
 
-    # URL Scheme fallback：personalFM 是 NCM 自带 autoplay 的特例
-    # （和单曲/歌单不一样：FM scheme 唤起后 NCM 真会自动播 FM 模式）
     opened = await _open_url("orpheus://personalFM")
     if not opened and songs:
         opened = await _open_url(
@@ -366,9 +327,6 @@ async def personal_fm(**_kwargs) -> dict:
         )
     return {
         "opened": opened,
-        # autoplay 字段诚实：Skyler 没在播；NCM FM 模式自己会播
-        # 但 Skyler 无法直接确认其状态，所以 autoplay=False 表示"Skyler
-        # 路径下未触发 mpv 播放"。NCM 端能否真播由 client 自己决定。
         "autoplay": False,
         "backend": "url_scheme_fm",
         "songs": songs[:5],
@@ -380,42 +338,15 @@ async def personal_fm(**_kwargs) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# 3. 按关键词放一首歌
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="netease.play_song",
-    display_name="按名字放一首歌",
-    description=(
-        "搜索关键词并播放第一个匹配结果。当用户说\"放某某歌 / 听某歌手的某"
-        "某 / 来一首 X\"时调用。keyword 可以是\"歌名\" / \"歌名 歌手\" / "
-        "\"歌手 歌名\"任一形式（网易云搜索引擎自己解析）。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="music",
-    parameters_schema={
-        "type": "object",
-        "properties": {
-            "keyword": {
-                "type": "string",
-                "description": "搜索词，如 '夜空中最亮的星' / '逃跑计划 夜空' / 'Yesterday Beatles'",
-            },
-        },
-        "required": ["keyword"],
-    },
-    health_check=nm.health_check,
-)
-async def play_song(keyword: str, **_kwargs) -> dict:
+async def _handle_play_song(keyword: str = "", **_kwargs) -> dict:
+    if not keyword:
+        return {"opened": False, "autoplay": False, "error": "missing_keyword"}
     songs = await asyncio.to_thread(_client().search, keyword, "song", 5)
     if not songs:
         return {"opened": False, "autoplay": False, "song": None,
                 "error": f"网易云没搜到「{keyword}」"}
     song = songs[0]
 
-    # mpv-first
     if await _mpv_available_and_cookie_ok():
         title = song.get("name") or ""
         artist = _join_artist_names(song.get("ar") or song.get("artists"))
@@ -434,7 +365,6 @@ async def play_song(keyword: str, **_kwargs) -> dict:
             res.get("reason"),
         )
 
-    # URL Scheme fallback
     url = nm.NeteaseClient.play_url_scheme("song", int(song["id"]))
     opened = await _open_url(url)
     return {
@@ -447,68 +377,20 @@ async def play_song(keyword: str, **_kwargs) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# 4. 列出用户歌单（不直接播；让 LLM 模糊匹配）
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="netease.play_playlist",
-    display_name="放某个歌单（先列歌单让 LLM 选）",
-    description=(
-        "**两步流程的第一步**：列出用户所有自建/收藏歌单（含 emoji / 别名 / "
-        "多语言名）。当用户说\"放我的红心歌单 / 放我那个跑步歌单 / 放我工作"
-        "用的那个\"时调用。本 capability **不直接播放**——返回完整歌单列"
-        "表后，LLM 用语义自己挑最匹配的（如\"跑步\" → \"🏃 跑步专用\"），再"
-        "调 ``netease.play_playlist_by_id`` 完成第二步。is_liked=true 标的是"
-        "红心歌单。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="list",
-    parameters_schema={"type": "object", "properties": {}, "required": []},
-    health_check=nm.health_check,
-)
-async def play_playlist(**_kwargs) -> dict:
+async def _handle_play_playlist(**_kwargs) -> dict:
     playlists = await asyncio.to_thread(_client().my_playlists, 100)
     return {
         "playlists": playlists,
         "next_step": (
-            "从上面挑最匹配用户描述的那个，调 netease.play_playlist_by_id "
-            "传 playlist_id；不要凭空生成 id。"
+            "从上面挑最匹配用户描述的那个,调 netease_web action=play_playlist_by_id "
+            "传 playlist_id;不要凭空生成 id。"
         ),
     }
 
 
-# ---------------------------------------------------------------------------
-# 5. 按 ID 播放歌单（接 play_playlist 第二步）
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="netease.play_playlist_by_id",
-    display_name="按 ID 播放歌单",
-    description=(
-        "唤起本地网易云 App 播放指定 ID 的歌单。**调用前必须先**用 "
-        "netease.play_playlist 拿到歌单列表 + 用语义模糊匹配挑出 id；"
-        "不要凭空生成 playlist_id。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="play",
-    parameters_schema={
-        "type": "object",
-        "properties": {
-            "playlist_id": {
-                "type": "integer",
-                "description": "歌单 ID（来自 netease.play_playlist 返回的 id 字段）",
-            },
-        },
-        "required": ["playlist_id"],
-    },
-    health_check=nm.health_check,
-)
-async def play_playlist_by_id(playlist_id: int, **_kwargs) -> dict:
+async def _handle_play_playlist_by_id(playlist_id: int = 0, **_kwargs) -> dict:
+    if not playlist_id:
+        return {"opened": False, "autoplay": False, "error": "missing_playlist_id"}
     pid = int(playlist_id)
 
     if await _mpv_available_and_cookie_ok():
@@ -538,7 +420,6 @@ async def play_playlist_by_id(playlist_id: int, **_kwargs) -> dict:
                     res.get("reason"),
                 )
 
-    # URL Scheme fallback
     url = nm.NeteaseClient.play_url_scheme("playlist", pid)
     opened = await _open_url(url)
     return {
@@ -551,35 +432,9 @@ async def play_playlist_by_id(playlist_id: int, **_kwargs) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# 6. 红心当前在播
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="netease.like_current",
-    display_name="给当前在播加红心",
-    description=(
-        "给当前正在播放的歌曲加红心（收藏）。**两步流程**：先调 "
-        "media.now_playing 拿到当前歌名 + 歌手 → 在本接口里再 search 一次"
-        "拿到准确 song id → 调 like。当用户说\"加红心 / 喜欢这首 / 收藏\""
-        "时调用。需要本机正在播的就是网易云的歌；播 Apple Music / Spotify "
-        "时调本接口会找不到对应 song id。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="heart",
-    parameters_schema={
-        "type": "object",
-        "properties": {
-            "title":  {"type": "string", "description": "歌名（来自 media.now_playing）"},
-            "artist": {"type": "string", "description": "歌手（来自 media.now_playing，可选）"},
-        },
-        "required": ["title"],
-    },
-    health_check=nm.health_check,
-)
-async def like_current(title: str, artist: Optional[str] = None, **_kwargs) -> dict:
+async def _handle_like_current(title: str = "", artist: Optional[str] = None, **_kwargs) -> dict:
+    if not title:
+        return {"liked": False, "error": "missing_title"}
     keyword = f"{title} {artist}".strip() if artist else title
     candidates = await asyncio.to_thread(_client().search, keyword, "song", 5)
     if not candidates:
@@ -589,44 +444,120 @@ async def like_current(title: str, artist: Optional[str] = None, **_kwargs) -> d
     return {"liked": bool(ok), "song": song}
 
 
-# ---------------------------------------------------------------------------
-# 7. 搜歌（不播放）
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="netease.search",
-    display_name="搜网易云（不播放）",
-    description=(
-        "在网易云搜索关键词；**不播放**，仅返结果。当用户问\"网易云有没有"
-        "X / 这首歌的歌手是谁 / 这张专辑里都有什么\"时调用。"
-        "search_type 默认 song；可选 album / artist / playlist。"
-    ),
-    category="music",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="search",
-    parameters_schema={
-        "type": "object",
-        "properties": {
-            "keyword": {"type": "string", "description": "搜索关键词"},
-            "search_type": {
-                "type": "string",
-                "enum": ["song", "album", "artist", "playlist"],
-                "default": "song",
-            },
-            "limit": {"type": "integer", "default": 10, "minimum": 1, "maximum": 30},
-        },
-        "required": ["keyword"],
-    },
-    health_check=nm.health_check,
-)
-async def search(
-    keyword: str,
+async def _handle_search(
+    keyword: str = "",
     search_type: str = "song",
     limit: int = 10,
     **_kwargs,
 ) -> dict:
+    if not keyword:
+        return {"keyword": "", "type": search_type, "results": [], "error": "missing_keyword"}
     results = await asyncio.to_thread(
         _client().search, keyword, search_type, max(1, min(30, int(limit))),
     )
     return {"keyword": keyword, "type": search_type, "results": results}
+
+
+# ---------------------------------------------------------------------------
+# netease_web dispatcher (INV-7 §2 P1.netease template reuse #3 · web path)
+# ---------------------------------------------------------------------------
+
+_NETEASE_WEB_ACTION_HANDLERS = {
+    "daily_recommend":     _handle_daily_recommend,
+    "personal_fm":         _handle_personal_fm,
+    "play_song":           _handle_play_song,
+    "play_playlist":       _handle_play_playlist,
+    "play_playlist_by_id": _handle_play_playlist_by_id,
+    "like_current":        _handle_like_current,
+    "search":              _handle_search,
+}
+
+
+@register_capability(
+    name="netease_web",
+    display_name="网易云 Web API(NCM 客户端 + mpv-first)",
+    description=(
+        "网易云 web API 路径(mpv 装好 → 内嵌 mpv 自动播 autoplay=true;"
+        "否则唤起 NCM 客户端 URL Scheme,autoplay=false)。按 action 选:\n"
+        "- daily_recommend:今日推荐 30 首,直接放(用户说『放日推/听今天推荐』)\n"
+        "- personal_fm:私人 FM / 心动模式(用户说『随便放点/私人电台』)\n"
+        "- play_song:按关键词搜并放(用户说『放某某歌/来一首 X』,需 keyword)\n"
+        "- play_playlist:列用户歌单(让你模糊匹配,**不直接播**;两步流程第一步)\n"
+        "- play_playlist_by_id:按 ID 放歌单(接 play_playlist 第二步,需 playlist_id)\n"
+        "- like_current:红心当前在播(需 media action=now_playing 拿 title/artist 后调本;需 title)\n"
+        "- search:搜歌不播(用户问『有没有 X / 歌手是谁』,需 keyword;可指 search_type)\n\n"
+        "**何时用 netease_local**(本 cap 的对偶):用户已知 song_id/playlist_id 且想真自动播放时;"
+        "本 web cap 的 mpv-first 自动 fallback 已覆盖多数场景,不必手切 local。"
+    ),
+    category="music",
+    consumers=[Consumer.CHAT_AGENT],
+    trigger_modes=[TriggerMode.ON_DEMAND],
+    icon="music",
+    health_check=nm.health_check,
+    parameters_schema={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": list(_NETEASE_WEB_ACTION_HANDLERS.keys()),
+                "description": "网易云 web API 操作类型",
+            },
+            "keyword": {
+                "type": "string",
+                "description": "仅 action=play_song / search 必填,搜索关键词",
+            },
+            "playlist_id": {
+                "type": "integer",
+                "description": "仅 action=play_playlist_by_id 必填,歌单 ID(先调 action=play_playlist 拿)",
+            },
+            "title": {
+                "type": "string",
+                "description": "仅 action=like_current 必填,歌名(来自 media action=now_playing)",
+            },
+            "artist": {
+                "type": "string",
+                "description": "仅 action=like_current 可选,歌手",
+            },
+            "search_type": {
+                "type": "string",
+                "enum": ["song", "album", "artist", "playlist"],
+                "default": "song",
+                "description": "仅 action=search 可选,搜索类型(默 song)",
+            },
+            "limit": {
+                "type": "integer",
+                "default": 10,
+                "minimum": 1, "maximum": 30,
+                "description": "仅 action=search 可选,返回条数(默 10)",
+            },
+        },
+        "required": ["action"],
+    },
+)
+async def netease_web_dispatch(action: str = "", **params) -> dict:
+    """Dispatcher: 按 action 路由到 _handle_*,含 3 类必填校验。"""
+    handler = _NETEASE_WEB_ACTION_HANDLERS.get(action)
+    if handler is None:
+        return {
+            "ok": False,
+            "error": (
+                f"unknown action: {action!r}; "
+                f"valid: {list(_NETEASE_WEB_ACTION_HANDLERS.keys())}"
+            ),
+        }
+    # action-specific required 字段校验
+    if action in ("play_song", "search"):
+        if not params.get("keyword"):
+            return {"ok": False, "error": f"keyword required when action={action}"}
+    elif action == "play_playlist_by_id":
+        if not params.get("playlist_id"):
+            return {"ok": False, "error": "playlist_id required when action=play_playlist_by_id"}
+    elif action == "like_current":
+        if not params.get("title"):
+            return {"ok": False, "error": "title required when action=like_current"}
+    return await handler(**params)
+
+
+__all__ = [
+    "netease_web_dispatch",
+]

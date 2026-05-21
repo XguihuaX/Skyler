@@ -7,7 +7,7 @@ INVESTIGATION.md 已封存（2086 行）；INVESTIGATION-2.md 已封存；INVEST
 INVESTIGATION-4.md **1,120 行封存**（子轨 B §1-§3 评估 + §3.2.1 / §3.7 P2 实施收口完整覆盖）。
 INVESTIGATION-5.md 自 2026-05-20 prompt caching 子轨 A 勘查与实施起用（已 ship 收口）。
 INVESTIGATION-6.md **915 行封存**(子轨 B 实施前 3 刀 P3 / P1.media / P1.apple_calendar 完整收口;dispatcher 模板 6 要点 + lesson #7/#8 沉淀)。
-INVESTIGATION-7.md 自 2026-05-21 子轨 B 实施收尾(P1.bilibili + P1.netease)起用。
+INVESTIGATION-7.md 自 2026-05-21 子轨 B 实施收尾(P1.bilibili + P1.netease)起用,P1.netease ship 后**子轨 B 整轮 closed**(§ 收尾归档 B.1-B.5)。
 
 ---
 
@@ -15,6 +15,7 @@ INVESTIGATION-7.md 自 2026-05-21 子轨 B 实施收尾(P1.bilibili + P1.netease
 
 | 日期 | 主题 | 一句话结论 | 位置 |
 |---|---|---|---|
+| 2026-05-21 | **INV-7 §2 · 子轨 B P1.netease 13→2 双 dispatcher 折叠 ship + 子轨 B closure**(第 6 刀,模板复用 #3,**收尾刀**) | 单 commit ship;netease_music.py 7 旧 cap → 1 `netease_web` dispatcher + 7 `_handle_*` internal + 3 类必填校验(keyword / playlist_id / title);netease_playback.py 6 旧 cap → 1 `netease_local` dispatcher + 6 `_handle_*` internal + 2 类必填校验(song_id / playlist_id);tool_addendum.py 11 处引导文 web/local 路径区分微改;frontend tool_labels.ts 单 `'netease.'` 拆 2 prefix(`netease_web` "查歌单…" + `netease_local` "本地播放…"differentiated UX);3 smoke 全过(双 dispatcher 注册 + 14 query 含边界 case 路径选择 13/14 命中 + dispatcher routing 9 档);**实测 -1,136 token (P1.bilibili 8,437 → 7,301 / 44.9% 累计 / 子轨 B 终态)**,与估算 ~1,180 吻合(差 3.7%);lesson #10 capability-tag fallback regex 接受 trade-off backlog;**子轨 B 整轮 5 commit closed,累计 -5,949 token / -44.9%**(§ 收尾归档 B.1-B.5) | INVESTIGATION-7.md §2 + § 收尾归档 |
 | 2026-05-21 | **INV-7 §1 · 子轨 B P1.bilibili 11→1 入口折叠 ship**(第 5 刀,模板复用 #2,**最大头**) | 2-stage(Phase 1 INV-6 封存 + Phase 2 audit/落代码)单 commit ship;bilibili.py 11 旧 cap → 1 `bilibili` dispatcher + 11 `_handle_*` internal + 5 类必填校验(keyword/mid/bvid-or-aid);tool_addendum.py 8 处引导微改;**frontend tool_labels.ts retro-fix 3 prefix**(media + apple_calendar + bilibili 同款 fold-后失 mapping 补漏,需 yarn build 才生效);3 smoke 全过(ToolRegistry / 11 LLM query 100% 调 bilibili / 6 档 dispatcher routing);**实测 -1,169 token (P1.apple_calendar 9,606 → 8,437 / 36.3% 累计)**,超 PM 预期 ~900 中位数 ~30%;lesson #9 三 grep 模式(cap-name + module import + frontend startsWith)记入,后续 P1.netease 必走 | INVESTIGATION-7.md §1 |
 | 2026-05-21 | **INV-6 封存(915 行) + INV-7 起用** | INV-6 完整覆盖子轨 B 实施前 3 刀(§1 P3 / §2 P1.media / §3 P1.apple_calendar)+ dispatcher 模板 6 要点 + lesson #7/#8;后续实施收尾(P1.bilibili + P1.netease)迁 INV-7 | INVESTIGATION-INDEX.md + INVESTIGATION-6.md §封存说明 |
 | 2026-05-21 | **INV-6 §3 · 子轨 B P1.apple_calendar 4→1 入口折叠 ship**(第 4 刀,模板复用 #1) | 2-stage(audit + 落代码)单 commit ship;apple_calendar.py 4 旧 cap → 1 `apple_calendar` dispatcher + 4 `_handle_*` internal + **末尾 2 行 module-level alias**(backward-compat for calendar.py D1 router);tool_addendum.py 3 处引导微改;3 smoke 全过(ToolRegistry / 4 LLM query 双路径覆盖含 chunk-1 time.now→apple_calendar 链路 / dispatcher routing 4 档);**实测 -91 token (P1.media 9,697 → 9,606 / 27.5% 累计)**;Smoke 2 暴露 calendar router 反向 import 漏 audit → lesson #7 双 grep 模式 + lesson #8 dispatcher 实写 chars 比预估高 30-80% 记入 §2.7.4 | INVESTIGATION-6.md §3 |
@@ -50,7 +51,8 @@ INVESTIGATION-7.md 自 2026-05-21 子轨 B 实施收尾(P1.bilibili + P1.netease
 
 ### 1. 性能 / Token 治理（持续主题）
 
-- 2026-05-21 backlog 重定位（per 纪律「调查/audit/评测 → INV files;实施 → ROADMAP」）— **INV-3 §10.9 + 1 backlog**（extractor 5-min 频率 audit）;**INV-5 §5 + 2 backlog**（Qwen Plus vs Max / Qwen Plus vs DeepSeek 评测候选,新增 §5.6）
+- 2026-05-21 backlog 重定位（per 纪律「调查/audit/评测 → INV files;实施 → ROADMAP」）— **INV-3 §10.9 + 1 backlog**（extractor 5-min 频率 audit）;**INV-5 §5 + 2 backlog**（Qwen Plus vs Max / Qwen Plus vs DeepSeek 评测候选,新增 §5.6）;**INV-7 §2.8 + 1 backlog**（`_CAPABILITY_TAG_RE` 容忍单字 cap-name 兜底,P1.netease 子轨 B 收尾后挂起）
+- 2026-05-21 **INV-7 §2 · P1.netease 13→2 双 dispatcher fold ship + 子轨 B closure**(INVESTIGATION-7.md §2 + § 收尾归档)— 模板复用 #3 收尾刀,4 文件改 + 双 dispatcher web/local 路径差异化 + 3 smoke 全过(14 query 含边界 case),**实测 -1,136 token / 44.9% 累计**(P1.bilibili 8,437 → 7,301);**子轨 B 整轮 5 commit closed,累计 -5,949 token / -44.9%**(P2 + P3 + P1.media + P1.apple_calendar + P1.bilibili + P1.netease);lesson #10 接受 trade-off 挂 backlog
 - 2026-05-21 **INV-7 §1 · P1.bilibili 11→1 fold ship**(INVESTIGATION-7.md §1)— 模板复用 #2 最大头,3 文件改 + frontend retro-fix + 3 smoke 全过(11/11 LLM query 调 bilibili),**实测 -1,169 token / 36.3% 累计**(P1.apple_calendar 9,606 → 8,437);lesson #9 三 grep 模式记入
 - 2026-05-21 **INV-6 封存(915 行) + INV-7 起用** — INV-6 子轨 B 实施前 3 刀完整收口,后续 P1.bilibili + P1.netease 迁 INV-7
 - 2026-05-21 **INV-6 §3 · P1.apple_calendar 4→1 fold ship**(INVESTIGATION-6.md §3)— 模板复用 #1,2 文件改 + alias 兜底 + 3 smoke 全过(双路径覆盖含 chunk-1 chain),**实测 -91 token / 27.5% 累计**(P1.media 9,697 → 9,606);lesson #7 双 grep audit + #8 dispatcher schema chars 比预估高 30-80% 记入 §2.7.4

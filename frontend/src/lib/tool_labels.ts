@@ -33,8 +33,10 @@ const TOOL_LABEL_TABLE: ToolLabelEntry[] = [
   { prefix: 'calendar.', label: '查日历…' },
   // chunk 14 activity also includes time anchor — fallback 兜底
   { prefix: 'time.', label: '看看时间…' },
-  // music(UX-005:netease 全归 music,含 API + local 共 13 caps)
-  { prefix: 'netease.', label: '查歌单…' },
+  // music(UX-005:netease 全归 music;INV-7 §2 P1.netease fold 后拆双 dispatcher
+  // netease_web + netease_local;retro-fix 去末尾 . 同 P1.bilibili 模式)
+  { prefix: 'netease_web', label: '查歌单…' },     // INV-7 §2 P1.netease fold (web)
+  { prefix: 'netease_local', label: '本地播放…' },  // INV-7 §2 P1.netease fold (local)
   // bilibili (INV-7 §1.7 P1.bilibili fold 单字)
   { prefix: 'bilibili', label: '看视频信息…' },  // INV-7 §1.7 retro-fix (P1.bilibili fold)
   // media_control(系统级播放控制;INV-6 §2 P1.media fold 单字)
