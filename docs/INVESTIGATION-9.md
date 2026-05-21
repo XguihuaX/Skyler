@@ -127,3 +127,169 @@ per INV-8 lesson #3(sub-language path 对称性)落实,新增 invariant:
 **抽象**:sanitize chain fix 时区分"残留字面 tag(LLM 半截 / round-trip 错锚)" vs "真无 tag(LLM 漏标)";两种 case 走不同分支,**前者 skip 后者 fallback**。
 
 → Phase 2 §1 closed。
+
+---
+
+## §2+§3+§4 TTS 抽象层 + Fish provider(Phase 2 第 2 commit, 2026-05-22)
+
+> PM 拍板合刀:§2 太小 + §3/§4 互依(`_build_engine` fish 分支需 `fish.py` 存在,单独落地留破 import 中间态)。
+> per INV-8 §1.5.8 改造清单第 2-4 项 + Hard Req per-provider 双重隔离(本 commit 仅 provider 层,LLM 端教 markers §5 + non-fish sanitize strip §6 留下一刀合刀,Hard Req 必须**双重隔离同时落**)。
+> β inline `[bracket]` final lock(PM 2026-05-22 听完 WAV 确认 work)。
+
+### §2 改动 · `backend/tts/voice_config.py`(+90 / -42 行,净 +48)
+
+`VoiceConfig` dataclass 加 4 新字段(默认值齐;backward compat:旧 cosyvoice/edge/sovits voice_model JSON 不传新字段,VoiceConfig 用 default):
+
+```python
+@dataclass
+class VoiceConfig:
+    provider: str
+    voice: str
+    instruct_supported: bool = False
+    model: Optional[str] = None
+    # INV-9 §2 新增:
+    tts_language: str = "zh"
+    reference_audio_path: Optional[str] = None
+    reference_text: Optional[str] = None
+    fish_latency: str = "balanced"
+```
+
+`parse_voice_config` fish 分支 raise validation(per Step 5 决策 1 mode_A only lock,**不静默 fallback**;缺 ref 字段直接 `ValueError`):
+
+```python
+if provider == "fish":
+    if not (isinstance(reference_audio_path, str) and reference_audio_path.strip()):
+        raise ValueError("voice_config: provider='fish' requires reference_audio_path ...")
+    if not (isinstance(reference_text, str) and reference_text.strip()):
+        raise ValueError("voice_config: provider='fish' requires reference_text ...")
+```
+
+边角处理:`tts_language` / `fish_latency` 字符串规范化(`.lower()`);`reference_audio_path` / `reference_text` 空串 → `None`(`.strip()` 后 falsy)。
+
+### §3 改动 · `backend/tts/__init__.py`(+7 行)
+
+`_build_engine` 加 fish 分支:
+
+```python
+if cfg.provider == "fish":
+    from backend.tts.fish import FishTTS
+    return FishTTS(voice_config=cfg)
+```
+
+延迟 import:`fish_audio_sdk` 体积适中,仅在 fish 角色使用时加载。其它 provider 分支(cosyvoice / edge / sovits / 未知 fallback)完全不动 — 0 regression。
+
+### §4 改动 · `backend/tts/fish.py`(新 +201 行)
+
+`FishTTS(TTSBase)` 实现 mode_A only zero-shot voice cloning:
+
+**构造**:
+- defensive check ref 字段(parse_voice_config 已 raise 兜底)
+- 一次性读 `reference_audio` bytes cached(避免每 turn 重读 1.2MB WAV)
+- API key resolve 优先级:`FISH_API_KEY` env > `<repo_root>/api_key.txt`(dev 便利)> 空串 + warning
+- backend lock `s2-pro`(model 字段默认),latency `balanced`(per Step 5 stage 2 lock)
+
+**synthesize**:
+- `asyncio.to_thread(self._blocking_synth, text)` 包阻塞 SDK call
+- SDK 返 `Generator[bytes]`,sync collect 到完整 bytes(per Step 5 实测路径)
+- `HttpCodeErr` / generic exception 全 catch + `log_tts_call` INSERT(per `cosyvoice.py` pattern)
+- emotion 字段 fish 路径下**不使用**(per §1.3.7 schema β:emotion 走 inline `[bracket]` markers in text,不走单独参数);保留签名兼容 `TTSBase.synthesize`
+
+**synthesize_stream** 不实(留 Phase 3 H3 fix 合刀,接 `stream_websocket` WebSocket 协议 + 实时 chunk yield;详 INV-8 §1.收口.4 Step 6 backlog)。
+
+### §5 测试 + smoke 全绿 · 302/302 cases · 0 regression
+
+#### Smoke 1 · NEW `tests/test_fish_provider.py`(37 cases)
+
+```
+[1.1] VoiceConfig 4 新字段默认值                       4/4 PASS
+[1.2] VoiceConfig 显式赋值 4 字段                       4/4 PASS
+[2.1] parse fish 缺 reference_audio_path → ValueError  1/1 PASS
+[2.2] parse fish 缺 reference_text → ValueError        1/1 PASS
+[2.3] parse fish ref_audio_path 空串 → ValueError      1/1 PASS
+[2.4] parse fish ref_text 空串 → ValueError            1/1 PASS
+[3]   parse fish 全字段 → VoiceConfig                   7/7 PASS
+[3.1] parse fish 省略 fish_latency → 默 'balanced'      1/1 PASS
+[4.1] parse cosyvoice cid=1 Mai · backward compat      4/4 PASS
+[4.2] parse cid=2 八重 cosyvoice-v3.5-plus · backward  3/3 PASS
+[4.3] parse 空 / None / 空白 → default                  3/3 PASS
+[4.4] parse 非法 JSON → default 不抛                    1/1 PASS
+[5.1] _build_engine cosyvoice → CosyVoiceTTS           1/1 PASS
+[5.2] _build_engine fish → FishTTS(全字段)             4/4 PASS
+[5.3] _build_engine fish 缺 ref → ValueError 抛        1/1 PASS
+
+Results: 37/37 passed
+```
+
+#### Smoke 2 · 直调 `scripts/fish_provider_smoke.py`(纯 provider 层)
+
+```
+[smoke] 构造 FishTTS via get_tts_engine(voice_model_json)...
+[smoke] engine class = _PreprocessingEngine        ← 工厂返包装层
+[smoke] _inner class = FishTTS                     ← inner 真实例
+
+[smoke] synth text = 'こんにちは、今日もよろしくお願いします。'
+[smoke] ✅ synth OK in 2978.2ms
+[smoke]    audio bytes = 245,804
+[smoke]    audio dur ≈ 2.79s (44.1kHz mono)
+[smoke]    out = scripts/fish_probe_outputs/INV9_smoke_basic_ja.wav
+
+[smoke] synth text with marker = '[soft chuckle]ま、いいか。気にしないで。'
+[smoke] ✅ marker synth OK in 1464.6ms       ← warm,快 ~50%
+[smoke]    audio bytes = 192,556 dur ≈ 2.18s
+[smoke]    out = scripts/fish_probe_outputs/INV9_smoke_with_marker.wav
+```
+
+通过 `get_tts_engine` 工厂(per ws.py:733 生产路径)→ `_PreprocessingEngine` 包 `FishTTS` → SDK call → audio bytes → `log_tts_call`。**整链路通**。
+
+注意:`elapsed_ms` 是 sync collect 完整 audio 的时间,不是 TTFA;balanced TTFA gain 要 `synthesize_stream` 才能感知(Phase 3 H3 fix 合刀)。
+
+#### Smoke 3 · 邻近 5 test suite 回归(265 cases)
+
+| Suite | Cases | 状态 |
+|---|---|---|
+| `test_sanitize_ja.py`(INV-9 §1 NEW) | 32 | ✅ |
+| `test_text_filters_ja_whitelist.py` | 38 | ✅ |
+| `test_tts_final_guard.py` | 32 | ✅ |
+| `test_tts_strip_fallback.py` | 57 | ✅ |
+| `test_tts.py`(CosyVoice / Edge / SoVITS legacy 路径)| 106 | ✅ |
+| **本 commit NEW** `test_fish_provider.py` | 37 | ✅ |
+| **TOTAL** | **302** | **302/302 PASS** |
+
+→ 0 regression。cosyvoice / edge / sovits legacy 链路完全不破。
+
+### §6 关键 invariant 锁(per INV-8 §1.5.12 lesson #3 / #4)
+
+- ✅ **mode_A only 强制 ref**(per Step 5 决策 1 lock):parse_voice_config raise 早于 _build_engine,defensive check in FishTTS.__init__;3 子 case 实证(缺 audio / 缺 text / 空串 都 raise)
+- ✅ **provider 抽象边界清晰**:`_build_engine` 4 分支(cosyvoice / fish / edge / sovits)各自独立 + 未知 fallback;延迟 import 隔离 SDK 依赖
+- ✅ **backward compat**:9 char DB 矩阵的 cosyvoice / cosyvoice-v3.5-plus / 空 voice_model 全场景 backward compat 实证(test 4.1-4.4 + smoke 3 回归 106 cosyvoice cases)
+- ✅ **TTSBase 接口签名 stick** `synthesize(text, emotion) → bytes`(per Step 1 决策 3 lock);emotion 在 fish 路径下不使用(走 inline `[bracket]`),保留签名
+- ✅ **per-provider sanitize Hard Req 待 §5+§6 合刀**:fish 接到 text 透传 `[bracket]`(本 commit 实);non-fish strip `[bracket]`(下一刀)+ Layer A1 教 markers(下一刀)
+- ✅ **cost / balance API 可达**:`Session.get_api_credit()` + `get_package()`(per INV-8 §1.3.10 Step 5 实测);本 commit 不实 cost cap(留 §7)
+- ✅ **PM 听感 final lock**:β inline `[bracket]` 在 PM 2026-05-22 听完 WAV 后 lock(per 上一轮 PM 决策);[soft chuckle] / [gentle] / [teasing] 等 markers SDK 接受 + 声学表达 work
+
+### §7 收口
+
+- ✅ §2 voice_config 4 字段 + parse fish raise validation
+- ✅ §3 `_build_engine` fish 分支(7 行延迟 import)
+- ✅ §4 `backend/tts/fish.py` 新建 201 行(synthesize 实现 + synthesize_stream 留 Phase 3)
+- ✅ 37 NEW unit test + 直调 smoke + 265 邻近 regression = 302/302 PASS
+- ✅ Smoke output WAV 保留(`scripts/fish_probe_outputs/INV9_smoke_basic_ja.wav` + `INV9_smoke_with_marker.wav`,`.gitignore` 已加)给 PM 听感验证
+- 🔒 0 backend cap regression / 0 LLM prompt 改动 / 0 ws.py 改动 / cosyvoice / edge / sovits legacy 路径完全不破
+- ⏳ 下一刀 = **Phase 2 §5 + §6 合刀**(per-provider 双重隔离 Hard Req · LLM 端 layer_a.j2 `{% if provider == 'fish' %}` 子分支教 markers + 后端 sanitize 链新增 `_FISH_EMOTION_MARKER_RE` + `strip_fish_emotion_markers` + `_PreprocessingEngine` 或 caller 按 provider 决定是否 strip `[bracket]`)
+
+### §8 lesson(沉淀)
+
+#### Lesson INV-9 #2 · provider 抽象分支延迟 import 隔离 SDK 依赖
+
+`_build_engine` 4 分支 + 未知 fallback,每个分支用 `from backend.tts.<provider> import` 局部 import(per cosyvoice 现行 pattern continued)— **fish_audio_sdk** 体积虽适中(SDK + httpx-ws + ormsgpack + wsproto 共 ~500KB)但仅 fish 角色用到,延迟 import 让非 fish 路径无 dependency 加载开销 + 测试 / 部署环境若未装 fish-audio-sdk 也不破 cosyvoice 路径。
+
+**抽象**:provider 抽象层的 SDK 依赖应**严格延迟 import**,放 if 分支内,避免顶层 import 把所有 SDK 都加载。类比 cosyvoice / edge / sovits 现 pattern,fish 新增分支沿用。
+
+#### Lesson INV-9 #3 · mode_A only validation 在 parse 阶段 raise 而非 caller 阶段静默 fallback
+
+per Step 5 决策 1 lock:fish 缺 ref 字段**不静默 fallback** — parse_voice_config 直接 raise ValueError,让 caller(get_tts_engine / _build_engine)立即报错;配错的 fish 角色不会沉默走 default voice 让用户体感"声音变了但不知为啥"。
+
+**抽象**:provider 配置 validation 应在**配置解析阶段** raise,不在 caller 使用阶段静默兜底;早 raise 早暴露 = 配错可见。Phase 3 / Phase 2 后续 commits 沿用此原则(下一刀 layer_a.j2 fish 分支也要类似 — 配错 provider 时 prompt 渲染立即报错而非沉默漏 marker 引导)。
+
+→ Phase 2 §2+§3+§4 closed。下一刀 = §5+§6 合刀(Hard Req per-provider 双重隔离 LLM + sanitize 两端同时)。
+

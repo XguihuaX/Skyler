@@ -317,6 +317,12 @@ def _build_engine(voice_model: Optional[str] = None) -> TTSBase:
             instruct_supported=cfg.instruct_supported,
             model=cfg.model,  # bugfix-3.4: model 透传, v3.5-plus / v3-flash 并存
         )
+    if cfg.provider == "fish":
+        # INV-9 §3 · Fish s2-pro provider · mode_A only references[] inline。
+        # 延迟导入:fish_audio_sdk 体积适中且仅在 fish 角色用到时需要加载。
+        # FishTTS 构造时读 reference_audio bytes + Fish API key + 一次性 cached。
+        from backend.tts.fish import FishTTS
+        return FishTTS(voice_config=cfg)
     if cfg.provider == "edge":
         return _LegacyProviderAdapter(EdgeTTSProvider(), character=cfg.voice)
     if cfg.provider == "sovits":
