@@ -365,3 +365,292 @@ lesson #8 校正方向反转出现:bilibili 这种 long-desc cap 多的 group,di
 - 🔒 零 backend cap regression / handler 逻辑改动
 
 → **P1.bilibili 子轨 B 实施第 5 刀 closed**。下一刀 = **P1.netease 13→2 双 dispatcher**(子轨 B 收尾刀,模板复用 #3 + 双 path 设计),Stage 1 必走三 grep audit。
+
+---
+
+## §2 P1.netease 13→2 双 dispatcher 入口折叠 (Stage 1 草稿, 2026-05-21)
+
+> P1 入口折叠**第 4 刀 / 子轨 B 收尾刀**;模板复用 #3 + 双 path 设计;lesson #7/#8/#9 全继承;**新发现 lesson #10 候选**(capability-tag fallback regex)。
+
+### 2.1 13 cap audit + 双 dispatcher 分组
+
+按 INV-4 §3.1.2 D1 决策分组(web URL Scheme path / local mpv 自解码 path 底层不同):
+
+#### web group (`netease_music.py` 7 cap)
+
+| # | cap | token | 参数 |
+|---|---|---|---|
+| 1 | `netease.daily_recommend` | **204** | (无) |
+| 2 | `netease.personal_fm` | **182** | (无) |
+| 3 | `netease.play_song` | **189** | keyword(req) |
+| 4 | `netease.play_playlist` | **205** | (无) |
+| 5 | `netease.play_playlist_by_id` | **148** | playlist_id(req) |
+| 6 | `netease.like_current` | **222** | title(req) / artist |
+| 7 | `netease.search` | **195** | keyword(req) / search_type / limit |
+| **web subtotal** | | **1,345** | 6 类 union 参数(去重) |
+
+#### local group (`netease_playback.py` 6 cap)
+
+| # | cap | token | 参数 |
+|---|---|---|---|
+| 8 | `netease.local_play_song` | **203** | song_id(req) |
+| 9 | `netease.local_play_playlist` | **233** | playlist_id(req) / limit |
+| 10 | `netease.local_pause` | **126** | (无) |
+| 11 | `netease.local_resume` | **77** | (无) |
+| 12 | `netease.local_stop` | **103** | (无) |
+| 13 | `netease.local_next_in_queue` | **152** | (无) |
+| **local subtotal** | | **894** | 3 类 union 参数(去重) |
+
+**total baseline**:**2,239 token**(JSON chars 4,860,实测 2,250 含 list separator overhead;平均 173/cap 接近 bilibili avg 175)
+
+**关键分布**:
+- web 含 long-desc cap(daily_recommend 393 chars desc / personal_fm 304 / like_current 多步前置)→ **类 bilibili pattern**(ROI 偏高)
+- local 含 long-desc cap(local_play_song 297 / local_play_playlist 285),但 4 个无参 cap 短 → **混合 pattern**
+
+### 2.2 三 grep audit (lesson #7 + #9 三维强制)
+
+#### Mode 1 · cap-name pattern (`netease.X`)
+
+**必改 active**(LLM runtime 引导文):
+
+| # | 文件:行 | 内容 |
+|---|---|---|
+| 1 | `tool_addendum.py:40-49` | web 引导段 5+1 处提及 `netease.daily_recommend / personal_fm / play_song / play_playlist / play_playlist_by_id / search / like_current` |
+| 2 | `tool_addendum.py:85-94` | local 引导段 5 处 `netease.search / local_play_song / local_play_playlist / local_pause / local_resume / local_stop` |
+
+合计 ~11 行 LLM 引导文必改。
+
+**archeology(保留作历史 / sanitize chain 引用)**:
+
+- `chat.py:902` docstring 数据估算注释
+- `database/migrations/v3_5_chunk6b_hotfix3_clean_polluted_memories.py` 历史 migration(`<netease.daily_recommend>` 字面)
+- `capabilities/media_control.py:87` docstring `复用同一份解析`
+- `config/__init__.py:30` `netease_music_u` env field
+- `integrations/netease_music.py:18,124` self-reference
+
+**⚠️ 真 runtime sanitize 路径(详 §2.2.4)**:
+- `tool_call_resilience.py:11,87-89` capability-name-as-tag fallback 注释
+- `text_filters.py:113-114,398,413` sanitize chain 处理 `<netease.X />` LLM 错乱 tag
+
+#### Mode 2 · Python module import
+
+```bash
+grep -rn "from backend.capabilities.netease_music\|from backend.capabilities.netease_playback" backend/
+```
+
+**零反向 import handler 函数**:
+- `backend/main.py:185, 192` import module(触发 `@register_capability` 装饰器副作用),**不是** import 函数;module-level import 不会因函数改名 break(import 整个模块,LLM-facing cap name 改后 ToolRegistry by-name dispatch 仍 work)
+- `backend/integrations/bilibili.py:3` docstring 提及 netease 设计同模式(无 import)
+
+→ **不需要 alias 兜底**(不像 apple_calendar / calendar.py:43,55 的反向 import handler 名场景)。
+
+#### Mode 3 · frontend prefix startsWith
+
+```bash
+grep -rn "'netease\|\"netease" frontend/
+```
+
+| # | 文件:行 | 内容 | 处理 |
+|---|---|---|---|
+| 1 | `frontend/src/lib/tool_labels.ts:37` | `{ prefix: 'netease.', label: '查歌单…' }` | **必改 retro-fix**(同 P1.bilibili Stage 2 模式,fold 后 cap name 单字 `netease_web` / `netease_local` 失 startsWith match 命中) |
+
+#### ⚠️ 新发现:lesson #10 候选(capability-tag fallback regex)
+
+`backend/agents/tool_call_resilience.py:100-104 _CAPABILITY_TAG_RE`:
+
+```python
+_CAPABILITY_TAG_RE = re.compile(
+    r"<([a-z_][a-z_0-9]*\.[a-z_][a-z_0-9]*)"   # group 1: 含 dot 的 cap name
+    r"(?:\s+[^>]*?)?"
+    r"(?:\s*/>|>(.*?)</\1>)",
+    re.DOTALL | re.IGNORECASE,
+)
+```
+
+`backend/utils/text_filters.py:402-406 _CAPABILITY_OPEN_TAG_RE` 同款 `.` 必填模式。
+
+**功能**:Qwen 偶发把 capability name 当 XML tag 输出(`<netease.daily_recommend>...</netease.daily_recommend>`)→ resilience 提取 tag → 调对应 cap;text_filters 用同款 regex 把这种"capability-name-as-tag"从 chat_history 里 strip 防 in-context 自循环。
+
+**fold 后**:cap name 单字 `netease_web` / `netease_local` **无 `.`**,LLM 若错误回退输出 `<netease_web>` 形态 → 这两个 regex **拒匹配**(require `.`) → fallback 失效。
+
+**评估**:
+- 该 regex 是 **hotfix-3 错误回退兜底**(LLM 正常应直接调 tool_call,不应输出 cap-as-tag);P1.media / apple_calendar / bilibili 已 ship,实测 LLM 全部走新 dispatcher 不触发此 fallback 路径(无观察到错误回退)
+- 双面性:fold 后该 fallback 自然失效**符合预期**(LLM 学新单字形态,旧含-dot 错误回退本就不该发生);但若 LLM 在某些边缘情况错误回退到 `<netease_web>`,resilience strip + dispatch 不工作 → 字面字符进 chat_history 污染 in-context
+
+**CC 倾向 lesson #10 接受 fallback 失效作 fold trade-off**(与 P1.media / apple_calendar / bilibili 已 ship 路径一致;无新代码改动)。若 PM 想保 fallback 覆盖单字 cap name → 改 regex 容忍 `[a-z_][a-z_0-9]*` 不必含 `.`(独立小 PR,可挂 P1.netease ship 之后议)。
+
+### 2.3 双 dispatcher 适配(模板继承 + netease 特异)
+
+#### 模板继承(§2.7.4 lock + lesson #7/#8/#9 全应用)
+
+- 单层 union schema(each dispatcher 独立)
+- `{ok:bool, error:str}` 标准
+- snake_case action(1:1 mapping cap suffix,但去掉 `local_` prefix:`play_song / play_playlist / pause / resume / stop / next_in_queue`)
+- clean cut
+- smoke 三档 + lesson #9 三 grep 已走
+
+#### 特异 a · 双 dispatcher 命名
+
+**CC 倾向 lock**:
+- `netease_web`(7 cap)
+- `netease_local`(6 cap)
+
+理由:
+- 单字 namespace(与 media / apple_calendar / bilibili fold 后命名风格统一)
+- `web` / `local` 后缀清楚标识两条 path 底层差异(web URL Scheme / local mpv)
+- LLM 调用形态:`netease_web(action="play_song", keyword="X")` / `netease_local(action="play_song", song_id=N)`
+
+#### 特异 b · 两 dispatcher 独立 action enum
+
+**netease_web 7 action**:
+`daily_recommend / personal_fm / play_song / play_playlist / play_playlist_by_id / like_current / search`
+
+**netease_local 6 action**(去掉 `local_` prefix):
+`play_song / play_playlist / pause / resume / stop / next_in_queue`
+
+注意:web 和 local 都有 `play_song` / `play_playlist` action 名,但属于**不同 dispatcher**,无 collision(LLM 看 dispatcher name 区分)。
+
+#### 特异 c · 两 dispatcher 独立 union schema
+
+**netease_web union 字段(6 类去重)**:
+
+```python
+parameters_schema = {
+    "type": "object",
+    "properties": {
+        "action": {"enum": ["daily_recommend", "personal_fm", "play_song",
+                            "play_playlist", "play_playlist_by_id",
+                            "like_current", "search"]},
+        "keyword": {"type": "string", "description": "仅 action=play_song / search 必填"},
+        "playlist_id": {"type": "integer", "description": "仅 action=play_playlist_by_id 必填"},
+        "title": {"type": "string", "description": "仅 action=like_current 必填"},
+        "artist": {"type": "string", "description": "仅 action=like_current 可选"},
+        "search_type": {"type": "string", "description": "仅 action=search 可选(默 song)"},
+        "limit": {"type": "integer", "description": "仅 action=search 可选(默 5)"},
+    },
+    "required": ["action"]
+}
+```
+
+dispatcher 内部校验:
+- play_song / search: 必填 keyword
+- play_playlist_by_id: 必填 playlist_id
+- like_current: 必填 title
+
+**netease_local union 字段(3 类去重)**:
+
+```python
+parameters_schema = {
+    "type": "object",
+    "properties": {
+        "action": {"enum": ["play_song", "play_playlist", "pause", "resume", "stop", "next_in_queue"]},
+        "song_id": {"type": "integer", "description": "仅 action=play_song 必填"},
+        "playlist_id": {"type": "integer", "description": "仅 action=play_playlist 必填"},
+        "limit": {"type": "integer", "description": "仅 action=play_playlist 可选"},
+    },
+    "required": ["action"]
+}
+```
+
+dispatcher 内部校验:
+- play_song: 必填 song_id
+- play_playlist: 必填 playlist_id
+
+#### 特异 d · frontend retro-fix(同 P1.bilibili 模式)
+
+`tool_labels.ts:37` 单 prefix `netease.` → 拆为两 prefix(无 dot)兼容双 dispatcher:
+
+```typescript
+{ prefix: 'netease_web', label: '查歌单…' },     // INV-7 §2 P1.netease fold (web)
+{ prefix: 'netease_local', label: '本地播放…' },  // INV-7 §2 P1.netease fold (local)
+```
+
+⚠️ **改后需 yarn build** 才在生产 UI 生效(同 P1.bilibili)。
+
+### 2.4 实施 plan(待 Stage 2)
+
+#### 改动文件清单
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/capabilities/netease_music.py` | 删 7 旧 cap decorator + 改 7 handler 名为 `_handle_*`;新增 `_NETEASE_WEB_ACTION_HANDLERS` dict + `netease_web_dispatch` + dispatcher decorator + 3 类必填校验(keyword/playlist_id/title) |
+| 2 | `backend/capabilities/netease_playback.py` | 删 6 旧 cap decorator + 改 6 handler 名为 `_handle_*`;新增 `_NETEASE_LOCAL_ACTION_HANDLERS` dict + `netease_local_dispatch` + dispatcher decorator + 2 类必填校验(song_id/playlist_id) |
+| 3 | `backend/agents/prompt/tool_addendum.py:40-49 / 85-94` | ~11 处引导文 `→ netease.X` → `→ netease_web(action="X", ...)` / `→ netease_local(action="X", ...)` 微改 |
+| 4 | `frontend/src/lib/tool_labels.ts:37` | 1 行 → 2 行:删 `prefix: 'netease.'`,新加 `'netease_web'` + `'netease_local'`(retro-fix per lesson #9) |
+
+#### 估改动量
+
+- netease_music.py: -350 / +180 ≈ 净减 ~170 行
+- netease_playback.py: -300 / +160 ≈ 净减 ~140 行
+- tool_addendum.py: ~+11/-11
+- tool_labels.ts: +2/-1
+
+### 2.5 风险评估
+
+| 项 | 风险 | 说明 |
+|---|---|---|
+| LLM 调用新双 dispatcher(选 web vs local) | **中** | netease 是唯一双 dispatcher 设计,LLM 需正确区分 "web Scheme 路径(netease_web)" vs "mpv 本地播路径(netease_local)";tool_addendum 引导文必须清晰强调差异 |
+| dispatcher 内部参数校验 | **极低** | 模板继承 + 3+2 类必填清晰 |
+| 现有 caller 硬编码 | **零** | grep mode 2 实测零反向 import |
+| frontend tool_labels retro-fix | **极低** | 同 P1.bilibili 模式,需 yarn build 才生效 |
+| LiteLLM × DashScope 7+6 enum union schema 兼容 | **极低** | 模板已实证 |
+| ⚠️ **lesson #10 capability-tag fallback regex 失效** | **低**(接受 trade-off) | fold 后 LLM 不应输出 `<netease_web>` 错误形态;若错误回退出现,sanitize strip + dispatch 不工作 → 字面进 chat_history 污染;P1.media / apple_calendar / bilibili 已 ship 同款问题无观察到 regression,接受 trade-off;后续可独立 PR 改 regex 容忍单字 |
+| ⚠️ **LLM 路径混淆**(web vs local) | **中** | web 和 local 都有 `play_song` / `play_playlist` action,LLM 需正确选 dispatcher;tool_addendum 引导明示 "用户说'放 X 歌'通常选 netease_local(mpv 自动播放),除非用户指定走 NCM 客户端"(per 现 tool_addendum.py:94 引导)|
+
+**总风险 = 中-低**;web vs local 路径选择是新引入决策点,LLM 可能初期 confused,smoke 2 必跑确认。
+
+### 2.6 估省 token (按 lesson #8 实写估算)
+
+#### netease_web (7 cap,类 bilibili pattern,ROI 偏高范围)
+
+baseline: **1,345 token**
+
+dispatcher 实写预估:
+- description: ~600 chars(列 7 action + 用法引导含 mpv vs NCM 路径说明 + like_current 二步前置 media)
+- parameters_schema: ~800 chars(action enum 7 + 6 类 union 字段)
+- wrap: ~80 chars
+- 合计 ~1,480 chars × ~0.45 token/char = **~665 token**
+
+→ **估省 web = 1,345 - 665 = ~680 token**
+
+#### netease_local (6 cap,混合 pattern)
+
+baseline: **894 token**
+
+dispatcher 实写预估:
+- description: ~400 chars(列 6 action + mpv 上下文 + 与 web 路径区别说明)
+- parameters_schema: ~400 chars(action enum 6 + 3 类 union 字段)
+- wrap: ~80 chars
+- 合计 ~880 chars × ~0.45 token/char = **~395 token**
+
+→ **估省 local = 894 - 395 = ~500 token**
+
+#### 合计
+
+| dispatcher | baseline | dispatcher 预估 | 估省 |
+|---|---|---|---|
+| netease_web | 1,345 | ~665 | **~680** |
+| netease_local | 894 | ~395 | **~500** |
+| **合计** | **2,239** | **~1,060** | **~1,180 token** |
+
+vs PM 期望 ~800-1,200 → **落上沿**(因 web group 类 bilibili pattern 偏高 ROI);vs §3 原估 -2,360 偏低 ~2x(lesson #8 校正方向一致)。
+
+按 bilibili pattern 实测 reduction 略超预估 ~30%(本节预估 -1,180 可能实测 -1,300-1,500 上沿)。
+
+### 2.7 收口 (Stage 1)
+
+- ✅ 13 cap audit(JSON chars 4,860 / token 2,239 / avg 173;web 7×192=1,345 / local 6×149=894)
+- ✅ 双 dispatcher 分组按 D1 决策 web/local 拆 — netease_web(7) + netease_local(6)
+- ✅ 三 grep audit 完整(lesson #7 + #9 应用):
+  - mode 1:11 行 LLM 引导文必改;sanitize chain 标记 lesson #10 候选
+  - mode 2:零反向 import handler(不需 alias)
+  - mode 3:frontend tool_labels.ts retro-fix 需新加 2 prefix
+- ✅ **新发现 lesson #10**:capability-tag fallback regex `_CAPABILITY_TAG_RE` 强制 `.` 模式,fold 单字 cap 后 fallback 失效;CC 倾向接受 trade-off
+- ✅ 4 文件改动 plan:netease_music / netease_playback / tool_addendum / tool_labels.ts
+- ✅ 风险评估 = 中-低,主要 web vs local 路径选择需 smoke 2 confirm
+- ✅ 估省 ~1,180 token(web ~680 + local ~500,落 PM 预期上沿)
+
+→ **Stage 1 完成,等 PM 审 + 拍板**:
+- 双 dispatcher 命名 `netease_web` + `netease_local` lock?
+- lesson #10 接受 trade-off (CC 倾向) 还是独立 PR 改 regex?
+- 进 Stage 2 落代码。
