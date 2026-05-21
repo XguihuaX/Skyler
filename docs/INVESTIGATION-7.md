@@ -1,7 +1,11 @@
 # Investigation 7 · 子轨 B 工具治理实施收尾（P1.bilibili + P1.netease）
 
 > 接 INV-6 915 行封存（2026-05-21）。
-> 模板 reference: INV-6 §2.7.4（dispatcher 6 要点）+ §3.8（lesson #7 双 grep / lesson #8 实写偏差）。
+> 模板 reference:
+>   - INV-6 §2.7.4 dispatcher 6 要点(命名 / union schema / handler 实现 / 退役方式 / smoke 三档 / 行为兼容)
+>   - **lesson #7** 双 grep audit(cap-name pattern + Python module import pattern)— 继承 INV-6 §3.8
+>   - **lesson #8** dispatcher 实写 chars 比预估高 30-80%(后续 group 按实写估算)— 继承 INV-6 §3.8
+>   - **lesson #9** frontend `startsWith` 模式与 cap-name grep / module import grep 都不同,fold 单字 namespace 后 prefix 失 mapping → UX 降级 — 本 INV §1.7 新增(2026-05-21 P1.bilibili Stage 2 暴露 + retro-fix)
 > 期望管理: 按 lesson #8 校正,剩余两刀实际 saving 可能 -1,300 到 -3,200 token(vs §3 原估 -4,510),仍显著但低于乐观估计。
 
 ## §1 P1.bilibili 11→1 入口折叠 (Stage 1 audit + 适配 plan, 2026-05-21)
@@ -242,3 +246,122 @@ vs §3 原估 -2,150,**实际是预估 ~2.4x 偏低**(与 lesson #8 校正方向
 特异 ⚠️ 待 PM 拍板:
 - frontend tool_labels.ts option A 修法(顺手补 P1.media + P1.apple_calendar 同款漏修)是否合并入 P1.bilibili Stage 2 commit?
 - 还是独立刀单 ship?
+
+### 1.7 Stage 2 实施记录(2026-05-21)
+
+#### 1.7.1 Commit + 改动
+
+- commit:(本 commit) `refactor(capabilities): fold bilibili 11 caps into dispatcher (saves ~1,169 tokens, P1 template reuse #2; frontend label retro-fix included)`
+
+PM 2026-05-21 三件拍板:
+- frontend option A · 采纳合并入本 commit(含 P1.media + P1.apple_calendar retroactive 修正)
+- 估省 ~900 token · ack(实测 -1,169 超中位数 ~30%)
+- lesson #9 · 采纳,本节收口 + header reference list 标 #7/#8 继承 + #9 新增
+
+| 文件 | 改动 | 大小 |
+|---|---|---|
+| `backend/capabilities/bilibili.py` | 删 11 旧 cap decorator + 11 handler;新增 1 dispatcher decorator + `bilibili_dispatch` + 11 `_handle_*` internal + `_BILIBILI_ACTION_HANDLERS` dict + 5 类必填校验 | -370 / +175 = 净减 ~195 行 |
+| `backend/agents/prompt/tool_addendum.py:100-114` | 8 处引导文 `→ bilibili.X` → `→ bilibili(action="X", ...)` | +8 / -8 |
+| `frontend/src/lib/tool_labels.ts:19-52` | 3 处 prefix 去末尾 `.`(option A retro-fix:media / apple_calendar / bilibili)+ 注释说明 fold 兼容 | +9 / -3 |
+
+#### 1.7.2 三条 smoke 全 PASS
+
+##### Smoke 1 · ToolRegistry
+
+```
+bilibili* cap in registry: ['bilibili']
+_get_all_tools count: 40 (was 50; 净减 10:11 删 + 1 加)
+tools_schema POST-P1.bilibili: 8,437 tokens (P1.apple_calendar baseline 9,606)
+P1.bilibili reduction: 1,169 tokens
+```
+
+##### Smoke 2 · LLM 调用 dispatcher(11 action 全覆盖)
+
+11 query 各发一次,**11/11 调 bilibili dispatcher**:
+
+```
+[ 1] expect=search_video       → ['bilibili'] ✅
+[ 2] expect=get_video_info     → ['bilibili'] ✅ (retry 用真 BV URL 后)
+[ 3] expect=search_user        → ['bilibili'] ✅
+[ 4] expect=get_user_videos    → ['bilibili'] ✅
+[ 5] expect=hot_videos         → ['bilibili'] ✅
+[ 6] expect=get_ranking        → ['bilibili'] ✅
+[ 7] expect=get_subtitles      → ['bilibili', 'bilibili'] ✅ (retry 用真 BV URL 后,LLM 链路调 2 次)
+[ 8] expect=get_my_history     → ['bilibili'] ✅
+[ 9] expect=get_my_followings  → ['bilibili'] ✅
+[10] expect=get_later_watch    → ['bilibili'] ✅
+[11] expect=get_favorites      → ['bilibili'] ✅
+```
+
+初跑 [2] 和 [7] 用占位 BV(`BVxxx` / `BV1xx`)LLM 合理拒调(LLM 行为正确,不调假数据上的工具);用真 BV URL 形式 `bilibili.com/video/BV1uv411B7tH` 重跑后 **11/11 全 ✅**。
+
+##### Smoke 3 · dispatcher routing 6 档
+
+```
+unknown action          → {ok: False, error: "unknown action: 'unknown_X'; valid: [...11 项]"}
+search_video no keyword → {ok: False, error: "keyword required when action=search_video"}
+search_user no keyword  → {ok: False, error: "keyword required when action=search_user"}
+get_user_videos no mid  → {ok: False, error: "mid required when action=get_user_videos"}
+get_video_info no bvid/aid → {ok: False, error: "bvid or aid required when action=get_video_info"}
+get_subtitles no bvid/aid  → {ok: False, error: "bvid or aid required when action=get_subtitles"}
+hot_videos real routing → type=dict, keys=['result', 'page']  ✅ 真路由到 _bili.hot_videos
+```
+
+✅ 6 档(unknown + 5 必填校验 + 真 routing)全正确。
+
+#### 1.7.3 token 减幅累计
+
+| 阶段 | tools_schema token | 累计减幅 vs INV-3 §③ 13,250 baseline |
+|---|---|---|
+| INV-3 §③ baseline | 13,250 | 0 |
+| P2 (`72808ef`) | 10,336 | -2,914 (22.0%) |
+| P3 (`81205f5`) | 9,954 | -3,296 (24.9%) |
+| P1.media (`a835677`) | 9,697 | -3,553 (26.8%) |
+| P1.apple_calendar (`f20a931`) | 9,606 | -3,644 (27.5%) |
+| **P1.bilibili (本 commit)** | **8,437** | **-4,813 (36.3%)** |
+
+P1.bilibili 单刀 **-1,169 token**,**超 PM 预期 -900 中位数 ~30%**。dispatcher 实写比 §1.6 估算的 ~1,030 token 更精简(实测 ~1,000-ish,但 baseline 也比 11×175=1,924 稍高:实际整 schema list JSON wrap 含 separator overhead)。
+
+lesson #8 校正方向反转出现:bilibili 这种 long-desc cap 多的 group,dispatcher 单一 description 取代 11 个 long desc,**reduction 大于预估**。
+
+#### 1.7.4 frontend retro-fix 详注
+
+`frontend/src/lib/tool_labels.ts` 改 3 处 prefix 去 `.`,补 P1.media + P1.apple_calendar + P1.bilibili 同款 fold-后失 mapping 漏修:
+
+```typescript
+{ prefix: 'apple_calendar', label: '查日历…' },  // INV-7 §1.7 retro-fix
+{ prefix: 'bilibili', label: '看视频信息…' },   // INV-7 §1.7 retro-fix
+{ prefix: 'media', label: '控制播放…' },        // INV-7 §1.7 retro-fix
+```
+
+`'media'.startsWith('media')` = true(fold 后单字命中);`'media.next_track'.startsWith('media')` = true(假设 fold 前 / 未来多字仍兼容);**无 prefix collision**(生产无 `media_X` / `bilibili_X` / `apple_calendar_X` 系列 cap)。
+
+⚠️ **改后需 frontend `yarn build` 才在生产 UI 生效**;本 commit 不触发 build,**挂着等 PM 任何时候 yarn build**。当前生产 UX 降级状态(loading label 显 fallback "查询中…"而非具体文案)持续到下次 frontend rebuild。
+
+#### 1.7.5 Lesson #9 · frontend startsWith 模式与 cap-name grep / module import grep 都不同
+
+**新发现**(P1.bilibili Stage 1 audit 实测):前端 / 其它 layer 可能用 `startsWith(prefix + '.')` 形式匹配 cap-name,fold 单字 namespace 后(cap name 无 `.`),prefix match 失效 → UX 降级 / fallback。
+
+- P1.media 已默认引入此 regression(commit `a835677` 漏修)
+- P1.apple_calendar 已默认引入此 regression(commit `f20a931` 漏修)
+- P1.bilibili Stage 1 audit 暴露 + Stage 2 顺手 retro-fix 补三处
+
+**后续 P1.netease(子轨 B 收尾刀)Stage 1 audit 必走三 grep 模式**:
+1. cap-name pattern(`netease.<action>`)
+2. Python module import pattern(`from backend.capabilities.netease_music / netease_playback import`)
+3. **frontend startsWith pattern**(`startsWith\('netease\.'\)` / `prefix: 'netease.'`)
+
+**Lesson 抽象**:
+
+> dispatcher fold 后,凡是 backend / frontend / docs 任何地方按 `<group>.` prefix match 的 string-level pattern,**fold 后单字 cap name 无 `.` 必然失 mapping**。Stage 1 audit 必走完整三 grep:cap-name / module import / frontend prefix。
+
+#### 1.7.6 收口
+
+- ✅ 3 文件改动 ship(bilibili.py 11→1 主结构 + tool_addendum 8 处微改 + tool_labels.ts 3 处 retro-fix)
+- ✅ 3 条 smoke 全 PASS(11 LLM query 100% 调新 bilibili dispatcher + 6 档 dispatcher routing)
+- ✅ 实测 -1,169 token(超 PM 预期 ~900 中位数 ~30%),累计 36.3% reduction
+- ✅ frontend retro-fix 顺手补 P1.media + P1.apple_calendar 同款漏修(需 yarn build 才生效)
+- ✅ lesson #9 三 grep 模式记入(后续 P1.netease 必走)
+- 🔒 零 backend cap regression / handler 逻辑改动
+
+→ **P1.bilibili 子轨 B 实施第 5 刀 closed**。下一刀 = **P1.netease 13→2 双 dispatcher**(子轨 B 收尾刀,模板复用 #3 + 双 path 设计),Stage 1 必走三 grep audit。

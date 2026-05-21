@@ -16,21 +16,29 @@ interface ToolLabelEntry {
 }
 
 // 顺序敏感:第一个 startsWith 匹配胜出。``ext.`` 类前缀放最前
+//
+// 2026-05-21 INV-7 §1.7 retro-fix:P1.media / P1.apple_calendar / P1.bilibili
+// fold 后 cap name 是单字 namespace(`media` / `apple_calendar` / `bilibili`),
+// 失去 `.` 后缀。下面 3 处 prefix 去末尾 `.` 兼容单字 + 多字:
+//   `'media'.startsWith('media')` = true(fold 后单字)
+//   `'media.next_track'.startsWith('media')` = true(假设 fold 前/未来多字仍兼容)
+// **改后需 frontend yarn build 才在生产 UI 生效**(本 commit 不触发 build)。
+// 详 INV-7 §1.3 特异 c · option A。
 const TOOL_LABEL_TABLE: ToolLabelEntry[] = [
   // chunk 14 — activity timeline
   { prefix: 'activity.', label: '查今天的活动…' },
-  // calendar(apple_calendar / google_calendar / calendar router)
-  { prefix: 'apple_calendar.', label: '查日历…' },
+  // calendar(apple_calendar fold 单字 + google_calendar / calendar router)
+  { prefix: 'apple_calendar', label: '查日历…' },  // INV-7 §1.7 retro-fix (P1.apple_calendar fold)
   { prefix: 'google_calendar.', label: '查日历…' },
   { prefix: 'calendar.', label: '查日历…' },
   // chunk 14 activity also includes time anchor — fallback 兜底
   { prefix: 'time.', label: '看看时间…' },
   // music(UX-005:netease 全归 music,含 API + local 共 13 caps)
   { prefix: 'netease.', label: '查歌单…' },
-  // bilibili
-  { prefix: 'bilibili.', label: '看视频信息…' },
-  // media_control(系统级播放控制)
-  { prefix: 'media.', label: '控制播放…' },
+  // bilibili (INV-7 §1.7 P1.bilibili fold 单字)
+  { prefix: 'bilibili', label: '看视频信息…' },  // INV-7 §1.7 retro-fix (P1.bilibili fold)
+  // media_control(系统级播放控制;INV-6 §2 P1.media fold 单字)
+  { prefix: 'media', label: '控制播放…' },  // INV-7 §1.7 retro-fix (P1.media fold)
   // social (UX-005 新建,目前 xhs 1 cap)
   { prefix: 'xhs.', label: '解析小红书…' },
   // screen(chunk 8a)
