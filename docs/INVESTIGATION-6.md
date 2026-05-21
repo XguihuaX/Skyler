@@ -904,3 +904,12 @@ P1.apple_calendar 单刀 -91 token,**远低于 §3.6 估 ~317**。
 - 🔒 零 calendar router / google_calendar / 其它 calendar 系列改动
 
 → **P1.apple_calendar 子轨 B 实施第 4 刀 closed**。下一刀 = **P1.bilibili 11→1**(模板复用 #2,最大头),Stage 1 必走双 grep audit(§2.7.4 #7)。
+
+---
+
+## 封存说明
+
+> INV-6 自 2026-05-21 子轨 B 工具治理实施前 3 刀(§1 P3 / §2 P1.media / §3 P1.apple_calendar)完整收口节点封存(906 → 本封存追加后 ~915 行)。
+> 后续 P1.bilibili + P1.netease 实施记录见 INVESTIGATION-7.md。
+> dispatcher 模板 6 要点(§2.7.4) + lesson #7 双 grep 模式 + lesson #8 dispatcher 实写偏差 沉淀于此供 INV-7 reference。
+> **封存。** 不再追加。
