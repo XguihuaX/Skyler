@@ -1105,3 +1105,16 @@ P2 描述精简(top 10 长 cap)实施完成。
 - **估 vs 实测差异**:§3.2 估 ~700 tokens,实测 ~2,914 tokens,**实际是预估 4 倍**。原因:§3.2 用 chars × 0.4 估,但 Qwen tokenizer 对长 description(含大量中文 + markdown + 特殊字符)实际密度接近 chars × 1.0-2.0,**长 desc 比线性 chars 估算更"重"**。这是子轨 B 真正的 ROI 放大器
 - **Mai smoke**:`<thinking>` + `<state_update>` + `<motion>` 全套 tag 正常输出,persona 还原零 regression
 
+
+## 封存说明（2026-05-21）
+
+INV-4 至本 commit 共 ~1,107 行,完整覆盖子轨 B 工具治理的:
+- §1 全 capability 枚举(62 静态 + MCP runtime)
+- §2 proactive / reactive / hybrid 三分审计(1 + 5 + 52)
+- §3 三类候选评估 + v4.1 实施清单(6 动作)
+- §3.2.1 P2 desc 精简改动提案(10 cap current vs proposed,Stage 1 草稿)
+- §3.7 P2 实施收口(commit 72808ef · ~2,914 tokens / 22% reduction 实测)
+
+**封存。** 子轨 B 后续实施(P3 起 + P1 入口折叠)迁移至 **INV-6**,本文件不再追加。
+
+per PM 2026-05-21 决定:§3.2.1 接受微跨线 trade-off(评估完整章节语义紧贴 §3.1 / §3.5,拆出失上下文损失大于纪律损失,与 INV-3 §⑩ 1098 行封存先例对齐);Stage 2 收口 +1 行后正式封存。
