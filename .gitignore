@@ -63,3 +63,5 @@ frontend/public/backgrounds/*
 frontend/public/splash/*
 !frontend/public/splash/.gitkeep
 !frontend/public/splash/README.md
+api_key.txt
+scripts/fish_probe_outputs/
