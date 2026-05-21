@@ -112,10 +112,12 @@ def filter_samples_by_tolerance(
 def _render_layer_a(
     available_motions: Optional[List[str]],
     tts_language: str = "zh",
+    voice_provider: str = "cosyvoice",
 ) -> str:
     return _jinja_env.get_template("layer_a.j2").render(
         available_motions=available_motions or [],
         tts_language=tts_language,
+        voice_provider=voice_provider,
     )
 
 
@@ -211,6 +213,7 @@ async def render_system_prompt(
     available_motions: Optional[List[str]] = None,
     llm_vendor: str = "qwen",
     tts_language: str = "zh",
+    voice_provider: str = "cosyvoice",
 ) -> tuple[str, str]:
     """渲染 5 层 system prompt,返 (stable_prefix, variable_suffix) 二元组。
 
@@ -270,7 +273,7 @@ async def render_system_prompt(
 
     # ── stable 段:Layer A + B + C stable + (addendum 已在 B 内) ──────────
     stable_parts: List[str] = [
-        _render_layer_a(available_motions, tts_language),
+        _render_layer_a(available_motions, tts_language, voice_provider),
         _render_layer_b(mode, tool_prompt_addendum),
         _render_layer_c_stable(persona, states, llm_vendor, filtered_samples),
     ]

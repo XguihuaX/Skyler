@@ -1209,7 +1209,9 @@ async def _build_messages(
 
             # v4 segment 2 §2.1:从 character.voice_model JSON 抽 tts_language。
             # ja/en 走 layer_a.j2 双语 directive,LLM 输出 <ja>...</ja>。
+            # INV-9 §5:同段抽 voice_provider 给 Layer A1 fish 子分支教 markers。
             tts_language = "zh"
+            voice_provider = "cosyvoice"
             try:
                 async with AsyncSessionLocal() as session:
                     vm_str = (await session.execute(
@@ -1221,6 +1223,9 @@ async def _build_messages(
                         _t = _vm.get("tts_language")
                         if _t in ("zh", "ja", "en"):
                             tts_language = _t
+                        _p = _vm.get("provider")
+                        if isinstance(_p, str) and _p.strip():
+                            voice_provider = _p.strip().lower()
             except (json.JSONDecodeError, TypeError):
                 pass
             except Exception:
@@ -1244,6 +1249,7 @@ async def _build_messages(
                 temp_instructions=temp_instructions,
                 llm_vendor=llm_vendor,
                 tts_language=tts_language,
+                voice_provider=voice_provider,
             )
             logger.info(
                 "[renderer] mode_origin=%s character_id=%s "

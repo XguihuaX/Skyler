@@ -293,3 +293,196 @@ per Step 5 决策 1 lock:fish 缺 ref 字段**不静默 fallback** — parse_voi
 
 → Phase 2 §2+§3+§4 closed。下一刀 = §5+§6 合刀(Hard Req per-provider 双重隔离 LLM + sanitize 两端同时)。
 
+---
+
+## §5+§6 Hard Req per-provider 双重隔离(Phase 2 第 3 commit, 2026-05-22)
+
+> PM 拍板合刀:Hard Req 本身要求两端原子化同时落 — §5 alone(LLM 教 markers 但 cosyvoice 收 → garbled)+ §6 alone(strip 机制有了但 LLM 不发 → 没用),两个一起 = airtight per-provider isolation。
+> β inline `[bracket]` schema final lock(PM 2026-05-22 听完 WAV 确认 work)+ Mai canon range marker 集 PM 直接给(冷静档 / 挖苦档 / 温柔档 / 罕见档 / Pause + 明确禁用激动 / 大声 / 失控类)。
+
+### §5 改动 · 生成端(LLM prompt)
+
+| 文件 | 改动 |
+|---|---|
+| `backend/agents/prompt/templates/layer_a.j2` | +50 行 / ja directive 内加 `{% if voice_provider == 'fish' %}` 子分支 |
+| `backend/agents/prompt/renderer.py` | +3 行 / `render_system_prompt` + `_render_layer_a` 加 `voice_provider: str = "cosyvoice"` 参数 |
+| `backend/agents/chat.py` | +5 行 / 同段 voice_model JSON parse 抽 `voice_provider` 字段透传 `render_system_prompt` |
+
+`layer_a.j2` fish 子分支教 Mai canon range marker 集(per PM lock):
+
+```
+[Fish s2-pro 句内情感 markers - 仅 fish provider 模式启用]
+
+placement: 单 / 多 / mid-sentence
+适用 Mai 风格 marker 集:
+  - 冷静档: [composed] / [calm] / [deadpan]
+  - 挖苦档: [teasing] / [sarcastic] / [dry tone]
+  - 温柔档: [soft chuckle] / [gentle] / [soft voice]
+  - 罕见档: [mildly surprised] / [mild embarrassment]
+  - 停顿(跨情绪): [short pause] / [pause] / [long pause]
+
+明确禁用 — 超 Mai canon range:
+  - [excited] / [shouting] / [screaming] / [laughing loudly]
+  - 任何含"激动 / 大声 / 失控"语义的
+  - 含"angry / 愤怒大叫"语义的强冲击 marker
+
+格式约束:
+  - markers 只在 <ja> 内,不进中文段
+  - 不嵌套 / 不闭合形态
+  - 每意群至多 2-3 markers
+  - 平静对话可不带 marker
+```
+
+含 ✓ 正确示例 + 3 类 ✗ 错误示范(marker 误入中文段 / 用 paren / 超 canon range)。
+
+注:**Mai marker 集是针对当前唯一 fish provider 角色的具体指导**;未来其它角色走 fish 时应按 character 定制 marker 集(本 commit 不实施,future expansion hook 在 `layer_a.j2` fish 分支位置)。
+
+### §6 改动 · 接收端(sanitize chain + provider 分流)
+
+| 文件 | 改动 |
+|---|---|
+| `backend/utils/text_filters.py` | +30 行 / `_FISH_EMOTION_MARKER_RE` + `strip_fish_emotion_markers` 新增;`strip_ja_en_tags_for_subtitle` 链尾追加 strip(字幕跨 provider 一律剥) |
+| `backend/tts/__init__.py` | +25 行 / `_PreprocessingEngine` 加 `provider` 参数 + per-provider 分流(fish pass-through / non-fish strip);`get_tts_engine` parse cfg.provider 透传;**拆 `_LEGACY_BRACKET_NOTATION_RE` 出 `_PREPROCESS_PATTERNS`** + `preprocess_tts_text(text, strip_bracket_notation=True)` opt-in 让 fish 路径跳过历史 v3-F `[stage direction]` 剥(否则 fish 路径 markers 被 preprocess 误剥) |
+
+关键发现 + fix(test 暴露):
+
+```python
+# Before fix:_PREPROCESS_PATTERNS 含 r"\[[^\]]+\]"(v3-F 时代设计剥
+#            [stage direction] / [aside] notation)→ fish 路径下也剥 markers
+# After fix:拆 _LEGACY_BRACKET_NOTATION_RE 独立 + opt-in 控制
+preprocess_tts_text(text, strip_bracket_notation=True)   # non-fish backward compat
+preprocess_tts_text(text, strip_bracket_notation=False)  # fish 路径 — 保留 [bracket]
+```
+
+`_PreprocessingEngine.synthesize` 完整双重 strip 链:
+
+```python
+is_fish = self._provider == "fish"
+cleaned = preprocess_tts_text(text, strip_bracket_notation=not is_fish)
+if not is_fish:
+    cleaned = strip_fish_emotion_markers(cleaned)  # 显式 + 兜底 LLM 错放 markers
+```
+
+字幕层兜底:
+
+```python
+# strip_ja_en_tags_for_subtitle:
+out = _JA_TAG_RE.sub("", text)
+out = _EN_TAG_RE.sub("", out)
+out = strip_fish_emotion_markers(out)  # ← 字幕跨 provider 一律剥
+```
+
+### §7 测试 · 35 NEW + 265 回归 = 337/337 PASS
+
+#### Smoke 1 · NEW `tests/test_fish_marker_isolation.py`(35 cases)
+
+```
+[1] strip_fish_emotion_markers 单元(8 子)
+    1.1 单 marker · [sarcastic] 剥                      1/1 PASS
+    1.2 多 markers 跨句 · 全剥                          1/1 PASS
+    1.3 mid-sentence [whisper] 剥                       1/1 PASS
+    1.4 无 marker · pass-through                        1/1 PASS
+    1.5 空 [] / 空白 [ ] 行为                           2/2 PASS
+    1.6 嵌套 [outer[inner]] · regex 非贪婪              1/1 PASS
+    1.7 中文【】不剥                                     1/1 PASS
+    1.8 空 / None                                        2/2 PASS
+[2] _PreprocessingEngine 分流(5 子)
+    2.1 fish · 透传 markers                              2/2 PASS
+    2.2 cosyvoice · 剥 markers                           2/2 PASS
+    2.3 edge · 剥 markers                                1/1 PASS
+    2.4 默认 cosyvoice · 剥                              1/1 PASS
+    2.5 全 markers strip 后空 · skip synth + inner 未调  2/2 PASS
+[3] e2e LLM raw → extract → preprocess engine(2 子)
+    3.1 fish 路径保留 markers                            2/2 PASS
+    3.2 cosyvoice 路径剥 markers                         2/2 PASS
+[4] subtitle 字幕层(3 子)
+    4.1 中文 + <ja>[marker]日语</ja> → 字幕 + 不含 [bracket] 2/2 PASS
+    4.2 中文误带 [bracket] → 字幕兜底剥                  2/2 PASS
+    4.3 无 marker pass-through                           1/1 PASS
+[5] layer_a.j2 fish 子分支渲染(3 子)
+    5.1 voice_provider='fish' · 渲染 Mai marker 引导     4/4 PASS
+    5.2 voice_provider='cosyvoice' · 不渲染 marker 引导  2/2 PASS
+    5.3 tts_language='zh' · 任何 provider 不渲染 ja markers 2/2 PASS
+
+Results: 35/35 passed
+```
+
+#### Smoke 2 · 直调集成 `scripts/fish_marker_e2e_smoke.py`
+
+Mai canon range 5 markers 各跑真合成 + cosyvoice mock 剥除 verify + subtitle 字幕跨 provider 剥除:
+
+```
+## Part 1 · fish 路径 5 markers 真合成
+[composed]      ✅ 1843ms / 213KB ≈ 2.42s → INV9_e2e_fish_composed.wav
+[sarcastic]     ✅  883ms / 148KB ≈ 1.67s → INV9_e2e_fish_sarcastic.wav
+[teasing]       ✅ 1042ms / 180KB ≈ 2.04s → INV9_e2e_fish_teasing.wav
+[gentle]        ✅ 2043ms / 139KB ≈ 1.58s → INV9_e2e_fish_gentle.wav
+[soft chuckle]  ✅ 1374ms / 201KB ≈ 2.28s → INV9_e2e_fish_soft_chuckle.wav
+
+## Part 2 · cosyvoice 路径(mock inner)· markers 剥除 verify
+5/5 OK — inner 收到全部不含 [bracket],仅日语内容
+
+## Part 3 · subtitle 字幕层 · 跨 provider 一律剥
+5/5 OK — 字幕全部不含 [bracket]
+
+e2e smoke: fish 5/5 + cosyvoice 5/5 + subtitle 5/5 = ✅ ALL PASS
+```
+
+5 WAV 输出到 `scripts/fish_probe_outputs/INV9_e2e_fish_*.wav`(`.gitignore` 已加),PM 听感对比 5 markers 声学表达 ↔ Mai canon range 是否契合。
+
+#### Smoke 3 · 邻近 6 suite 回归(302 cases · 0 regression)
+
+| Suite | Cases | 状态 |
+|---|---|---|
+| `test_sanitize_ja.py` | 32 | ✅ |
+| `test_text_filters_ja_whitelist.py` | 38 | ✅ |
+| `test_tts_final_guard.py` | 32 | ✅ |
+| `test_tts_strip_fallback.py` | 57 | ✅ |
+| `test_tts.py`(CosyVoice/Edge/SoVITS legacy) | 106 | ✅ |
+| `test_fish_provider.py` | 37 | ✅ |
+| **本 commit NEW** `test_fish_marker_isolation.py` | 35 | ✅ |
+| **TOTAL** | **337** | **337/337 PASS** |
+
+### §8 关键 invariant 锁(Hard Req 双重隔离契约 lock)
+
+- ✅ **生成端(LLM)**:`voice_provider == 'fish'` 时 Layer A1 教 Mai canon range markers + 明确禁用超 range markers;其它 provider 不教(prompt 渲染条件分支)
+- ✅ **接收端(provider 分流)**:`_PreprocessingEngine` 构造时 lock provider,synth 时 fish 路径 `preprocess_tts_text(strip_bracket_notation=False)` + 跳过 `strip_fish_emotion_markers`(完整透传)/ non-fish 路径相反(剥 + 显式 strip)
+- ✅ **字幕层**:`strip_ja_en_tags_for_subtitle` 链尾追加 `strip_fish_emotion_markers` — 任何 provider 字幕都剥 `[bracket]`,用户字幕**永远不**出现 marker
+- ✅ **切角色 / 切 provider 同步**:`get_tts_engine(voice_model)` 每 turn 重建 → provider 实时 lock 进 engine;LLM prompt 同步重渲染(per INV-8 §1.5.3 跨 turn voice 切换 audit:每 turn 重读 voice_model + 重渲染 prompt + 重建 engine);无 cache 滞后
+- ✅ **fish 失败 fallback CosyVoice 时**:turn 内含 markers 的 text → CosyVoice 收到 stripped 版(非 fish provider 的 _PreprocessingEngine 强制 strip),不被 `[bracket]` 噎到(Hard Req 第 2 条契合)
+- ✅ **legacy v3-F `[stage direction]` notation 剥行为 backward compat**:non-fish provider 走 `strip_bracket_notation=True` 保留历史行为(test_tts 等 106 cosyvoice cases 全绿实证)
+
+### §9 收口
+
+- ✅ §5 layer_a.j2 fish 子分支教 Mai canon range markers(50+ 行 Jinja directive)+ renderer / chat voice_provider 透传(3 行 + 5 行)
+- ✅ §6 strip_fish_emotion_markers + `_PreprocessingEngine` per-provider 分流 + 字幕兜底 + preprocess_tts_text 拆 bracket opt-in(发现并 fix LLM markers 被 preprocess 误剥的 bug)
+- ✅ 35 NEW + 265 邻近 regression + 7 markers 实际 fish 合成 + 5 cosyvoice mock 剥除 + 5 subtitle 剥除 = **337/337 cases / 5 fish synth / 0 regression**
+- ✅ 5 e2e Mai canon range markers WAV outputs 保留(`scripts/fish_probe_outputs/INV9_e2e_fish_*.wav`)PM 听感验证
+- 🔒 0 LLM 生成 / sanitize / TTS 主链路改动外的副作用;cosyvoice/edge/sovits legacy 路径完全不破
+- ⏳ 下一刀(Phase 2 收尾刀)= **§7 cost cap + profile_data JSON**(per INV-8 §1.收口.6 Q7 + PM Phase 2 收尾调整 — **§8 cid=1→cid=101 数据迁移取消**,PM 后续 persona 更新时手动处理 momo slot → Mai persona 内容更新)
+
+### §10 lesson(沉淀)
+
+#### Lesson INV-9 #4 · preprocess 链路与新增 marker 语义的潜在冲突
+
+`_PREPROCESS_PATTERNS` 含历史 v3-F 时代 `\[[^\]]+\]` regex 剥 `[stage direction]` notation,**与新 Fish `[bracket]` markers 语义冲突**(fish 路径 markers 被误剥)— test_fish_marker_isolation Part 2.1 / Part 3.1 暴露,fix = 拆 `_LEGACY_BRACKET_NOTATION_RE` 独立 + `preprocess_tts_text(text, strip_bracket_notation=True/False)` opt-in。
+
+**抽象**:引入新语法(markers / 新 tag / 新 schema)时必须 audit **现有 sanitize / preprocess 链路是否含相同字面**的剥除 regex;若有,需 **per-feature opt-in** 或拆独立 regex 让新语义路径绕开。**类比 INV-7 lesson #9 三 grep 模式 + INV-8 lesson #3 sanitize sub-language path 对称性**:多路径 / 多语义共用 sanitize 链时,各路径 / 各语义需有独立 control。
+
+#### Lesson INV-9 #5 · Hard Req 双重隔离的"两端原子化"必要性
+
+PM 决策"§5 + §6 合刀"立 lesson 实证 — 单端落地任一,系统都不工作:
+- §5 alone:LLM 教 markers 但 cosyvoice / edge / sovits 接收 → 字面念出 `[soft chuckle]` 等 → garbled
+- §6 alone:strip 机制 deploy 但 LLM 不发 markers(Layer A1 未注入引导)→ sanitize 无 effect 浪费
+
+**抽象**:跨层契约(LLM prompt ↔ runtime sanitize ↔ TTS provider)有双向依赖时,**两端必须同 commit 落地**;不可 split commit 留中间态。这是 INV-8 §1.5.12 lesson #4 "三层分工边界" 的对应正面例 — 三层不可错位修,**但跨层契约一致性需 atomic ship**。
+
+→ Phase 2 §5+§6 closed。下一刀 = **§7 cost cap + profile_data JSON**(决策 5 实施;Phase 2 收尾刀,per PM 调整 §8 cid 迁移取消)。
+
+**Phase 2 进度**:
+- ✅ §1 sanitize A1 fix(`0aba951`)
+- ✅ §2+§3+§4 TTS 抽象 + Fish provider(`f07a842`)
+- ✅ §5+§6 per-provider 双重隔离(本 commit)
+- ⏳ §7 cost cap + profile_data JSON(Phase 2 收尾刀)
+- ❌ ~~§8 cid=1→cid=101 数据迁移~~(per PM 2026-05-22 取消 · 改 PM 手动 momo slot persona 更新)
+

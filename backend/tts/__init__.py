@@ -27,7 +27,7 @@ from backend.tts.base import TTSBase, TTSProvider, split_sentences
 from backend.tts.edge import EdgeTTSProvider
 from backend.tts.sovits import SoVITSProvider
 from backend.tts.voice_config import VoiceConfig, parse_voice_config
-from backend.utils.text_filters import strip_all_for_tts
+from backend.utils.text_filters import strip_all_for_tts, strip_fish_emotion_markers
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +46,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # 仅保留不在 strip_all_for_tts 内的剩余模式（动作 / 注释 / 中括号 + motion 兜底）
+# INV-9 §6:拆 `\[[^\]]+\]` 出 `_PREPROCESS_PATTERNS` 作独立 `_LEGACY_BRACKET_NOTATION_RE`,
+# 让 fish provider 路径走 `preprocess_tts_text(text, strip_bracket_notation=False)`
+# 保留 ``[bracket]`` Fish emotion markers 透传 SDK;non-fish 路径保留原 backward
+# compat 行为(剥 LLM v3-F 时代偶发输出的 [stage direction] / [aside] 字面)。
 _PREPROCESS_PATTERNS: List[Pattern[str]] = [
     re.compile(r"<motion>[^<]*</motion>", re.IGNORECASE),
     re.compile(r"\*[^*]+\*"),
     re.compile(r"\([^)]+\)"),
     re.compile(r"（[^）]+）"),
-    re.compile(r"\[[^\]]+\]"),
     re.compile(r"【[^】]+】"),
 ]
+_LEGACY_BRACKET_NOTATION_RE: Pattern[str] = re.compile(r"\[[^\]]+\]")
 
 # Python3 的 \w（str 模式默认 unicode）已覆盖汉字 / 字母 / 数字
 _PRONOUNCEABLE_RE = re.compile(r"\w", re.UNICODE)
@@ -106,13 +110,18 @@ def _tts_input_final_guard(text: str) -> Optional[str]:
     return cleaned
 
 
-def preprocess_tts_text(text: str) -> str:
+def preprocess_tts_text(text: str, strip_bracket_notation: bool = True) -> str:
     """剥离不应读出口的标记，返回交给 TTS 合成的纯文本。
 
     Args:
         text: LLM 原文，可能含 ``*动作*`` / ``(注释)`` / ``<emotion>`` /
               ``<thinking>`` / ``<state_update>`` / ``<tool_call>`` /
               ``<function_calls>`` / ``<invoke>`` / ```` ```json ```` 等标记。
+        strip_bracket_notation: INV-9 §6 新增。
+              True (默,backward compat) → 剥 v3-F 时代 ``[xxx]`` notation
+              (LLM 偶发输出的 ``[stage direction]`` / ``[aside]`` 字面)。
+              False → 保留 ``[xxx]`` 让 Fish emotion markers 透传 SDK
+              (fish provider 路径专用,_PreprocessingEngine fish 分支调用)。
 
     Returns:
         清理后的文本；如果剥离后为空或仅余标点 / 空白 → 返回 ``""``，
@@ -134,6 +143,10 @@ def preprocess_tts_text(text: str) -> str:
     out = strip_all_for_tts(text)
     for pat in _PREPROCESS_PATTERNS:
         out = pat.sub("", out)
+    if strip_bracket_notation:
+        # INV-9 §6:non-fish 路径剥历史 [stage direction] notation;
+        # fish 路径 strip_bracket_notation=False 跳过,保留 emotion markers
+        out = _LEGACY_BRACKET_NOTATION_RE.sub("", out)
     # 行内多空格合并；保留换行（CosyVoice 不在意，且 split_sentences 上游已切句）
     out = _WS_RE.sub(" ", out).strip()
     if not out or not _PRONOUNCEABLE_RE.search(out):
@@ -269,22 +282,54 @@ class _PreprocessingEngine(TTSBase):
 
     剥离后空文本 → 直接返回 None，跳过下游网络调用。所有 ``get_tts_engine``
     返回的实例都被这一层包住，调用方无需感知。
+
+    INV-9 §6 · per-provider sanitize Hard Req(2026-05-22 PM lock + β inline
+    `[bracket]` schema final lock):
+      - provider == 'fish' → pass-through(保留 [bracket] markers 透传 Fish SDK)
+      - provider != 'fish' → strip [bracket](剥除送 CosyVoice / Edge / SoVITS)
+    构造时由 ``get_tts_engine`` 传入 provider 字段一次性 lock,后续 synth
+    调用根据该 provider 决定是否调 ``strip_fish_emotion_markers``。
     """
 
-    def __init__(self, inner: TTSBase) -> None:
+    def __init__(self, inner: TTSBase, provider: str = "cosyvoice") -> None:
         self._inner = inner
+        self._provider = (provider or "cosyvoice").lower()
 
     async def synthesize(
         self, text: str, emotion: str = "默认",
     ) -> Optional[bytes]:
-        cleaned = preprocess_tts_text(text)
+        # INV-9 §6:fish 路径 preprocess 不剥 [bracket](emotion markers
+        # 透传 Fish SDK);non-fish 路径走 backward compat 剥 [stage direction]
+        # notation,然后 _PreprocessingEngine 内额外调 strip_fish_emotion_markers
+        # (explicit + 兜底 LLM 错放 markers 给 non-fish 角色场景)。
+        is_fish = self._provider == "fish"
+        cleaned = preprocess_tts_text(text, strip_bracket_notation=not is_fish)
         if not cleaned:
             logger.info("[tts] synth skipped (empty after strip) raw=%r", text[:80])
             return None
+        # INV-9 §6:non-fish 路径额外剥 Fish [bracket] markers
+        if not is_fish:
+            stripped = strip_fish_emotion_markers(cleaned)
+            if stripped != cleaned:
+                logger.info(
+                    "[tts] non-fish provider=%s · stripped [bracket] markers "
+                    "(len %d → %d)",
+                    self._provider, len(cleaned), len(stripped),
+                )
+                cleaned = stripped
+                if not cleaned.strip():
+                    logger.info(
+                        "[tts] synth skipped (empty after fish-marker strip) "
+                        "provider=%s", self._provider,
+                    )
+                    return None
         # v3-G chunk 4 hotfix-1：日志验收点。e2e 跑场景时检查这一行，确保
         # synth_text 不带 <tool_call> / <invoke> / <function_calls> /
         # <state_update> / <emotion> / <thinking> / json 标签。
-        logger.info("[tts] synth_text=%r emotion=%s", cleaned[:120], emotion)
+        logger.info(
+            "[tts] synth_text=%r emotion=%s provider=%s",
+            cleaned[:120], emotion, self._provider,
+        )
         return await self._inner.synthesize(cleaned, emotion=emotion)
 
 
@@ -351,5 +396,22 @@ def get_tts_engine(voice_model: Optional[str] = None) -> TTSBase:
         emotion=...)``，永远不会抛 (失败返回 None)。返回的 engine 自动跑
         v3-F 文本预处理（剥离 ``*动作*`` / ``(注释)`` / 各种标签），剥后
         空文本会跳过实际合成直接返回 None。
+
+    INV-9 §6：``_PreprocessingEngine`` 接 provider 参数决定是否 strip Fish
+    ``[bracket]`` markers — fish 路径 pass-through 透传 SDK，non-fish 路径
+    剥除避免 cosyvoice/edge/sovits 念出字面 marker。provider 字段从
+    voice_model JSON parse 出来一次性 lock 进 engine（per-turn 重建）。
     """
-    return _PreprocessingEngine(_build_engine(voice_model))
+    # INV-9 §6:多走一次 parse 拿 provider — JSON parse 是 ms 级,不是
+    # hot path(per turn 一次重建);保持 _build_engine 接口稳定不返 tuple,
+    # 让现有 test_fish_provider.py 等 hook 不破。
+    default = VoiceConfig(**get_default_voice_config())
+    try:
+        cfg = parse_voice_config(voice_model, default)
+        provider = cfg.provider
+    except ValueError:
+        # parse fish 缺 ref raise — 后续 _build_engine 内同样会 raise
+        # (parse_voice_config 调用同一 path),让 raise 在 _build_engine 触发
+        # (单一 raise 路径)而非此处提前。
+        provider = "cosyvoice"
+    return _PreprocessingEngine(_build_engine(voice_model), provider=provider)

@@ -393,11 +393,54 @@ def extract_tts_text(raw_text: str, tts_language: str) -> str:
     return strip_all_for_tts(cleaned)
 
 
+# INV-9 §6 · Fish s2-pro inline [bracket] emotion markers · per-provider 双重隔离
+# (Hard Req · PM lock 2026-05-22 + β inline schema final lock):
+#
+#   - 生成端(Layer A1 prompt fish 子分支)教 LLM 在 <ja> 内嵌入 [bracket] markers
+#   - 接收端(本模块 + _PreprocessingEngine per-provider 分流)决定是否 strip:
+#       provider == 'fish' → pass-through(markers 保留送 Fish SDK 原生支持)
+#       provider != 'fish' → strip(markers 剥除送 cosyvoice/edge/sovits)
+#   - 字幕路径(strip_ja_en_tags_for_subtitle 链尾)— 任何 provider 都剥
+#     (用户字幕永远不应出现 [bracket],per INV-8 §1.5.7 Case 6 降级矩阵)
+#
+# 语法:Fish s2-pro 自然语言 emotion markers 形如 [sarcastic] / [soft chuckle] /
+# [whisper] / [gentle] 等,15,000+ tags 不限固定集(per INV-8 §1.3.4)。
+# regex 设计:匹配 [<non-bracket-content>] — 不嵌套不允许跨 ]。
+_FISH_EMOTION_MARKER_RE = re.compile(r"\[[^\[\]]+\]")
+
+
+def strip_fish_emotion_markers(text: str) -> str:
+    """剥 Fish s2-pro inline [bracket] emotion markers。
+
+    用于 per-provider 接收端:non-Fish provider 调用前必走此函数,避免 CosyVoice /
+    Edge / SoVITS 字面念出 "left bracket sarcastic right bracket" 之类。Fish
+    provider 路径**跳过**此函数(保留 markers 透传给 Fish SDK 原生处理)。
+
+    字幕路径(``strip_ja_en_tags_for_subtitle`` 链尾)— 跨 provider 一律剥,
+    用户看到的字幕永远不含 [bracket]。
+
+    边角:空 [] / 空白 [   ] → 不匹配(_FISH_EMOTION_MARKER_RE 要求 1+ 非括号
+    字符)— 这种形态本身是 LLM 错标,无情感语义,保留字面或剥都 OK;选择
+    "不剥"避免误剥用户合法中括号(eg. 数学表达式 [n+1])。
+
+    None / 空 → 原样返回(per text_filters 现 strip 函数 convention)。
+    """
+    if not text:
+        return text
+    return _FISH_EMOTION_MARKER_RE.sub("", text)
+
+
 def strip_ja_en_tags_for_subtitle(text: str) -> str:
     """字幕路径用:删 ``<ja>...</ja>`` / ``<en>...</en>`` 整段,留中文正文。
 
     与 ``extract_tts_text`` 互补:本函数是字幕路径(去掉外语翻译,只留中文),
     ``extract_tts_text`` 是 TTS 路径(只保留外语翻译)。
+
+    INV-9 §6 增强:链尾追加 ``strip_fish_emotion_markers`` — 字幕跨 provider
+    一律剥 ``[bracket]`` markers(用户字幕不应出现 marker,per INV-8 §1.5.7
+    Case 6 + Hard Req 字幕侧契约)。fish 模式下 LLM 输出形如:
+        '"嗯,真好笑。"<ja>[soft chuckle]「ま、いいか。」</ja>'
+    走完本函数 = '"嗯,真好笑。"'(剥 <ja>...</ja> 整段 + 兜底剥 [bracket] 残留)。
 
     None / 空 → 原样返回。
     """
@@ -405,6 +448,8 @@ def strip_ja_en_tags_for_subtitle(text: str) -> str:
         return text
     out = _JA_TAG_RE.sub("", text)
     out = _EN_TAG_RE.sub("", out)
+    # INV-9 §6:字幕跨 provider 一律剥 [bracket](见上 docstring)
+    out = strip_fish_emotion_markers(out)
     return out
 
 
