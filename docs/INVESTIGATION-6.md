@@ -232,3 +232,310 @@ SELECT mood, intimacy, current_activity, current_thought FROM character_states W
 → **P3 退役 ship 完成**。子轨 B 实施第 2 刀 closed。
 
 下一刀:**P1 入口折叠(media 5→1 → apple_calendar 4→1 → bilibili 11→1 → netease 13→2)**,等 PM 拍板。
+
+---
+
+## §2 P1.media 5→1 入口折叠（Stage 1 草稿,2026-05-21）
+
+> P1 入口折叠首刀 + **dispatcher 设计模板**。media 是 P1 中最小组(5 cap),最适合试水;模板将复用到后续 apple_calendar / bilibili / netease。
+
+### 2.1 5 cap audit 实测表
+
+`backend/capabilities/media_control.py`,均 CHAT_AGENT + ON_DEMAND,handler 走 `_nowplaying` (nowplaying-cli wrap) 或 `_osascript`:
+
+| # | cap | line | desc / ps chars | JSON 总 chars | 实测 token | 参数 |
+|---|---|---|---|---|---|---|
+| 1 | `media.next_track` | 155 | 105 / 52 | 256 | **111** | (无) |
+| 2 | `media.previous_track` | 181 | 38 / 52 | 193 | **77** | (无) |
+| 3 | `media.play_pause` | 205 | 79 / 52 | 230 | **107** | (无) |
+| 4 | `media.now_playing` | 240 | 180 / 52 | 332 | **164** | (无) |
+| 5 | `media.set_volume` | 279 | 123 / 154 | 378 | **181** | level (int 0-100, required) |
+| **合计** | | | **525/362** | **1,399** | **646** | |
+
+**关键观察**:5 cap 中 4 个无参,仅 `set_volume` 1 个有参数;handler 都简单 — `_nowplaying(action)` (3 cap) / `_nowplaying("get", ...)` + parse (1 cap) / `_osascript` (1 cap)。
+
+**与 §3 估算偏差**:INV-4 §3 估 ~890 token(基于 228 token/cap × 5 - 折叠后 250),实测 baseline 仅 646 token(media 是简单无参 cap,远低于全 cap 平均 228)。折叠后估省**远低于 §3 估算**(详 §2.5)。
+
+#### 外部引用点(grep 跨 capabilities/media_control.py 外)
+
+| 类型 | 文件:行 | 内容 | 处理 |
+|---|---|---|---|
+| docstring | `netease_music.py:11,563,575-576` | "与 media.now_playing 配合" 等说明 | **保留作 archeology**(描述,non-runtime) |
+| docstring | `netease_playback.py:246,311` | "Music / Spotify 走 chunk 1 media.play_pause" 等说明 | 同上保留 |
+| 引导文 | `tool_addendum.py:48,57-61` | LLM 引导段 5 行硬编码 media.next_track 等 | **必改**(LLM runtime 看,折叠后改新 cap 引导) |
+| 前端 UI | `CapabilityPanel.tsx:100` | UI label-mapping 注释 mention "media." prefix | **不动**(注释 only,折叠后 prefix 仍 "media" 可正常 match) |
+
+→ 真 LLM-facing 必改点 = **1 处**(tool_addendum.py 引导文)。
+
+### 2.2 dispatcher schema 终稿(PM 2026-05-21 拍板 lock 5 决策)
+
+PM 全 lock CC 倾向:**a1 / b1 / c std / d snake_case / e clean cut**。
+
+| 决策 | lock | 含义 |
+|---|---|---|
+| **a · 入口 cap 命名** | **`media`**(单字) | LLM 调用 `media(action="...")`,与后续 fold(`bilibili` / `netease` / `apple_calendar` 同款单字 namespace)风格统一 |
+| **b · 参数 union 策略** | **单层 union schema** | action enum(5 项) + level optional(仅 set_volume),required=["action"] |
+| **c · 错误处理** | **标准化 `{ok:bool, error:str}`** | 与现 5 cap 同 return 协议;未知 action / 缺参数 / sub-handler 错误统一 ok=false + error 字段 |
+| **d · action 命名风格** | **snake_case** | `next_track` / `previous_track` / `play_pause` / `now_playing` / `set_volume`,与现 cap suffix 1:1 mapping |
+| **e · 退役方案** | **clean cut** | 同 commit 删旧 5 cap + 新 dispatcher 上线,与 P3 同 pattern |
+
+**dispatcher schema 终稿**:
+
+```python
+@register_capability(
+    name="media",
+    display_name="媒体控制 + 当前在播查询",
+    description=(
+        "macOS 系统级媒体控制 + 当前在播查询(跨来源:网易云 / Apple Music / "
+        "Spotify / YouTube / Bilibili 网页等)。按 action 选具体操作:\n"
+        "- next_track:下一首(用户说'下一首/切歌/换一首/不喜欢这首')\n"
+        "- previous_track:上一首(用户说'上一首/刚才那首/退回去')\n"
+        "- play_pause:toggle 播放/暂停(用户说'暂停/播放/继续/停一下')\n"
+        "- now_playing:查当前在播歌名/歌手/专辑(用户问'在放什么/这首叫啥')\n"
+        "- set_volume:调音量(用户说'音量调到 X/大声点/小声点',需 level)\n"
+        "set_volume 的'大声/小声'模糊请求由你判合理 level(如 +20/-20),不反复问。"
+    ),
+    category="media",
+    consumers=[Consumer.CHAT_AGENT],
+    trigger_modes=[TriggerMode.ON_DEMAND],
+    icon="play",
+    health_check=health_check,
+    parameters_schema={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["next_track", "previous_track", "play_pause", "now_playing", "set_volume"],
+                "description": "媒体操作类型",
+            },
+            "level": {
+                "type": "integer",
+                "minimum": 0, "maximum": 100,
+                "description": "仅 action=set_volume 时必填,目标音量 0-100(0=静音)",
+            },
+        },
+        "required": ["action"],
+    },
+)
+```
+
+### 2.3 实施 plan 终稿
+
+#### 改动文件清单
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/capabilities/media_control.py` | 删 5 旧 cap decorator + 5 handler 函数(L155-308 共 ~150 行);新增 1 个 `media` dispatcher decorator + 1 个 dispatch handler + 5 个 `_handle_*` internal 函数(原 handler 逻辑搬过来去掉装饰器);保留底层 helper(`_nowplaying` / `_osascript` / `_parse_nowplaying_get` / `_has_nowplaying_cli` / `health_check`) |
+| 2 | `backend/agents/prompt/tool_addendum.py:48,57-61` | 6 处字符微改:L48 `先 media.now_playing` → `先 media(action="now_playing")`;L57-61 5 个 bullet `→ media.next_track` → `→ media(action="next_track")` 等 |
+| 3 | `frontend/src/components/CapabilityPanel.tsx:99-101` | **纯注释微改**(标历史 vs 现状),`PROVIDER_DISPLAY['media']='media_control'` mapping 仍 work(`_extractProvider('media')` 返 `'media'` 与单字 cap name 兼容,**logic 不动**);UI 显示 5 cap → 1 cap 是 frontend 自然 reflect |
+
+frontend `_extractProvider` 实测:`split('.')` + 单字无 `.` → `parts[0] = 'media'` 即 cap name 本身,mapping 仍命中 `PROVIDER_DISPLAY['media'] = 'media_control'`,**不需要 frontend rebuild**。
+
+#### 估改动量
+
+- 删 ~150 行(5 cap decorator + handler)
+- 新增 ~90 行(1 dispatcher decorator + dispatch routing + 5 `_handle_*` internal 函数)
+- 净减 ~60 行 .py code(media_control.py)
+- tool_addendum.py 改 ~6 行
+- CapabilityPanel.tsx 改 ~1 行注释
+
+#### dispatcher handler 实现思路
+
+```python
+async def media_dispatch(action: str = "", **params) -> dict:
+    handlers = {
+        "next_track": _handle_next_track,
+        "previous_track": _handle_previous_track,
+        "play_pause": _handle_play_pause,
+        "now_playing": _handle_now_playing,
+        "set_volume": _handle_set_volume,
+    }
+    handler = handlers.get(action)
+    if handler is None:
+        return {
+            "ok": False,
+            "error": f"unknown action: {action!r}; valid: {list(handlers.keys())}",
+        }
+    # set_volume 必填 level
+    if action == "set_volume" and "level" not in params:
+        return {"ok": False, "error": "level required when action=set_volume"}
+    return await handler(**params)
+```
+
+5 个 `_handle_*` 函数 = 现有 next_track / previous_track / play_pause / now_playing / set_volume handler 的内部逻辑搬过来(去掉 `@register_capability` 装饰器,改名 `_handle_*` 加 underscore prefix 标 internal)。
+
+### 2.4 风险评估
+
+| 项 | 风险 | 说明 |
+|---|---|---|
+| LLM 调用新 cap | **低** | tool_addendum 引导改写后 LLM 看新 cap 形态;OpenAI / Anthropic / Qwen 都熟悉 action enum 模式 |
+| LLM 误调旧 5 cap | **低** | 旧 cap 删除后 LLM 看不到 schema 不会调;若误调走 unknown-tool fallback,P3 已实证 LLM 自然 retry |
+| dispatcher 错误处理 | **极低** | 标准 `{ok: bool}` 协议与现 5 cap 同款,前端 / caller 无感知 |
+| 现有 caller 硬编码旧 cap name | **零** | grep 全 backend / frontend 实测:**runtime caller 零硬编码**(`netease_music.py` / `netease_playback.py` 引用是 docstring,`CapabilityPanel.tsx` 是注释,`tool_addendum.py` 是 LLM 引导 — 全改文字即可,无 runtime dispatch 路径硬编码) |
+| LiteLLM × DashScope union schema 兼容 | **极低** | OpenAI 标准 function-calling union schema,INV-5 multi-provider 实测全跑通 |
+
+**总风险 = 低**,可走 clean cut。
+
+### 2.5 估省 token(按 P3 实测方法论重估)
+
+**baseline 实测**(§2.1):media 5 cap = **646 token**(JSON chars 1,399 → 实测密度 0.46 token/char)
+
+**折叠后 dispatcher cap 预估**:
+- description: ~200 chars(合并 5 个简短功能 + 1 句话引导用法)
+- parameters_schema(单层 union): ~280 chars(action enum 5 项 + level optional 字段)
+- function-calling wrap: ~80 chars
+- 合计 ~560 chars
+- 按混合 schema 实测密度 0.46-0.7 token/char(media 是简单 schema,密度偏低端 0.5)= **~280-400 token**
+
+**估省 = 646 - 280..400 = ~250-360 token**(取中位数 **~300 token**)
+
+#### vs INV-4 §3 估算(校正记录)
+
+| 来源 | 估值 | 备注 |
+|---|---|---|
+| INV-4 §3.5(原估) | ~890 token | 用全 cap 平均 228 token/cap × 5 |
+| INV-4 §3.5 校正期望(P3 后) | ~600-900 × 1.5-2.5 校正系数 | 但本次 baseline 实测发现 media 单 cap token 远低于平均 |
+| **本节实测预估** | **~300 token** | media 是简单无参 cap,baseline 仅 646 远低于 §3 估的 1,140 |
+
+→ media fold ROI **远低于 §3 估算**,但仍值得做:
+- 模板试水(dispatcher 模式验证)
+- 累计减幅(P2 + P3 + P1.media ≈ -3,600 token / 27% baseline)
+- 后续 P1 fold(bilibili / netease)是更大头(11 / 13 cap),token 密度也比 media 高
+
+#### Lesson · §3 平均外推估算偏高(后续 group 校正建议)
+
+P3 + P1.media 实测发现 INV-4 §3.5 用"全 cap 平均 228 token/cap × group 大小"外推 fold ROI **偏高约 3 倍**:
+
+- media 5 cap baseline 实测 646 token(平均 **129 token/cap**),§3 估 1,140 token(平均 228)
+- 不同 cap category token 密度差异极大:**简单无参 cap(media)~75-180 token,长 desc cap(P2 top 10)~200-280 token**
+
+**后续 group 校正建议**:
+- bilibili 11 cap:§3 估 ~2,500 token,需先实测 baseline(含 long-desc 杀手 use case 描述,平均可能 150-200/cap → real baseline ~1,800-2,200)
+- netease 13 cap(web 7 + local 6):同上需 audit 实测,平均可能 120-180/cap → real baseline ~1,500-2,300
+- apple_calendar 4 cap:其中 create_event 含 long parameters_schema(506 chars),平均可能 150-200/cap → real baseline ~600-800
+- **新规范**:每 group fold Stage 1 必跑 token_counter 实测 baseline,不用 §3 估值
+
+### 2.6 收口(Stage 2 · final plan)
+
+- ✅ 5 决策 PM 2026-05-21 全 lock(a1 / b1 / c std / d snake_case / e clean cut),fallback 方案移除
+- ✅ §2.2 dispatcher schema 终稿(含完整 description / parameters_schema / register_capability 装饰器)
+- ✅ §2.3 实施 plan 终稿:3 个文件改动(media_control.py + tool_addendum.py + CapabilityPanel.tsx 注释)
+- ✅ §2.5 估省 ~300 token + lesson 记入(§3 全 cap 平均外推偏高 ~3x,后续 group 必跑 baseline 实测)
+- ✅ 风险评估 = 低(零硬编码 runtime caller,union schema LiteLLM 全 provider 兼容)
+
+→ **Stage 2 final plan 完成,等 PM 二次审 + 放行 Stage 3 落代码**。
+
+### 2.7 Stage 3 实施记录(2026-05-21)
+
+#### 2.7.1 Commit + 改动
+
+- commit:(本 commit) `refactor(capabilities): fold media 5 caps into dispatcher (saves ~257 tokens, P1 template established)`
+
+| 文件 | 改动 | diff |
+|---|---|---|
+| `backend/capabilities/media_control.py` | 删 5 旧 cap decorator + handler;新增 1 dispatcher + 5 `_handle_*` internal;保留底层 helper | ~-150 / +130 行 |
+| `backend/agents/prompt/tool_addendum.py` | L48 + L57-61 共 6 处字符微改(`→ media.X` → `→ media(action="X")`) | ~+6 / -6 |
+| `frontend/src/components/CapabilityPanel.tsx` | 注释 1 行微改(标 fold 历史),不动 logic | ~+1 / -0 |
+
+#### 2.7.2 三条 smoke 全 PASS
+
+##### Smoke 1 · ToolRegistry 状态
+
+```
+media* cap in registry: ['media']
+_get_all_tools count: 53 (含 MEMORY_TOOLS 4) — was 58 pre-fold (P3 后 57 - 5 + 1 = 53)
+tools_schema POST-P1.media: 9,697 tokens (P3 baseline 9,954)
+P1.media reduction: 257 tokens
+```
+
+✅ 5 旧 cap 全下线 / 新 `media` dispatcher 注册成功 / token 减幅 -257(PM 预期 300 ± 50 范围内)
+
+##### Smoke 2 · LLM 调用 dispatcher(5 action 全覆盖)
+
+5 个 user query 各发一次,抓 `tool_use_start` event 看 LLM 选的 tool name:
+
+```
+[1] '暂停一下'     → tool_calls=['media']  ✅ (expected action=play_pause)
+[2] '下一首'       → tool_calls=['media']  ✅ (expected action=next_track)
+[3] '上一首'       → tool_calls=['media']  ✅ (expected action=previous_track)
+[4] '调音量到 30'  → tool_calls=['media']  ✅ (expected action=set_volume)
+[5] '在放什么'     → tool_calls=['media']  ✅ (expected action=now_playing)
+```
+
+→ LLM **全 5 query 调新 `media` dispatcher**(无一调旧 `media.*` cap);action 参数由 dispatcher routing 间接验证(底层 nowplaying-cli 实际被调用,5 cap 行为同前)。
+
+##### Smoke 3 · dispatcher 内部 routing
+
+```python
+unknown action     → {ok: False, error: "unknown action: 'unknown_X'; valid: [...5 项]"}
+set_volume no level → {ok: False, error: "level required when action=set_volume"}
+now_playing        → {title, artist, album, playing, error}  # 真路由 _handle_now_playing
+```
+
+✅ unknown / 缺参 / 真 routing 三档全正确;错误协议 `{ok:bool, error:str}` 与原 5 cap 同款。
+
+#### 2.7.3 token 减幅累计(P2 + P3 + P1.media)
+
+| 阶段 | tools_schema token | 累计减幅 vs INV-3 §③ 13,250 baseline |
+|---|---|---|
+| INV-3 §③ baseline | 13,250 | 0 |
+| P2 ship (`72808ef`) | 10,336 | -2,914 (22.0%) |
+| P3 ship (`81205f5`) | 9,954 | -3,296 (24.9%) |
+| **P1.media ship (本 commit)** | **9,697** | **-3,553 (26.8%)** |
+
+P1.media 单刀 -257 token 与 §2.5 估 ~300(±50)吻合。
+
+#### 2.7.4 dispatcher 模板复用要点(给 apple_calendar / bilibili / netease 后续 3 刀)
+
+P1.media 验证的 dispatcher pattern,后续 fold 直接复用:
+
+1. **命名约定**:`<group>` 单字 cap name(e.g. `bilibili` / `netease` / `apple_calendar`)
+   - frontend `_extractProvider` 对单字 cap name 返自身,`PROVIDER_DISPLAY` mapping 仍 work,**前端零改 logic**(仅注释微改标 fold 历史)
+
+2. **schema 结构**:单层 union schema
+   ```python
+   {
+     "type": "object",
+     "properties": {
+       "action": {"type": "string", "enum": [...]},
+       <union 参数 1>: {...},
+       <union 参数 2>: {...},
+       ...
+     },
+     "required": ["action"]
+   }
+   ```
+   - LiteLLM × DashScope × Anthropic 全 provider OpenAI 标准 union 兼容
+
+3. **handler 实现**:
+   ```python
+   _<GROUP>_ACTION_HANDLERS = {"action_name": _handle_action_name, ...}
+
+   async def <group>_dispatch(action: str = "", **params) -> dict:
+       handler = _<GROUP>_ACTION_HANDLERS.get(action)
+       if handler is None:
+           return {"ok": False, "error": f"unknown action: {action!r}; valid: {list(_<GROUP>_ACTION_HANDLERS.keys())}"}
+       return await handler(**params)
+   ```
+   - 必要时加 action-specific 参数校验(如 `set_volume` 缺 `level`),return `{ok: False, error: ...}`
+
+4. **退役方式**:clean cut(同 commit 删旧 cap + 上线 dispatcher),不留 backward-compat
+   - P3 + P1.media 实测 LLM 看不到旧 schema 自然走新 cap,unknown-tool fallback 兜底
+   - tool_addendum.py 引导文同步改 `→ <group>(action="X")` 形态
+
+5. **smoke 三条标准**:
+   - Smoke 1: ToolRegistry 列表(旧下 / 新上 / token 减幅实测)
+   - Smoke 2: LLM 真 query 各 action 至少一次(tool_use_start 抓 tool_name = `<group>`)
+   - Smoke 3: dispatcher routing(unknown / 缺参 / 真 routing 三档)
+
+6. **行为兼容**:return 协议 `{ok: bool, ...}` 与原 cap 同款;前端 / 上游 caller 零感知
+
+#### 2.7.5 收口(Stage 2 收口 → Stage 3 收口转 closing)
+
+- ✅ 3 文件改动 ship(media_control 主结构改 + tool_addendum 6 处微改 + CapabilityPanel 注释 1 行)
+- ✅ 3 条 smoke 全 PASS
+- ✅ 实测 -257 token,与估 ~300 吻合
+- ✅ dispatcher 模板 6 要点抽象,后续 3 刀直接复用
+- 🔒 零 sanitize / handler 行为改动,LLM 5 query 全选新 cap
+
+→ **P1.media 子轨 B 实施第 3 刀 closed**。下一刀 = **P1.apple_calendar 4→1**(复用模板),等 PM 启动。

@@ -149,83 +149,32 @@ async def health_check() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 1. next_track
+# 5 internal handlers (per INV-6 §2 P1.media fold, 2026-05-21):
+# next_track / previous_track / play_pause / now_playing / set_volume
+# 走 dispatcher `media(action=...)`,不再单独 @register_capability。
 # ---------------------------------------------------------------------------
 
-@register_capability(
-    name="media.next_track",
-    display_name="下一首",
-    description=(
-        "切到下一首歌（系统级——不限来源：网易云 / Apple Music / Spotify / "
-        "YouTube / Bilibili 网页都能切）。当用户说\"下一首 / 切歌 / 换一首 / "
-        "不喜欢这首\"时调用。"
-    ),
-    category="media",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="skip-forward",
-    parameters_schema={"type": "object", "properties": {}, "required": []},
-    health_check=health_check,
-)
-async def next_track(**_kwargs) -> dict:
+
+async def _handle_next_track(**_kwargs) -> dict:
     if not _has_nowplaying_cli():
         return {"ok": False, "error": "nowplaying-cli 未安装；brew install nowplaying-cli"}
     rc, _stdout, stderr = await _nowplaying("next")
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else None}
 
 
-# ---------------------------------------------------------------------------
-# 2. previous_track
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="media.previous_track",
-    display_name="上一首",
-    description=(
-        "回到上一首。当用户说\"上一首 / 刚才那首 / 退回去\"时调用。同样跨来源。"
-    ),
-    category="media",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="skip-back",
-    parameters_schema={"type": "object", "properties": {}, "required": []},
-    health_check=health_check,
-)
-async def previous_track(**_kwargs) -> dict:
+async def _handle_previous_track(**_kwargs) -> dict:
     if not _has_nowplaying_cli():
         return {"ok": False, "error": "nowplaying-cli 未安装；brew install nowplaying-cli"}
     rc, _stdout, stderr = await _nowplaying("previous")
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else None}
 
 
-# ---------------------------------------------------------------------------
-# 3. play_pause
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="media.play_pause",
-    display_name="播放 / 暂停",
-    description=(
-        "切换播放 / 暂停状态（toggle）。当用户说\"暂停 / 播放 / 继续 / 停一下"
-        " / 接着放\"时调用。toggle 语义——已播则停、已停则播。跨来源。"
-    ),
-    category="media",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="play-pause",
-    parameters_schema={"type": "object", "properties": {}, "required": []},
-    health_check=health_check,
-)
-async def play_pause(**_kwargs) -> dict:
+async def _handle_play_pause(**_kwargs) -> dict:
     if not _has_nowplaying_cli():
         return {"ok": False, "error": "nowplaying-cli 未安装；brew install nowplaying-cli"}
     rc, _stdout, stderr = await _nowplaying("togglePlayPause")
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else None}
 
-
-# ---------------------------------------------------------------------------
-# 4. now_playing
-# ---------------------------------------------------------------------------
 
 def _parse_nowplaying_get(stdout: str, fields: list[str]) -> dict:
     """``nowplaying-cli get title artist album`` 输出按行返字段，缺失行内是空。"""
@@ -237,23 +186,7 @@ def _parse_nowplaying_get(stdout: str, fields: list[str]) -> dict:
     return out
 
 
-@register_capability(
-    name="media.now_playing",
-    display_name="当前在播",
-    description=(
-        "查当前系统在播什么歌（歌名 / 歌手 / 专辑），跨来源（网易云 / Apple "
-        "Music / Spotify / YouTube / Bilibili 网页都行）。当用户问\"现在在"
-        "放什么 / 这首叫啥 / 谁唱的 / 这是什么歌\"时调用。返回 dict，没在"
-        "播放则字段为 null。常配合 netease.like_current 给当前网易云歌曲加红心。"
-    ),
-    category="media",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="music",
-    parameters_schema={"type": "object", "properties": {}, "required": []},
-    health_check=health_check,
-)
-async def now_playing(**_kwargs) -> dict:
+async def _handle_now_playing(**_kwargs) -> dict:
     if not _has_nowplaying_cli():
         return {
             "title": None, "artist": None, "album": None,
@@ -272,37 +205,73 @@ async def now_playing(**_kwargs) -> dict:
     return info
 
 
+async def _handle_set_volume(level: Optional[int] = None, **_kwargs) -> dict:
+    if not IS_MACOS:
+        return {"ok": False, "error": "set_volume 仅 macOS 可用"}
+    if level is None:
+        return {"ok": False, "error": "level required when action=set_volume"}
+    lvl = max(0, min(100, int(level)))
+    rc, _stdout, stderr = await _osascript(f"set volume output volume {lvl}")
+    return {"ok": rc == 0, "level": lvl, "error": stderr.strip() if rc != 0 else None}
+
+
 # ---------------------------------------------------------------------------
-# 5. set_volume
+# media dispatcher (INV-6 §2 P1.media template, 2026-05-21)
 # ---------------------------------------------------------------------------
 
+_MEDIA_ACTION_HANDLERS = {
+    "next_track":     _handle_next_track,
+    "previous_track": _handle_previous_track,
+    "play_pause":     _handle_play_pause,
+    "now_playing":    _handle_now_playing,
+    "set_volume":     _handle_set_volume,
+}
+
+
 @register_capability(
-    name="media.set_volume",
-    display_name="设置系统音量",
+    name="media",
+    display_name="媒体控制 + 当前在播查询",
     description=(
-        "设置 macOS 系统输出音量（0-100）。当用户说\"音量调到 X / 大声点 / "
-        "小声点 / 静音\"时调用。\"大声/小声\"模糊请求建议先 now_playing 拿"
-        "上下文然后给一个合理数（如 +20 / -20）；这一档由 LLM 自己决定。"
+        "macOS 系统级媒体控制 + 当前在播查询(跨来源:网易云 / Apple Music / "
+        "Spotify / YouTube / Bilibili 网页等)。按 action 选具体操作:\n"
+        "- next_track:下一首(用户说'下一首/切歌/换一首/不喜欢这首')\n"
+        "- previous_track:上一首(用户说'上一首/刚才那首/退回去')\n"
+        "- play_pause:toggle 播放/暂停(用户说'暂停/播放/继续/停一下')\n"
+        "- now_playing:查当前在播歌名/歌手/专辑(用户问'在放什么/这首叫啥')\n"
+        "- set_volume:调音量(用户说'音量调到 X/大声点/小声点',需 level)\n"
+        "set_volume 的'大声/小声'模糊请求由你判合理 level(如 +20/-20),不反复问。"
     ),
     category="media",
     consumers=[Consumer.CHAT_AGENT],
     trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="volume",
+    icon="play",
+    health_check=health_check,
     parameters_schema={
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": list(_MEDIA_ACTION_HANDLERS.keys()),
+                "description": "媒体操作类型",
+            },
             "level": {
-                "type": "integer", "minimum": 0, "maximum": 100,
-                "description": "目标音量 0-100；0 等价于静音",
+                "type": "integer",
+                "minimum": 0, "maximum": 100,
+                "description": "仅 action=set_volume 时必填,目标音量 0-100(0=静音)",
             },
         },
-        "required": ["level"],
+        "required": ["action"],
     },
-    health_check=health_check,
 )
-async def set_volume(level: int, **_kwargs) -> dict:
-    if not IS_MACOS:
-        return {"ok": False, "error": "set_volume 仅 macOS 可用"}
-    lvl = max(0, min(100, int(level)))
-    rc, _stdout, stderr = await _osascript(f"set volume output volume {lvl}")
-    return {"ok": rc == 0, "level": lvl, "error": stderr.strip() if rc != 0 else None}
+async def media_dispatch(action: str = "", **params: Any) -> dict:
+    """Dispatcher: 按 action 路由到对应 _handle_* 函数。"""
+    handler = _MEDIA_ACTION_HANDLERS.get(action)
+    if handler is None:
+        return {
+            "ok": False,
+            "error": (
+                f"unknown action: {action!r}; "
+                f"valid: {list(_MEDIA_ACTION_HANDLERS.keys())}"
+            ),
+        }
+    return await handler(**params)

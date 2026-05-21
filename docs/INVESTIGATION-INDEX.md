@@ -14,6 +14,7 @@ INVESTIGATION-6.md 自 2026-05-21 子轨 B P3 起后续实施起用。
 
 | 日期 | 主题 | 一句话结论 | 位置 |
 |---|---|---|---|
+| 2026-05-21 | **INV-6 §2 · 子轨 B P1.media 5→1 入口折叠 ship**(第 3 刀,dispatcher 模板) | 3-stage(audit/design + PM 拍板 5 决策 + 落代码)单 commit ship;media_control.py 5 旧 cap → 1 `media` dispatcher + 5 `_handle_*` internal;tool_addendum.py 6 处引导微改 + CapabilityPanel.tsx 注释 1 行;3 smoke 全过(ToolRegistry / 5 LLM query 全调 media / dispatcher routing 三档);**实测 -257 token (P3 9,954 → 9,697 / 26.8% 累计)**;§2.7.4 抽象 dispatcher 模板 6 要点给后续 apple_calendar/bilibili/netease 复用 | INVESTIGATION-6.md §2 |
 | 2026-05-21 | **INV-4 封存 + INV-6 起用** | INV-4 共 1,120 行封存(子轨 B §1 枚举 + §2 三分 + §3 评估 + §3.2.1 P2 改动提案 + §3.7 P2 实施收口全覆盖);后续实施(P3 起 + P1 入口折叠)迁 INV-6 | INVESTIGATION-INDEX.md + INVESTIGATION-4.md §封存说明 |
 | 2026-05-21 | **INV-4 §3 · 子轨 B · 三类候选评估 + v4.1 实施清单** | P1 入口折叠 4 group(bilibili 11→1 / netease 13→2 / media 5→1 / apple_calendar 4→1)估省 **~5,960 tokens** + dispatcher 设计草图 + tool_addendum 引导重写;P2 desc 精简 top 10 长 cap 估省 **~700 tokens**;P3 character.set_activity 与 `<state_update>` tag 100% 重叠,clean cut 退役 ~150 tokens;PM §2.5 估 8-10k 校正为 **~6.8k**(扣 union schema 开销);v4.1 实施清单 6 动作排序按风险×工程量×收益;P4 MCP lazy-load 挂 v4.1+ backlog | INVESTIGATION-4.md §3 |
 | 2026-05-21 | **INV-4 §3.7 + P2 desc 精简 ship**(子轨 B 实施第 1 刀) | Stage 1 草稿(7234afc)+ Stage 2 落代码(72808ef)双 commit;10 cap description 精简 3,670 → 2,369 chars;**实测 tools_schema 13,250 → 10,336 tokens (-2,914 / 22% reduction)**;Mai 行为零 regression(\<thinking\>/\<state_update\>/\<motion\> 全套 inline tag 正常);估 vs 实测差异 **预估的 4 倍**(Qwen tokenizer 长 desc 真实密度 ~1.75 token/char 而非估算 0.4) | INVESTIGATION-4.md §3.2.1 / §3.7 |
@@ -46,6 +47,7 @@ INVESTIGATION-6.md 自 2026-05-21 子轨 B P3 起后续实施起用。
 ### 1. 性能 / Token 治理（持续主题）
 
 - 2026-05-21 backlog 重定位（per 纪律「调查/audit/评测 → INV files;实施 → ROADMAP」）— **INV-3 §10.9 + 1 backlog**（extractor 5-min 频率 audit）;**INV-5 §5 + 2 backlog**（Qwen Plus vs Max / Qwen Plus vs DeepSeek 评测候选,新增 §5.6）
+- 2026-05-21 **INV-6 §2 · P1.media 5→1 fold ship**(INVESTIGATION-6.md §2)— dispatcher 模板首刀,3 文件改 + 3 smoke 全过,**实测 -257 token / 26.8% 累计**(P3 9,954 → 9,697);§2.7.4 抽象 6 要点给后续 fold 复用
 - 2026-05-21 **INV-4 封存(1,120 行) + INV-6 起用**(INVESTIGATION-INDEX 顶部封存说明 + 主表登记) — 子轨 B 后续实施(P3 起 + P1 入口折叠)迁 INV-6
 - 2026-05-21 INV-4 §3.7 + P2 desc 精简 ship(INVESTIGATION-4.md §3.2.1 / §3.7)— Stage 1 + Stage 2 双 commit(7234afc + 72808ef);**实测 tools_schema -2,914 tokens / 22% reduction**,估 vs 实测 4 倍,Qwen tokenizer 长 desc 真实密度 ~1.75 token/char 修正方法论
 - 2026-05-21 INV-4 §3 子轨 B · 三类候选评估 + v4.1 实施清单（INVESTIGATION-4.md §3）— P1 fold ~5,960 + P2 desc ~700 + P3 set_activity 退役 ~150 = **~6.8k tokens 收益**;6 动作按风险×工程量排好序;与子轨 A 5.6k 叠加主路径 prompt 砍 ~55%

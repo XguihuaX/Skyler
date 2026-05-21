@@ -96,10 +96,11 @@ export function _extractProvider(capName: string): string {
 }
 
 // UX-003: provider display name 映射。
-//   * ``media`` provider 实际是 media_control(bundle 内 capability 命名用
-//     ``media.next_track`` 等),UI 显示成 ``media_control`` 跟 category title
-//     ``MEDIA`` 区分,与 backend ``backend/capabilities/media_control.py`` 文件
-//     名语义一致
+//   * ``media`` provider 实际是 media_control(2026-05-21 INV-6 §2 P1.media
+//     fold 后,5 个 ``media.<action>`` cap 折叠为单一 ``media`` dispatcher;
+//     _extractProvider 对单字 cap name 返自身,mapping 仍命中),UI 显示成
+//     ``media_control`` 跟 category title ``MEDIA`` 区分,与 backend
+//     ``backend/capabilities/media_control.py`` 文件名语义一致
 //   * ``ext.X`` provider key UI 显示去掉 ``ext.`` 前缀 + 加 ``[ext]`` 角标
 //     在 ProviderRow 里独立处理(本 map 只管纯 rename)
 const PROVIDER_DISPLAY: Record<string, string> = {
