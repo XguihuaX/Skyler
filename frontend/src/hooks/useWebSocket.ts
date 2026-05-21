@@ -343,8 +343,9 @@ export function useWebSocket(): UseWebSocketReturn {
       }
 
       case 'state_update': {
-        // v3-G chunk 3b: 后端 <state_update> 标签解析后 push，或 set_activity
-        // capability / reset_state 路由 push。把 store currentCharacterState
+        // v3-G chunk 3b: 后端 <state_update> 标签解析后 push，或 reset_state
+        // 路由 push (character.set_activity capability 2026-05-21 退役,改走
+        // tag 唯一路径,详 INV-6 §1)。把 store currentCharacterState
         // 替换/合并；CharacterStatePanel 自动重渲染。
         const charId = msg.character_id ?? s.currentCharacterId ?? null;
         if (charId == null) break;

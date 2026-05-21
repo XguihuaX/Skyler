@@ -123,8 +123,8 @@ async def detect_and_execute_fallback_tool_calls(
     Args:
         stream_text:    LLM 这一轮全部 ``delta.content`` 拼起来的文本。
         user_id:        ChatAgent 注入的会话级 user_id。
-        character_id:   当前 character_id（``character.set_activity`` /
-                        ``character.get_state`` 等 capability 需要）。
+        character_id:   当前 character_id（``character.get_state`` 等 capability
+                        需要;character.set_activity 2026-05-21 退役走 tag 路径）。
 
     Returns:
         ``(cleaned_text, executed_list)``：

@@ -1,20 +1,22 @@
 """v3-G chunk 3b — 角色状态 capability。
 
-3 个 capability：
+2 个 capability(2026-05-21 退役 set_activity 后):
 * ``character.get_state()`` — CHAT_AGENT，无参，返当前 character_id 的
   state（mood / intimacy / current_thought / current_activity）
-* ``character.set_activity(activity, thought=None)`` — CHAT_AGENT，让 Momo
-  自己更新"在做什么 / 在想什么"。LLM 必须自我克制（不要每轮都调；prompt
-  在 ``_TOOL_PROMPT_ADDENDUM`` 内引导）
 * ``character.intimacy_decay()`` — SCHEDULER，每天 0:00 跑，每个 character
   intimacy -1（min 0）
 
-**没有** ``update_mood`` / ``update_intimacy`` capability —— 这俩走
-``<state_update>`` 标签解析路径（chat.py 内），避免 LLM 滥用工具刷高自己。
-mood / intimacy 写入路径只有：
-1. `<state_update>` 标签 → ws.py 解析后写
-2. `intimacy_decay` cron → 写
+**没有** ``set_activity`` / ``update_mood`` / ``update_intimacy`` capability
+—— 全走 ``<state_update activity="..." thought="..." mood="..." intimacy_delta="..." />``
+标签解析路径(chat.py:219-260 _parse_state_update + ws.py _apply_and_push_state_update),
+避免 LLM 滥用工具刷高自己 / 每轮机械更新。
+mood / intimacy / activity / thought 写入路径只有：
+1. `<state_update>` 标签 → ws.py 解析后写(LLM 主路径)
+2. `intimacy_decay` cron → 写(每日衰减)
 3. `reset_character_state` API → 用户主动重置
+
+INV-6 §1 P3 (2026-05-21):character.set_activity cap 退役,功能 100% 由
+<state_update activity=... /> tag 路径承接;详 INV-6 §1。
 """
 from __future__ import annotations
 
@@ -61,79 +63,12 @@ async def get_state(character_id: Optional[int] = None, **_kwargs) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 2. character.set_activity
+# 2. character.set_activity — 2026-05-21 退役 (INV-6 §1 P3)
+# 改走 <state_update activity="..." thought="..." /> inline tag 路径
+# (chat.py:219-260 _parse_state_update + ws.py _apply_and_push_state_update),
+# 100% 功能重叠且 tag 多支持 mood/intimacy_delta。
+# 历史 commit 可追溯;handler / decorator 整段 75 行删除。
 # ---------------------------------------------------------------------------
-
-@register_capability(
-    name="character.set_activity",
-    display_name="更新当前在做什么",
-    description=(
-        "更新你（当前角色）的 current_activity（在做什么）和可选 thought"
-        "（在想什么）。当你想让用户感受到「连续性」时偶尔调用——比如长时间没"
-        "说话后说「刚才在烤面包，现在好啦」这种闲笔。\n\n"
-        "**克制使用**：不要每轮都调（会显得机械）。在以下场景调用比较合适：\n"
-        "- 用户问「你刚才在干什么」时\n"
-        "- 你想自然引入一段闲笔（不超过每 5-10 轮一次）\n"
-        "- 用户长时间没说话后回来时（你可以说"
-        "「刚才在 X」营造时间感）\n\n"
-        "activity 短句即可（≤60 字，如「在看书」「在烤面包」「在整理思路」）。"
-        "thought 可选（≤60 字），描述当下心境。"
-    ),
-    category="character",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="activity",
-    parameters_schema={
-        "type": "object",
-        "properties": {
-            "activity": {
-                "type": "string",
-                "description": "短句，≤60 字。如「在看书」「在烤面包」",
-            },
-            "thought": {
-                "type": "string",
-                "description": "可选，短句 ≤60 字。如「觉得用户最近很努力」",
-            },
-        },
-        "required": ["activity"],
-    },
-)
-async def set_activity(
-    activity: str,
-    thought: Optional[str] = None,
-    character_id: Optional[int] = None,
-    user_id: Optional[str] = None,
-    **_kwargs,
-) -> dict:
-    if character_id is None:
-        return {"error": "character_id missing in context"}
-    cleaned_activity = (activity or "").strip()
-    if not cleaned_activity:
-        return {"error": "activity is required and non-empty"}
-    async with AsyncSessionLocal() as session:
-        state = await update_character_state(
-            session, int(character_id),
-            activity=cleaned_activity,
-            thought=thought,
-        )
-
-    # 成功后通过 ConnectionManager push state_update（让前端状态条立即刷新）。
-    # 延迟 import 避免循环依赖（ws.py import chain）。
-    if user_id:
-        try:
-            from backend.routes.ws import connection_manager
-            await connection_manager.push(user_id, {
-                "type": "state_update",
-                "character_id": int(character_id),
-                "mood": state.mood,
-                "intimacy": state.intimacy,
-                "thought": state.current_thought,
-                "activity": state.current_activity,
-            })
-        except Exception:
-            logger.exception("[character.set_activity] WS push failed")
-
-    return {"ok": True, "state": _serialize_state(state)}
 
 
 # ---------------------------------------------------------------------------

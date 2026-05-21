@@ -161,7 +161,8 @@ class ActivityProactiveTrigger(ProactiveTrigger):
 
     async def resolve_capabilities(self) -> list[str]:
         # activity 触发**不强求**调用具体 capability。让 LLM 按上下文自由
-        # 选择（聊一句 / 调 character.set_activity 更新自己状态等）。
+        # 选择(聊一句 / 用 <state_update activity=...> tag 更新自己状态等;
+        # character.set_activity cap 2026-05-21 退役,统一走 tag 路径)。
         return []
 
 
