@@ -28,25 +28,13 @@ def _get_timezone():
 
 
 # ---------------------------------------------------------------------------
-# 1. 今日事件
+# 4 internal handlers (per INV-6 §3 P1.apple_calendar fold, 2026-05-21):
+# today_events / upcoming_events / create_event / delete_event
+# 走 dispatcher `apple_calendar(action=...)`,不再单独 @register_capability。
 # ---------------------------------------------------------------------------
 
-@register_capability(
-    name="apple_calendar.today_events",
-    display_name="今日日程（Apple）",
-    description=(
-        "获取 macOS Apple Calendar 今天的所有事件（本地时区）。优先用 "
-        "calendar.today_events 路由版本；本接口给高级用户 / scheduler 直接"
-        "锁定 Apple 数据源用。"
-    ),
-    category="calendar",
-    consumers=[Consumer.CHAT_AGENT, Consumer.SCHEDULER],
-    trigger_modes=[TriggerMode.ON_DEMAND, TriggerMode.SCHEDULED],
-    icon="calendar",
-    parameters_schema={"type": "object", "properties": {}, "required": []},
-    health_check=ac.health_check,
-)
-async def today_events(**_kwargs) -> list[dict]:
+
+async def _handle_today_events(**_kwargs) -> list[dict]:
     tz = _get_timezone()
     now = datetime.now(tz)
     start = datetime.combine(now.date(), time.min, tzinfo=tz)
@@ -54,34 +42,7 @@ async def today_events(**_kwargs) -> list[dict]:
     return await ac.list_events_in_range(start, end, tz=tz)
 
 
-# ---------------------------------------------------------------------------
-# 2. 未来事件
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="apple_calendar.upcoming_events",
-    display_name="未来日程（Apple）",
-    description=(
-        "获取 macOS Apple Calendar 未来 N 天（默认 7，1-30 范围）事件。"
-        "优先用 calendar.upcoming_events 路由版本；本接口锁定 Apple 数据源。"
-    ),
-    category="calendar",
-    consumers=[Consumer.CHAT_AGENT, Consumer.SCHEDULER],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="calendar",
-    parameters_schema={
-        "type": "object",
-        "properties": {
-            "days_ahead": {
-                "type": "integer", "default": 7, "minimum": 1, "maximum": 30,
-                "description": "向前看几天",
-            },
-        },
-        "required": [],
-    },
-    health_check=ac.health_check,
-)
-async def upcoming_events(days_ahead: int = 7, **_kwargs) -> list[dict]:
+async def _handle_upcoming_events(days_ahead: int = 7, **_kwargs) -> list[dict]:
     days_ahead = max(1, min(30, int(days_ahead)))
     tz = _get_timezone()
     now = datetime.now(tz)
@@ -89,56 +50,7 @@ async def upcoming_events(days_ahead: int = 7, **_kwargs) -> list[dict]:
     return await ac.list_events_in_range(now, end, tz=tz)
 
 
-# ---------------------------------------------------------------------------
-# 3. 创建事件（chunk 2.5 自然语言录入的关键入口）
-# ---------------------------------------------------------------------------
-
-@register_capability(
-    name="apple_calendar.create_event",
-    display_name="创建日历事件",
-    description=(
-        "在 macOS Apple Calendar 创建一个事件。当用户说「提醒我 X 点 Y "
-        "事 / 帮我记一下 / 明天 X 点 Y / 把 X 加到日历」时调用。start_iso "
-        "必须是 ISO 8601 字符串（含时区，如 2026-05-08T10:00:00+09:00）；"
-        "如果用户只给了相对时间（'明天上午 10 点'），先调 time.now 拿当前"
-        "时间再算出准确 ISO。calendar_name 留空 = 默认日历。"
-    ),
-    category="calendar",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
-    icon="calendar",
-    parameters_schema={
-        "type": "object",
-        "properties": {
-            "title": {
-                "type": "string",
-                "description": "事件标题，简短描述（如 '看牙医' / '团队同步会'）",
-            },
-            "start_iso": {
-                "type": "string",
-                "description": "ISO 8601 开始时间，含时区，如 2026-05-08T10:00:00+09:00",
-            },
-            "duration_minutes": {
-                "type": "integer",
-                "default": 30,
-                "minimum": 1,
-                "maximum": 1440,
-                "description": "持续时长，分钟，默认 30",
-            },
-            "description": {
-                "type": "string",
-                "description": "事件备注 / 详细说明（可选）",
-            },
-            "calendar_name": {
-                "type": "string",
-                "description": "目标日历名（可选；默认用系统默认日历）",
-            },
-        },
-        "required": ["title", "start_iso"],
-    },
-    health_check=ac.health_check,
-)
-async def create_event(
+async def _handle_create_event(
     title: str,
     start_iso: str,
     duration_minutes: int = 30,
@@ -148,8 +60,8 @@ async def create_event(
 ) -> dict:
     """返回 ``{"event_id": "...", "title": ..., "start": ..., "calendar": ...}``。
 
-    LLM 不能自己生成 event_id —— 创建后 Apple 系统给一个稳定标识符，调
-    delete_event 时会用。
+    LLM 不能自己生成 event_id —— 创建后 Apple 系统给一个稳定标识符,
+    调 delete_event 时会用。
     """
     try:
         start_dt = datetime.fromisoformat(start_iso)
@@ -177,34 +89,121 @@ async def create_event(
     }
 
 
+async def _handle_delete_event(event_id: str, **_kwargs) -> dict:
+    success = await ac.delete_event(event_id)
+    return {"deleted": bool(success), "event_id": event_id}
+
+
 # ---------------------------------------------------------------------------
-# 4. 删除事件
+# apple_calendar dispatcher (INV-6 §3 P1.apple_calendar template reuse #1)
 # ---------------------------------------------------------------------------
 
+_APPLE_CALENDAR_ACTION_HANDLERS = {
+    "today_events":    _handle_today_events,
+    "upcoming_events": _handle_upcoming_events,
+    "create_event":    _handle_create_event,
+    "delete_event":    _handle_delete_event,
+}
+
+
 @register_capability(
-    name="apple_calendar.delete_event",
-    display_name="删除日历事件",
+    name="apple_calendar",
+    display_name="Apple Calendar 日历操作",
     description=(
-        "按 event_id 删除 macOS Apple Calendar 事件。**调用前必须先**用 "
-        "apple_calendar.today_events / upcoming_events 找到要删的事件、"
-        "拿到它的 event_id；不要凭空生成 event_id。"
+        "macOS Apple Calendar 日历操作。按 action 选具体操作:\n"
+        "- today_events:今天所有事件(用户说'今天有什么安排')\n"
+        "- upcoming_events:未来 N 天事件(用户说'下周/这周日程',days_ahead 默 7,1-30)\n"
+        "- create_event:创建事件(用户说'提醒我 X 点 Y 事 / 把 X 加到日历',需 title + start_iso "
+        "ISO 8601 含时区如 2026-05-08T10:00:00+09:00;相对时间如'明天上午 10 点'**先调 "
+        "time.now** 拿当前时间再算 ISO;duration_minutes 默 30,calendar_name 留空 = 默认日历)\n"
+        "- delete_event:按 event_id 删(**调用前必须先**用 today/upcoming_events 找到 event_id,"
+        "不要凭空生成)\n"
+        "优先走 calendar.today_events / upcoming_events router(自动选 apple/google 源);"
+        "本 cap 用于高级用户 / scheduler 直接锁定 Apple 数据源。"
     ),
     category="calendar",
-    consumers=[Consumer.CHAT_AGENT],
-    trigger_modes=[TriggerMode.ON_DEMAND],
+    consumers=[Consumer.CHAT_AGENT, Consumer.SCHEDULER],  # §3.3 特异 c1: 保 SCHEDULER metadata
+    trigger_modes=[TriggerMode.ON_DEMAND, TriggerMode.SCHEDULED],
     icon="calendar",
+    health_check=ac.health_check,
     parameters_schema={
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": list(_APPLE_CALENDAR_ACTION_HANDLERS.keys()),
+                "description": "Apple Calendar 操作类型",
+            },
+            "days_ahead": {
+                "type": "integer", "minimum": 1, "maximum": 30, "default": 7,
+                "description": "仅 action=upcoming_events 时用,向前看几天(默 7)",
+            },
+            "title": {
+                "type": "string",
+                "description": "仅 action=create_event 必填,事件标题(简短,如'看牙医')",
+            },
+            "start_iso": {
+                "type": "string",
+                "description": "仅 action=create_event 必填,ISO 8601 含时区如 2026-05-08T10:00:00+09:00",
+            },
+            "duration_minutes": {
+                "type": "integer", "minimum": 1, "maximum": 1440, "default": 30,
+                "description": "仅 action=create_event,持续时长分钟,默 30",
+            },
+            "description": {
+                "type": "string",
+                "description": "仅 action=create_event 可选,事件备注",
+            },
+            "calendar_name": {
+                "type": "string",
+                "description": "仅 action=create_event 可选,目标日历名(默系统默认)",
+            },
             "event_id": {
                 "type": "string",
-                "description": "事件 ID（来自 today_events / upcoming_events 返回的 id 字段）",
+                "description": "仅 action=delete_event 必填,event_id 来自 today/upcoming_events 返回",
             },
         },
-        "required": ["event_id"],
+        "required": ["action"],
     },
-    health_check=ac.health_check,
 )
-async def delete_event(event_id: str, **_kwargs) -> dict:
-    success = await ac.delete_event(event_id)
-    return {"deleted": bool(success), "event_id": event_id}
+async def apple_calendar_dispatch(action: str = "", **params) -> dict | list[dict]:
+    """Dispatcher: 按 action 路由到对应 _handle_* 函数,含 action-specific required 校验。"""
+    handler = _APPLE_CALENDAR_ACTION_HANDLERS.get(action)
+    if handler is None:
+        return {
+            "ok": False,
+            "error": (
+                f"unknown action: {action!r}; "
+                f"valid: {list(_APPLE_CALENDAR_ACTION_HANDLERS.keys())}"
+            ),
+        }
+    # action-specific required 字段校验
+    if action == "create_event":
+        if not params.get("title"):
+            return {"ok": False, "error": "title required when action=create_event"}
+        if not params.get("start_iso"):
+            return {"ok": False, "error": "start_iso required when action=create_event"}
+    elif action == "delete_event":
+        if not params.get("event_id"):
+            return {"ok": False, "error": "event_id required when action=delete_event"}
+    return await handler(**params)
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat aliases (INV-6 §3.8 fix, 2026-05-21)
+#
+# `backend/capabilities/calendar.py` router(D1 决策保留不动)内部 Python
+# module-level import 硬编码 handler 函数名:
+#   from backend.capabilities.apple_calendar import today_events as ac_today
+#   from backend.capabilities.apple_calendar import upcoming_events as ac_up
+# P1.apple_calendar fold 改 handler 名为 _handle_*,这 2 处 import 会
+# ImportError。Smoke 2 实测暴露后,按 PM 拍板 option A 加 alias 兜底:
+#
+#   - 不动 calendar router(与 D1 决策"calendar router 保留不动"对齐)
+#   - alias 是 Python 名字绑定,**不进 ToolRegistry,不增 schema token**
+#   - **不是 LLM-visible**;LLM 主路径走 `apple_calendar(action=...)` dispatcher
+#   - **新代码不要依赖** these aliases — backward-compat only
+# ---------------------------------------------------------------------------
+
+today_events = _handle_today_events
+upcoming_events = _handle_upcoming_events

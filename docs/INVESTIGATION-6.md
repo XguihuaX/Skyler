@@ -530,6 +530,16 @@ P1.media 验证的 dispatcher pattern,后续 fold 直接复用:
 
 6. **行为兼容**:return 协议 `{ok: bool, ...}` 与原 cap 同款;前端 / 上游 caller 零感知
 
+7. **audit 双 grep 模式**(P1.apple_calendar §3.8 教训,2026-05-21 补):除了 grep cap-name 形式
+   `<group>.<action>`(LLM 引导文 / docstring 描述等),**还要 grep 模块 import 路径**
+   `from backend.capabilities.<file> import <handler>`,防止 router 反向 import / cross-module
+   引用等隐藏 caller 漏审。`backend/capabilities/calendar.py` 的 router 内部 import
+   `apple_calendar.today_events / upcoming_events` handler 函数名是 P1.apple_calendar
+   Smoke 2 暴露的真实漏点。
+   - **修法兜底**:apple_calendar.py 末尾加 module-level alias(`today_events = _handle_today_events`)
+     backward-compat 不动 router,alias 不进 ToolRegistry 零 schema 开销
+   - **P1.bilibili / P1.netease Stage 1 audit 必须双 grep 模式扫一遍**:`grep "bilibili\." + grep "from backend.capabilities.bilibili import"`(同 netease_music / netease_playback)
+
 #### 2.7.5 收口(Stage 2 收口 → Stage 3 收口转 closing)
 
 - ✅ 3 文件改动 ship(media_control 主结构改 + tool_addendum 6 处微改 + CapabilityPanel 注释 1 行)
@@ -539,3 +549,358 @@ P1.media 验证的 dispatcher pattern,后续 fold 直接复用:
 - 🔒 零 sanitize / handler 行为改动,LLM 5 query 全选新 cap
 
 → **P1.media 子轨 B 实施第 3 刀 closed**。下一刀 = **P1.apple_calendar 4→1**(复用模板),等 PM 启动。
+
+---
+
+## §3 P1.apple_calendar 4→1 入口折叠（Stage 1 草稿,2026-05-21）
+
+> P1 入口折叠**第 2 刀**,**模板复用 #1**。dispatcher 设计 6 要点已 §2.7.4 lock,本节仅 audit + apple_calendar 特异适配。
+
+### 3.1 4 cap audit 实测表
+
+`backend/capabilities/apple_calendar.py`,均含 `health_check=ac.health_check`,底层走 `backend.integrations.apple_calendar`(`ac` module):
+
+| # | cap | line | desc / ps chars | JSON 总 chars | 实测 token | consumers | 参数 |
+|---|---|---|---|---|---|---|---|
+| 1 | `apple_calendar.today_events` | 34 | 106 / 52 | 266 | **89** | C+S | (无) |
+| 2 | `apple_calendar.upcoming_events` | 61 | 97 / 152 | 360 | **131** | C+S | `days_ahead` (int 1-30, default 7) |
+| 3 | `apple_calendar.create_event` | 96 | 217 / **506** | **831** | **373** | C only | `title`(req) / `start_iso`(req,ISO 8601) / `duration_minutes`(int 1-1440, def 30) / `description`(str) / `calendar_name`(str) |
+| 4 | `apple_calendar.delete_event` | 184 | 134 / 161 | 403 | **129** | C only | `event_id`(req) |
+| **合计** | | | **554/871** | **1,868** | **727** | | |
+
+**关键观察**:
+- create_event **单 cap 占 51% token**(373/727),因含 5 参数详注(506 chars ps)
+- 4 cap 参数总 7 类(去重):`days_ahead / title / start_iso / duration_minutes / description / calendar_name / event_id`
+- 平均 ~182 token/cap,比 media 平均 129/cap 略高(参数复杂)
+- 2 cap 标 C+S consumer(today / upcoming),create / delete 仅 C
+
+### 3.2 外部引用点 grep audit
+
+`grep -rn "apple_calendar.<action>" backend/ frontend/`(排 docs/INVESTIGATION):
+
+#### Active 必改(2 处)
+
+| # | 文件:行 | 内容 | 处理 |
+|---|---|---|---|
+| 1 | `tool_addendum.py:20,23,27` | 3 处提及 `apple_calendar.create_event / delete_event` LLM 引导文 | **必改**(改 `→ apple_calendar(action="create_event")` 等) |
+
+实际 grep 命中:
+```
+tool_addendum.py:20  → 先调 time.now ... 再调 apple_calendar.create_event；
+tool_addendum.py:23  ... 再调 apple_calendar.delete_event。
+tool_addendum.py:27  - 再调 apple_calendar.create_event（默认走 calendar router 默认 source）；
+```
+
+#### Comment-only / archeology(保留,不动)
+
+| # | 文件:行 | 类型 |
+|---|---|---|
+| 2 | `main.py:501` | 注释(提醒走 apple_calendar.create_event) |
+| 3 | `database/models.py:184` | 注释(提醒改由 apple_calendar.create_event) |
+| 4 | `llm/tool_name_sanitize.py:7` | docstring 例子 |
+| 5 | `capabilities/google_calendar.py:12` | docstring 引用 |
+| 6 | `agents/chat.py:899` | docstring 数据估算注释 |
+
+**runtime caller 硬编码 = 零**:
+- `grep backend/scheduler/ backend/proactive/ for ToolRegistry.call|cron 接 apple_calendar` 零命中
+- SCHEDULER consumer 标记是预留 metadata,**实际 cron 走 `calendar.today_events` router**(`calendar.py` 内部硬调底层 `ac.list_events_in_range`,不经过 ToolRegistry by-name dispatch)
+- 折叠后旧 4 cap 删,**不破坏现有 cron 任何路径**
+
+#### 前端
+
+`_extractProvider('apple_calendar')` 单字 cap name 返自身,frontend `PROVIDER_DISPLAY` 无 `apple_calendar` 显式 mapping → fallback 用 cap name 原值显示 `apple_calendar`。**前端零改 logic**,CapabilityPanel.tsx 注释也无需碰(L99-101 PROVIDER_DISPLAY 仅 `media` mapping)。
+
+### 3.3 dispatcher 适配(模板 6 要点继承 + apple_calendar 特异 3 点)
+
+#### 模板继承(§2.7.4 lock)
+
+- 入口 cap 命名:**`apple_calendar`**(单字 namespace)
+- 参数 union 策略:**单层 union schema**
+- 错误处理:**`{ok:bool, error:str}` 标准**
+- action 命名风格:**snake_case**(1:1 mapping cap suffix)
+- 退役方案:**clean cut**
+- smoke 三档:**ToolRegistry / LLM 真 query / dispatcher routing**
+
+#### 特异 a · action enum 集合
+
+4 项 1:1 mapping cap suffix:`today_events / upcoming_events / create_event / delete_event`
+
+#### 特异 b · 参数 union schema(7 字段,内部校验逻辑复杂)
+
+**dispatcher schema 终稿**:
+
+```python
+parameters_schema={
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["today_events", "upcoming_events", "create_event", "delete_event"],
+            "description": "操作类型",
+        },
+        # upcoming_events 专用
+        "days_ahead": {
+            "type": "integer", "minimum": 1, "maximum": 30, "default": 7,
+            "description": "仅 action=upcoming_events 时用,向前看几天(1-30,默 7)",
+        },
+        # create_event 5 字段
+        "title": {
+            "type": "string",
+            "description": "仅 action=create_event 必填,事件标题(简短)",
+        },
+        "start_iso": {
+            "type": "string",
+            "description": "仅 action=create_event 必填,ISO 8601 含时区(如 2026-05-08T10:00:00+09:00);相对时间用先调 time.now",
+        },
+        "duration_minutes": {
+            "type": "integer", "minimum": 1, "maximum": 1440, "default": 30,
+            "description": "仅 action=create_event,持续时长分钟,默 30",
+        },
+        "description": {
+            "type": "string",
+            "description": "仅 action=create_event 可选,事件备注",
+        },
+        "calendar_name": {
+            "type": "string",
+            "description": "仅 action=create_event 可选,目标日历名(默系统默认)",
+        },
+        # delete_event 专用
+        "event_id": {
+            "type": "string",
+            "description": "仅 action=delete_event 必填,event_id 来自 today_events/upcoming_events 返回",
+        },
+    },
+    "required": ["action"],
+}
+```
+
+**dispatcher 内部校验**:
+
+```python
+async def apple_calendar_dispatch(action: str = "", **params) -> dict:
+    handler = _APPLE_CALENDAR_ACTION_HANDLERS.get(action)
+    if handler is None:
+        return {"ok": False, "error": f"unknown action: {action!r}; valid: [...]"}
+    # action-specific required 字段校验
+    if action == "create_event":
+        if "title" not in params or not params.get("title"):
+            return {"ok": False, "error": "title required when action=create_event"}
+        if "start_iso" not in params or not params.get("start_iso"):
+            return {"ok": False, "error": "start_iso required when action=create_event"}
+    if action == "delete_event":
+        if "event_id" not in params or not params.get("event_id"):
+            return {"ok": False, "error": "event_id required when action=delete_event"}
+    return await handler(**params)
+```
+
+#### 特异 c · SCHEDULER consumer 决策
+
+apple_calendar.today_events / upcoming_events 原标 C+S consumer。折叠后 dispatcher 该标:
+
+- **option c1**:`consumers=[CHAT_AGENT, SCHEDULER]`(保 SCHEDULER metadata) — CC 倾向 ✓
+- option c2:`consumers=[CHAT_AGENT]` only
+
+**CC 倾向 c1**(保 SCHEDULER metadata),理由:
+- 现 SCHEDULER consumer 实际**无 runtime caller**(grep 零命中,cron 走 calendar router),但 metadata 反映"理论上 cron 可直调 apple 数据源"的设计意图
+- 加 SCHEDULER consumer 零成本(metadata only,不影响 ToolRegistry / LLM 可见性)
+- 与原 today / upcoming 2 cap 的 metadata 保持一致(create / delete 原本仅 C,但 dispatcher 是单点入口标超集合理)
+
+**风险标 ⚠️**:若 PM 担心未来 cron 真调 `apple_calendar(action=today_events)` 入口而绕开 calendar router,可选 c2 强制走 router。CC 评估两者风险都低,但 c1 更稳。
+
+### 3.4 实施 plan(预 Stage 2)
+
+#### 改动文件清单
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/capabilities/apple_calendar.py` | 删 4 旧 cap decorator + 4 handler(L34-210 整段);新增 1 dispatcher cap + 1 `apple_calendar_dispatch` 函数 + 4 `_handle_*` internal(原 handler 逻辑搬过来);保留 `_get_timezone` helper |
+| 2 | `backend/agents/prompt/tool_addendum.py:20,23,27` | 3 处字符微改:`→ apple_calendar.create_event` → `→ apple_calendar(action="create_event")` 等 |
+
+**前端**:零改(`_extractProvider` 兼容单字 cap name + PROVIDER_DISPLAY 无 `apple_calendar` mapping → fallback 用原值显示)
+
+#### dispatcher handler 实现
+
+```python
+_APPLE_CALENDAR_ACTION_HANDLERS = {
+    "today_events":    _handle_today_events,
+    "upcoming_events": _handle_upcoming_events,
+    "create_event":    _handle_create_event,
+    "delete_event":    _handle_delete_event,
+}
+
+@register_capability(
+    name="apple_calendar",
+    display_name="Apple Calendar 日历操作",
+    description="...一段描述列 4 action + 用法引导...",
+    category="calendar",
+    consumers=[Consumer.CHAT_AGENT, Consumer.SCHEDULER],  # c1
+    trigger_modes=[TriggerMode.ON_DEMAND, TriggerMode.SCHEDULED],
+    icon="calendar",
+    health_check=ac.health_check,
+    parameters_schema={...union schema as §3.3 b...},
+)
+async def apple_calendar_dispatch(action: str = "", **params) -> dict:
+    ...  # 内部校验 + 路由
+```
+
+4 `_handle_*` internal 函数 = 现 today / upcoming / create / delete handler 逻辑去掉装饰器搬过来。
+
+#### 估改动量
+
+- 删 ~180 行(4 cap decorator + handler)
+- 新增 ~150 行(1 dispatcher + 4 `_handle_*` + 校验逻辑)
+- 净减 ~30 行 .py
+- tool_addendum.py 改 ~3 行
+
+### 3.5 风险评估
+
+| 项 | 风险 | 说明 |
+|---|---|---|
+| LLM 调用新 dispatcher | **低** | 模板已 P1.media 实证(5/5 query 全调新 cap);apple_calendar 参数复杂但 LLM 看 union schema 仍能正确选 |
+| LLM 误调旧 cap 名 | **低** | 删除后 LLM 看不到 schema 不会调;unknown-tool fallback 兜底 |
+| dispatcher 内部参数校验 | **极低** | create_event / delete_event required 字段缺失 → 标准 `{ok:False, error:...}` 协议 |
+| 现有 caller 硬编码 | **零** | grep 实测 backend/scheduler / proactive 零 runtime caller;cron 走 calendar router 不经 ToolRegistry |
+| 删 SCHEDULER consumer 路径 | **零** | 实际无 cron caller 用这两 cap;c1 保 SCHEDULER metadata 即可(零成本) |
+| LiteLLM × DashScope union schema | **极低** | OpenAI 标准,P1.media 已实证 |
+
+**总风险 = 低**,可 clean cut。
+
+### 3.6 估省 token(按 P1.media 实测密度 ~0.39 token/char 重估)
+
+**baseline 实测**:apple_calendar 4 cap = **727 token**(JSON chars 1,868 → 实测密度 0.39 token/char,JSON 结构化数据密度典型范围)
+
+**折叠后 dispatcher 预估**:
+- description: ~280 chars(列 4 action + 用法引导,比 media 略长因 create_event 有相对时间 / time.now 前置等说明)
+- parameters_schema(union 7 字段): ~700 chars(action enum + 7 字段详注,create_event 字段最多)
+- function-calling wrap: ~80 chars
+- 合计 ~1,060 chars
+- × 0.39 token/char = **~410 token**
+
+**估省 = 727 - 410 = ~317 token**(中位数 **~300 token**)
+
+vs §3 旧估 ~560,按 P3 实测 ~3x 偏低修正 → 估 ~250-350 范围,**~300 居中**。
+
+### 3.7 收口(Stage 1)
+
+- ✅ 4 cap audit 实测(JSON chars 1,868 / token 727 / avg 182/cap;create_event 单 cap 占 51%)
+- ✅ 外部引用 grep:2 处必改(tool_addendum 3 行);零 runtime caller 硬编码
+- ✅ dispatcher 适配模板继承 + 特异 3 点(action enum 4 项 / union schema 7 字段 / SCHEDULER consumer c1 保留)
+- ✅ 实施 plan 2 文件改动清单完整
+- ✅ 风险评估 = 低,可 clean cut
+- ✅ 估省 ~300 token(baseline 727 → dispatcher ~410)
+
+→ **Stage 1 完成,等 PM 审 4 cap audit + 特异 3 点 + 进 Stage 2 落代码**。
+
+### 3.8 Stage 2 实施记录(2026-05-21)
+
+#### 3.8.1 Commit + 改动
+
+- commit:(本 commit) `refactor(capabilities): fold apple_calendar 4 caps into dispatcher (saves ~91 tokens, P1 template reuse #1)`
+
+| 文件 | 改动 | 大小 |
+|---|---|---|
+| `backend/capabilities/apple_calendar.py` | 删 4 旧 cap decorator + handler;新增 1 dispatcher + 4 `_handle_*` internal + 校验逻辑;**末尾加 2 行 module-level alias**(backward-compat for calendar.py D1 router) | -177 / +159 行 |
+| `backend/agents/prompt/tool_addendum.py` | L20, 23, 27 三处微改 `→ apple_calendar.X` → `→ apple_calendar(action="X")` | ~+3 / -3 |
+
+#### 3.8.2 calendar router import alias fix(Smoke 2 暴露后 PM 拍板 option A)
+
+**问题**:Smoke 2 首跑暴露 `backend/capabilities/calendar.py:43,55` router 内部 Python module-level import 硬编码 handler 函数名:
+
+```python
+from backend.capabilities.apple_calendar import today_events as ac_today
+from backend.capabilities.apple_calendar import upcoming_events as ac_up
+```
+
+我 Stage 1 audit grep `apple_calendar.<action>` cap-name 形式漏掉这个 Python import 路径(不同 grep 模式)。
+
+**修法 option A**(apple_calendar.py 末尾加 alias):
+
+```python
+today_events = _handle_today_events
+upcoming_events = _handle_upcoming_events
+```
+
+- 不动 calendar router(与 D1 决策"calendar router 保留不动"对齐)
+- alias 是 Python 名字绑定,**不进 ToolRegistry,不增 schema token**
+- **不是 LLM-visible**;LLM 主路径走 `apple_calendar(action=...)` dispatcher
+- **新代码不要依赖** these aliases — backward-compat only
+
+**验证**(直 import + 调 calendar router):
+```
+✅ aliases bind correctly (today_events is _handle_today_events)
+✅ calendar.today_events router via alias → type=list (无 ImportError)
+✅ calendar.upcoming_events router via alias → type=list
+✅ tools_schema POST-alias-fix: 9,606 tokens (alias 零 schema 开销,reduction 仍 -91)
+```
+
+#### 3.8.3 三条 smoke 全 PASS
+
+##### Smoke 1 · ToolRegistry
+
+```
+apple_calendar* cap in registry: ['apple_calendar']
+_get_all_tools count: 50 (was 53 post-P1.media; 4 删 + 1 加 = 净减 3)
+tools_schema POST-P1.apple_calendar: 9,606 tokens (P1.media baseline 9,697)
+P1.apple_calendar reduction: 91 tokens
+```
+
+##### Smoke 2 · LLM 调用 dispatcher(4 action 全覆盖 + 双路径)
+
+```
+[1] '今天有什么安排'       → ['calendar.today_events']           ✅ router 路径(经 alias 兜底)
+[2] '未来一周日程'         → ['calendar.upcoming_events']        ✅ router 路径(经 alias 兜底)
+[3] '明天上午 10 点开会 30 分钟' → ['time.now', 'apple_calendar']    ✅ chunk-1 chain: time.now → apple_calendar
+[4] '删掉 event_id=ABC123 那个日程' → ['apple_calendar']          ✅ dispatcher 直调
+```
+
+**双路径全覆盖**:
+- query 1+2(today/upcoming)→ LLM 选 `calendar.*` router(经 alias backward-compat 到 _handle_*)
+- query 3+4(create/delete)→ LLM 选 `apple_calendar` dispatcher 直调
+- query 3 验证 chunk-1 设计 `time.now → apple_calendar(create_event)` 链路保留(time.now idx 0 < apple_calendar idx 1)
+
+##### Smoke 3 · dispatcher routing 4 档
+
+```
+unknown action       → {ok: False, error: "unknown action: 'unknown_X'; valid: [...4 项]"}
+create_event no title  → {ok: False, error: "title required when action=create_event"}
+create_event no start_iso → {ok: False, error: "start_iso required when action=create_event"}
+delete_event no event_id  → {ok: False, error: "event_id required when action=delete_event"}
+today_events 真路由  → type=list (路由到 _handle_today_events 成功)
+```
+
+✅ 4 档错误处理 + 真 routing 全正确。
+
+#### 3.8.4 token 减幅累计
+
+| 阶段 | tools_schema token | 累计减幅 vs INV-3 §③ 13,250 baseline |
+|---|---|---|
+| INV-3 §③ baseline | 13,250 | 0 |
+| P2 (`72808ef`) | 10,336 | -2,914 (22.0%) |
+| P3 (`81205f5`) | 9,954 | -3,296 (24.9%) |
+| P1.media (`a835677`) | 9,697 | -3,553 (26.8%) |
+| **P1.apple_calendar (本 commit)** | **9,606** | **-3,644 (27.5%)** |
+
+P1.apple_calendar 单刀 -91 token,**远低于 §3.6 估 ~317**。
+
+#### 3.8.5 估 vs 实测偏差分析
+
+§3.6 估 ~300 token(baseline 727 - dispatcher 410)。实测 -91 偏低 ~3.5x。
+
+根因:dispatcher 的 `description + parameters_schema` 比预估**重得多**:
+- description 终稿 ~500 chars(列 4 action 详注 + 用法引导,比预估 280 长 ~80%)
+- parameters_schema 终稿 ~960 chars(union schema 8 字段 + 详 description,比预估 700 长 ~37%)
+- 总 ~1,540 chars × ~0.42 token/char = ~640 token
+- 实测 dispatcher token = 727 - 91 = **636 token**(与重估吻合)
+
+**Lesson 补 §2.7.4 #8**:dispatcher description / parameters_schema 实际写出后 chars 数往往**比草稿预估高 30-80%**,因要含 4-13 action 的详注 + 用法引导(尤其多必填参数的 action 如 create_event 需要详细说明)。**P1.bilibili / P1.netease Stage 1 应按"实写 dispatcher schema chars 估算"而非"压缩 ratio 估算"**。
+
+#### 3.8.6 收口
+
+- ✅ 2 文件改动 ship(apple_calendar.py 主结构改 + alias 兜底,tool_addendum.py 3 处微改)
+- ✅ Smoke 2 暴露 calendar router alias 漏点 → PM option A 修法 ship + lesson #7 记入
+- ✅ 3 条 smoke 全 PASS,双路径(router via alias + dispatcher 直调)全覆盖
+- ✅ chunk-1 设计 `time.now → apple_calendar(create_event)` 链路保留
+- ✅ 实测 -91 token(累计 27.5% reduction);**lesson #8**:dispatcher schema 实写 chars 比预估高 30-80%
+- 🔒 零 calendar router / google_calendar / 其它 calendar 系列改动
+
+→ **P1.apple_calendar 子轨 B 实施第 4 刀 closed**。下一刀 = **P1.bilibili 11→1**(模板复用 #2,最大头),Stage 1 必走双 grep audit(§2.7.4 #7)。
