@@ -294,6 +294,24 @@ def strip_all_for_tts(text: str) -> str:
 _JA_TAG_RE = re.compile(r"<ja>([\s\S]*?)</ja>", re.IGNORECASE)
 _EN_TAG_RE = re.compile(r"<en>([\s\S]*?)</en>", re.IGNORECASE)
 
+# INV-9 §1 fix (Option A1) · 残留 ja/en 字面 open/close tag 检测器。
+# pre-condition:调用前已用 ``_JA_TAG_RE.sub('')`` / ``_EN_TAG_RE.sub('')`` 剥完整
+# 闭合块;若仍有 ``<ja|en`` 字面 → 视为半截 / stream 截断。
+_PARTIAL_JA_EN_OPEN_RE = re.compile(r"</?(?:ja|en)\b", re.IGNORECASE)
+
+
+def _has_unclosed_ja_en_tag(text: str) -> bool:
+    """检测 text 含残留 ``<ja>`` / ``<en>`` 字面但未完整 paired closure。
+
+    用于 ``extract_tts_text`` 兜底判半截 / stream 截断 → caller skip synth。
+    内部先剥完整闭合块,残留字面 tag = 半截 marker。
+    """
+    if not text:
+        return False
+    stripped = _JA_TAG_RE.sub("", text)
+    stripped = _EN_TAG_RE.sub("", stripped)
+    return bool(_PARTIAL_JA_EN_OPEN_RE.search(stripped))
+
 
 def extract_tts_text(raw_text: str, tts_language: str) -> str:
     """按 tts_language 选实际送 TTS 的文本。
@@ -304,38 +322,75 @@ def extract_tts_text(raw_text: str, tts_language: str) -> str:
 
     Returns:
         送 TTS 的字符串。
-          * zh / default:走 ``strip_all_for_tts``(原行为)
-          * ja:取**所有** ``<ja>...</ja>`` 内容拼接(剥 meta tag 后);无 tag → fallback
-            ``strip_all_for_tts(raw_text)`` + log warning
-          * en:同上,取所有 ``<en>...</en>``
+          * zh / default:剥 ``<ja>/<en>`` 整段后走 ``strip_all_for_tts``;残留半截
+            ``<ja|en`` 字面 → 返 ``""`` 让 caller skip synth(INV-9 §1 fix PM bug #2)
+          * ja:取**所有** ``<ja>...</ja>`` 内容拼接(剥 meta tag 后);半截未闭合
+            ``<ja`` → 返 ``""`` skip synth(INV-9 §1 fix PM bug #1);真无 tag(LLM
+            漏标整段)→ fallback ``strip_all_for_tts(raw_text)`` + log(降级行为保留)
+          * en:同 ja
 
     Bugfix-segment2-3:从 ``.search`` 改成 ``.findall`` —— ``merge_short_sentences``
     会把多个短意群 sentence 合并成一个 buffer,该 buffer 可含 2+ ``<ja>`` tag。
-    旧实现只取第一个 tag,会丢掉后续意群的日语翻译;新实现 findall + 顺序拼接。
+
+    INV-9 §1 Option A1 fix(2026-05-22):per INV-8 §1.5.2 sanitize bug audit verdict:
+      - PM bug #1 "中日语一起全给 TTS":半截 ``<ja>`` 时 matches=[] 走 fallback
+        ``strip_all_for_tts(raw)`` 不剥字面 + 内容混合送 TTS → 加 partial-tag detect
+        skip synth
+      - PM bug #2 "切 zh voice 仍带日语":``_SUSPICIOUS_TAG_WHITELIST`` 全局豁免在
+        zh 路径反作用 → zh 分支显式 ``_JA_TAG_RE.sub('') + _EN_TAG_RE.sub('')`` 剥整段
     """
     if not raw_text:
         return raw_text or ""
     lang = (tts_language or "zh").lower()
+
     if lang == "ja":
         matches = _JA_TAG_RE.findall(raw_text)
         if matches:
             return "".join(strip_all_for_tts(m).strip() for m in matches if m)
+        # INV-9 §1 fix (PM bug #1):半截 <ja> 未闭合 → skip synth(避免中日混送)
+        if _has_unclosed_ja_en_tag(raw_text):
+            logger.warning(
+                "[tts] tts_language=ja but <ja> unclosed (半截/stream 截断), "
+                "skip synth: preview=%r", raw_text[:80],
+            )
+            return ""
+        # 真无 tag(LLM 漏标整段) — 降级 fallback 原行为(送原文,日语 voice 念中文)
         logger.warning(
             "[tts] tts_language=ja but no <ja> tag found; "
             "falling back to raw sentence(LLM 漏标 ja)"
         )
         return strip_all_for_tts(raw_text)
+
     if lang == "en":
         matches = _EN_TAG_RE.findall(raw_text)
         if matches:
             return "".join(strip_all_for_tts(m).strip() for m in matches if m)
+        if _has_unclosed_ja_en_tag(raw_text):
+            logger.warning(
+                "[tts] tts_language=en but <en> unclosed, skip synth: preview=%r",
+                raw_text[:80],
+            )
+            return ""
         logger.warning(
             "[tts] tts_language=en but no <en> tag found; "
             "falling back to raw sentence(LLM 漏标 en)"
         )
         return strip_all_for_tts(raw_text)
-    # zh / unknown
-    return strip_all_for_tts(raw_text)
+
+    # zh / unknown — INV-9 §1 fix (PM bug #2):
+    # 切 zh voice 时 LLM 可能仍按旧 prompt 输出 <ja>/<en>(prompt 重渲染滞后 / LLM
+    # round-trip 学到 ja 锚点) → 必须剥整段不留字面 + 内容。原行为靠 `strip_all_for_tts`
+    # + ``_SUSPICIOUS_TAG_WHITELIST`` 白名单豁免,反致 <ja> 整段保留送 zh voice TTS。
+    cleaned = _JA_TAG_RE.sub("", raw_text)
+    cleaned = _EN_TAG_RE.sub("", cleaned)
+    # 兜底:剥完闭合块后仍有 <ja|en 字面 → 半截 / stream 截断 → skip synth
+    if _has_unclosed_ja_en_tag(cleaned):
+        logger.warning(
+            "[tts] tts_language=zh but <ja>/<en> tag literal remains after "
+            "block strip (半截), skip synth: preview=%r", raw_text[:80],
+        )
+        return ""
+    return strip_all_for_tts(cleaned)
 
 
 def strip_ja_en_tags_for_subtitle(text: str) -> str:
