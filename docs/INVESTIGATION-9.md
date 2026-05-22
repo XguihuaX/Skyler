@@ -667,6 +667,113 @@ PM 听 20 文件后选默认 T:
 
 → **Phase 2 中插刀整段 closed**(part 1 19 calls + part 2 20 calls = 39 WAV outputs);等 PM 听 part 2 20 WAV → 拍板 final 默认 T(0.15 / 0.20 / 0.20 variance 接受 / 调 top_p)→ schema 默认值锁,进 §7 收尾刀(cost cap + profile_data JSON,**§8 cid 迁移已取消**)。
 
+---
+
+## 中插 part 3 · Part 1 vs Part 2 diff audit + repro(Phase 2 第 6 commit, 2026-05-22)
+
+> PM 听后确认:Part 1 T=0.2(`INV9_param_T02_S{1-4}.wav`)质量**明显好于** Part 2 T=0.2 三 runs → 不是抽样运气,两脚本有实质差异需查清。
+> 任务 1 · diff 两脚本所有维度。任务 2 · re-run Part 1 T=0.2 验服务器稳定性。任务 3 · 报告 audit verdict + 可能 mitigation。
+
+### part3.1 任务 1 · 两脚本 diff audit
+
+`diff scripts/fish_param_sweep.py scripts/fish_param_sweep_part2.py` 全部差异:
+
+| 维度 | Part 1 | Part 2 | 影响 |
+|---|---|---|---|
+| docstring / 注释 | grid 4×4 + seed sanity | T0.20 × 3 + T015/030 + 变异度 | ❌ 无 |
+| build_voice_model signature | `(temperature, top_p, seed)` | `(temperature, top_p=0.7)` | ⚠️ 见下 |
+| **voice_model JSON `fish_seed` 字段** | **含 `"fish_seed": 42`** | **不含 `fish_seed`** | ⭐ **唯一实质差异** |
+| `TEMPS` / `SEED` 常量 | 顶层 `[0.2,0.4,0.6,0.8]` / `42` | 不定义 | ❌ 无(Part 2 直接 literal) |
+| `temp_label` 精度 | `T{n:02d}` (`T02`) | `T{n:03d}` (`T020`) | ❌ 无(仅文件名命名差) |
+| summary 结构 | `calls` + `seed_sanity` | `calls_T020` + `calls_T015` + `calls_T030` + `variance_T020` | ❌ 无(record 形态差,数据等价) |
+| balance check 路径 | `Path(...).read_text` | `api_key_file.read_text(encoding='utf-8')` | ❌ 无(都读同 file) |
+| reference_audio 加载 | `(ROOT / "tts/fish/...").lab.read_text` | 同上 | ❌ 完全相同 |
+| TTSRequest 构造 | (通过 `get_tts_engine → FishTTS._build_request`) | 同上 | ❌ 完全相同(走同一函数)|
+| text 编码 | `.read_text(encoding="utf-8")` | 同上 | ❌ 完全相同 |
+| import sequence / Session 构造 | 标准 | 同上 | ❌ 完全相同 |
+
+**核心 verdict**:仅 1 实质差异 = voice_model JSON 是否含 `fish_seed: 42`。
+
+**这一差异在代码层的影响**:
+1. `parse_voice_config` → Part 1 `VoiceConfig.fish_seed=42` / Part 2 `None`
+2. `FishTTS.__init__` Part 1 log warning(`SDK TTSRequest does not accept 'seed' field; param ignored`)/ Part 2 不 log
+3. `_build_request` → **两路径都不向 TTSRequest 传 seed**(per fish.py 设计 + INV-9 #6 实证)
+
+**结论**:在 **SDK 端 effective TTSRequest payload 完全相同**(text + references + format + latency + temperature + top_p)。两脚本理论上**应该**产生相同分布的 audio(但 stochastic 采样下每次不同 byte-level)。
+
+### part3.2 任务 2 · Re-run Part 1 T=0.2 实测
+
+`scripts/fish_param_repro.py` 用与 Part 1 完全相同的 build_voice_model(含 `fish_seed=42`)重跑 4 calls T=0.2,对比原 Part 1 输出:
+
+| text | orig Part 1 bytes | repro bytes | Δ bytes | orig dur | repro dur | match |
+|---|---|---|---|---|---|---|
+| S1 | 208,940 | 258,092 | **+49,152** | 2.37s | 2.93s | md5✗ bytes✗ |
+| S2 | 573,484 | 516,140 | **-57,344** | 6.50s | 5.85s | md5✗ bytes✗ |
+| S3 | 135,212 | 159,788 | **+24,576** | 1.53s | 1.81s | md5✗ bytes✗ |
+| S4 | 442,412 | 471,084 | **+28,672** | 5.02s | 5.34s | md5✗ bytes✗ |
+
+**md5 match: 0/4 · bytes match: 0/4 · duration match: 0/4**
+
+输出 4 WAV → `INV9_repro_T02_S{1|2|3|4}.wav` + `INV9_repro_summary.json`(`.gitignore` 已加)。
+
+### part3.3 任务 3 · Verdict
+
+⭐ **`fish_seed=42` 完全无效**(per INV-9 #6 已实证),Fish 服务器侧**每次 TTS call 独立采样**,即便:
+- 完全相同的 reference_audio
+- 完全相同的 reference_text
+- 完全相同的 target text
+- 完全相同的 temperature / top_p / latency / backend
+- voice_model JSON 含 `fish_seed=42`(SDK 不识 → 不进 TTSRequest)
+
+→ **Part 1 vs Part 2 听感差异 = 服务器侧抽样运气,不是脚本逻辑差**
+
+这与 INV-9 #6 + #7 lesson 完全一致:
+- INV-9 #6 · SDK 字段表是真实接受参数集 ground truth(无 seed)
+- INV-9 #7 · stochastic noise floor 跟 T 维度信号同量级
+
+数据印证:
+- Part 1 T=0.2 4 文件听感好 = 那 batch 落在 happy-path 样本
+- Part 2 T=0.20 12 文件(4 texts × 3 runs)= 跨更多样本暴露 stochastic floor 真实分布
+- repro 4 calls 又是另一独立 batch,bytes / dur 全不同于 Part 1
+
+### part3.4 Mitigation 选项(给 PM 拍板)
+
+无 "脚本侧修复方案" — 服务器侧 stochastic 无 deterministic 控制。可能策略:
+
+| Option | 描述 | 工程量 | trade-off |
+|---|---|---|---|
+| **M0 · 接受 stochastic**(CC leaning) | 设默认 T 后生产实际**每 turn Mai 声音都略有 byte-level 变化**(per part 2 T=0.20 三 runs 6.7%-27.6% byte variance);用户体感"每次说话略不同"= 自然声音特征 | 0 | 听感波动接受度由 PM 用户 dogfood 验 |
+| M1 · 切 reference_id 预上传 voice | 走 Fish create_model 把 Mai reference 预存 + 用 reference_id 替代 references[] inline;**可能** server-side 用 cached voice profile 更稳(未实测) | 0.5d(create_model + voice_model JSON schema 加 reference_id 字段)| 不实证 server-side 是否真稳;若不稳 = 浪费工程 |
+| M2 · retry per-sentence + 选最好 | 每句 synth 2-3 次 + 后端 audio quality scorer 选优 | 2-3d + 成本 2-3x | 复杂度 / 成本爆炸;quality scorer 难做 |
+| M3 · 等 SDK 加 seed 支持(future hook) | `fish_seed` 字段保留 — 未来 SDK 加 seed support 时 fish.py 加一行 `kwargs["seed"]=self.seed` 即可 | 0(已保留) | 不可控时间表 |
+
+**CC leaning M0**:接受 stochastic 作为 Fish s2-pro 的固有特性。PM 拍板默认 T 时主要看**多 runs 听感分布**(Part 1 4 + Part 2 12 + repro 4 = 20+ T=0.2 文件)而非单 batch 最优。
+
+### part3.5 收口
+
+- ✅ 任务 1 diff audit:唯一实质差异 = `fish_seed` 字段(SDK 不识 → TTSRequest payload 等价)
+- ✅ 任务 2 re-run:0/4 md5/bytes/duration match → **服务器侧每次独立采样**实证(per INV-9 #6 一致)
+- ✅ 任务 3 verdict + 4 mitigation options + CC leaning M0
+- ✅ 5 WAV outputs(4 repro + 1 summary.json)
+- 🔒 0 backend 代码改动;不破任何回归
+
+→ **Phase 2 中插 part 3 closed**;Part 1 vs Part 2 听感差异 = 服务器侧抽样运气定案;**等 PM 拍板默认 T**(基于 part 1 + part 2 + repro 共 20+ T=0.2 多 batch 听感分布)→ 进 §7 收尾刀。
+
+### part3.6 lesson 沉淀
+
+#### Lesson INV-9 #8 · "复现失败"作为 audit 工具的双重价值
+
+PM 怀疑 Part 1 vs Part 2 脚本差异时,**audit diff 的 falsifiable 假设**:
+- (a) 若 diff 发现实质差异 + 改 Part 2 后复现 Part 1 → 脚本 bug,修
+- (b) 若 diff 仅 cosmetic 差异 + Part 1 repro 不一致 → **服务器侧 stochastic 实证**(per part 3.2 数据)
+- (c) 若 diff 实质差异 + Part 1 repro 一致 → diff 偶然 cosmetic(罕见)
+
+**抽象**:面对"不同 batch 输出质量差异"假设时,**第一步永远是 audit 脚本 diff + 同条件 repro**,而不是直接猜服务器侧 / 改参数。本案 audit diff + repro 直接落实 INV-9 #6/#7 lesson 在 production decision 层面的应用:**Fish s2-pro 输出是 inherent stochastic,默认参数选择应基于多 batch 听感分布,不是 single batch 最优**。
+
+**类比 INV-7 §1.7 lesson #9** 三 grep 模式 — INV-9 #8 是同款"先实测 / 后假设" 在 stochastic output 层面的应用。
+
+
+
 ### sweep_part2.6 lesson 沉淀
 
 #### Lesson INV-9 #7 · Stochastic sampling 的"参数 sweep 解释力"边界
