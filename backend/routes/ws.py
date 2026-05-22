@@ -730,6 +730,52 @@ async def _handle_message(
                     "Failed to load character.voice_model for id=%s", char_id,
                 )
 
+        # INV-9 §7 · Fish cost cap check(per 决策 5 实施)
+        # voice_model 是 fish provider → 调 fish 前 check daily/monthly cap;
+        # 触达 → fallback CosyVoice yaml default(voice_model = None)+ push
+        # WS event 'tts_cost_cap_exceeded' 给前端 toast 提示用户。
+        # 默认 cap $1/day · $20/month(profile_data JSON 覆盖,详 cost_estimator.py)
+        if voice_model:
+            try:
+                _vm_for_cap = json.loads(voice_model)
+                if (isinstance(_vm_for_cap, dict)
+                        and _vm_for_cap.get("provider") == "fish"):
+                    from backend.utils.cost_estimator import check_fish_cost_cap_exceeded
+                    cap_status = await check_fish_cost_cap_exceeded(user_id)
+                    if cap_status["exceeded"]:
+                        logger.warning(
+                            "[tts] fish cost cap '%s' exceeded for user=%s "
+                            "today=$%.4f / cap=$%.4f · month=$%.4f / cap=$%.4f "
+                            "→ fallback CosyVoice yaml default",
+                            cap_status["reason"], user_id,
+                            cap_status["today_cost"], cap_status["daily_cap"],
+                            cap_status["month_cost"], cap_status["monthly_cap"],
+                        )
+                        # Fallback:voice_model=None 让 get_tts_engine 走 yaml
+                        # default(CosyVoice longyumi_v3),tts_language 回退 zh
+                        voice_model = None
+                        # Push WS event 前端 NotificationToast(per useWebSocket
+                        # case 'tts_cost_cap_exceeded' → pushNotification)
+                        try:
+                            await ws.send_json({
+                                "type": "tts_cost_cap_exceeded",
+                                "reason": cap_status["reason"],
+                                "today_cost": cap_status["today_cost"],
+                                "month_cost": cap_status["month_cost"],
+                                "daily_cap": cap_status["daily_cap"],
+                                "monthly_cap": cap_status["monthly_cap"],
+                            })
+                        except Exception:
+                            logger.exception(
+                                "[tts] failed to send tts_cost_cap_exceeded WS event",
+                            )
+            except (json.JSONDecodeError, TypeError):
+                pass
+            except Exception:
+                logger.exception(
+                    "[tts] cost cap check failed (silent fallthrough · 默认放行)"
+                )
+
         tts_engine = get_tts_engine(voice_model)
         # v4 segment 2 §2.5:解析 voice_model.tts_language,日语 / 英语 voice
         # 角色需要在 sentence 层走 extract_tts_text(ja/en 分离),否则 TTS 拿到

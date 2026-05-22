@@ -81,8 +81,39 @@ _COST_PER_CHAR: dict[str, float] = {
 }
 _COST_FALLBACK = 0.0007
 
+# INV-9 §7 · Fish s2-pro / s1 / v1.6 走 byte-based 估算(per INV-8 §1.3.6
+# + cost_estimator.py):$15 / 1M UTF-8 bytes;不在 _COST_PER_CHAR 表。
+_FISH_MODEL_PREFIXES: tuple[str, ...] = ("s2-pro", "s1", "v1.6")
 
-def estimate_cost(input_chars: int, model: Optional[str]) -> float:
+
+def estimate_cost(
+    input_chars: int,
+    model: Optional[str],
+    raw_text: Optional[str] = None,
+) -> float:
+    """估算 TTS cost in USD。
+
+    INV-9 §7:fish 模型(s2-pro / s1 / v1.6)走 byte-based 估算(per
+    ``backend.utils.cost_estimator``);其它 cosyvoice / sovits / edge 走
+    per-char rate(原行为)。
+
+    Args:
+        input_chars: text 长度(总 chars)。
+        model: TTS 模型 name(如 's2-pro' / 'cosyvoice-v3-flash')。
+        raw_text: INV-9 §7 新增。fish 路径若提供则用真实 UTF-8 bytes 计费;
+                 否则用 input_chars × 3(日语近似 3 bytes/char 兜底)。
+                 caller 传完整 text 时此参数精确;truncate 后传偏低估。
+    """
+    if model in _FISH_MODEL_PREFIXES:
+        # 延迟 import 避免循环(observability 依赖 utils.cost_estimator,
+        # cost_estimator 依赖 backend.database;启动序列容差)
+        from backend.utils.cost_estimator import (
+            estimate_fish_cost_for_chars,
+            estimate_fish_cost_for_text,
+        )
+        if raw_text:
+            return estimate_fish_cost_for_text(raw_text)
+        return estimate_fish_cost_for_chars(input_chars, lang="ja")
     rate = _COST_PER_CHAR.get(model or "", _COST_FALLBACK)
     return round(input_chars * rate, 4)
 
@@ -99,9 +130,18 @@ async def log_tts_call(
     input_preview: str,
     error_message: Optional[str] = None,
 ) -> None:
-    """INSERT one row into tts_call_log。永不抛 (log layer 不该影响合成路径)。"""
+    """INSERT one row into tts_call_log。永不抛 (log layer 不该影响合成路径)。
+
+    INV-9 §7:cost = estimate_cost(input_chars, model, raw_text=input_preview)
+    fish 模型走 byte-based 精确估算(per backend.utils.cost_estimator);
+    raw_text 用 input_preview 作 full text 候选(caller 多数传完整 text,
+    在 log_tts_call 内部才截 200 chars 给 preview 列)。
+    """
     ctx = get_tts_call_context()
-    cost = estimate_cost(input_chars, model)
+    # INV-9 §7:fish 路径 raw_text 传 full text(caller fish.py / cosyvoice.py
+    # 调 log_tts_call(input_preview=text) 传完整 text;此处用 input_preview 作
+    # raw_text 给 estimate_cost 算精确 UTF-8 bytes;truncate 给 preview 列在下方)
+    cost = estimate_cost(input_chars, model, raw_text=input_preview)
     preview = (input_preview or "")[:_PREVIEW_MAX_LEN]
     try:
         async with engine.begin() as conn:

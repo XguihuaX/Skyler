@@ -772,6 +772,185 @@ PM 怀疑 Part 1 vs Part 2 脚本差异时,**audit diff 的 falsifiable 假设**
 
 **类比 INV-7 §1.7 lesson #9** 三 grep 模式 — INV-9 #8 是同款"先实测 / 后假设" 在 stochastic output 层面的应用。
 
+### part3.7 PM 后续决策 · audit 留档不再扩(2026-05-22)
+
+PM 听完 Part 1 + Part 2 narrow window 全 sweep 后:
+- Part 1 T=0.2 仍是听感最优
+- Part 2 narrow window(T0.15/0.20/0.30 多 run)整体不如 Part 1
+- **zero-shot from 7s reference 有硬天花板,不再调参**
+
+**Audit 留档不再扩**:
+- audit 实证 SDK `fish-audio-sdk 1.3.0` stochastic 行为(per part3.2 0/4 md5 match)
+- Lesson INV-9 #8 保留作长期 reference(future 类似 stochastic audit 沿用方法论)
+- 不再 iterate temperature / 不扩 sweep — 进 §7 收尾刀
+- 真正 fidelity 升级路径转入 **v4.1+ Mai voice fidelity 升级 backlog**(远程 GPU fine-tuning + zero-shot hybrid;详 ROADMAP)
+
+**关键 reference 数据**:43 WAV outputs(part 1 19 + part 2 20 + repro 4)在 `scripts/fish_probe_outputs/` 本地保留,v4.1+ fine-tuning 时作 baseline 对比;5min Mai 素材在 `tts/fish/参考音频/mai/` 完整保留作训练 / 评测起点。
+
+---
+
+## §7 cost cap + profile_data JSON(Phase 2 第 7 / 收尾 commit, 2026-05-22)
+
+> per INV-8 §1.3.6 决策 5 重写 + INV-9 §1.收口.2 Q7 + PM Phase 2 §7 lock(2026-05-22)。
+> **Phase 2 整段收尾刀**:决策 5 实施 + cid=101 fish_temperature=0.2 lock(per PM 听感 part 1/2/repro 后定案 — zero-shot 7s ref 硬天花板,默 T 选 Part 1 T=0.2 happy-path)。
+> **§8 cid=1→cid=101 数据迁移已取消**(PM 2026-05-22 改手动 momo slot persona 更新)→ §7 是 Phase 2 真收尾。
+
+### §7.1 改动文件清单
+
+| 文件 | 改动 |
+|---|---|
+| `backend/utils/cost_estimator.py`(新) | +180 行 / `FISH_S2_PRO_COST_PER_M_BYTES_USD=15.0` + `DEFAULT_DAILY_CAP_USD=1.0` / `DEFAULT_MONTHLY_CAP_USD=20.0` + `estimate_fish_cost_for_text` / `_for_chars`(ja/zh 3 bytes / en 1 byte 兜底)+ `get_user_cost_caps(profile_data)` 读 JSON + default + `get_today_fish_cost_usd` / `get_month_fish_cost_usd` DB 聚合 + `check_fish_cost_cap_exceeded(user_id)` 主入口 |
+| `backend/observability/tts_log.py` | +20 / -5 行 / `estimate_cost(input_chars, model, raw_text=None)` 加 fish family 路径(`s2-pro`/`s1`/`v1.6` → byte-based);cosyvoice 路径不变 backward compat;`log_tts_call` 内调用传 `raw_text=input_preview`(caller 多数传完整 text) |
+| `backend/routes/ws.py` | +43 行 / `_handle_message` 读 voice_model 后 + `get_tts_engine` 前加 fish cost cap check;触达 → `voice_model = None`(fallback yaml default CosyVoice longyumi_v3)+ `ws.send_json({"type":"tts_cost_cap_exceeded", ...})` 给前端 toast |
+| `frontend/src/hooks/useWebSocket.ts` | +20 行 / `WsMessage` interface 加 4 字段(reason / today_cost / month_cost / daily_cap / monthly_cap)+ `case 'tts_cost_cap_exceeded'` handler 调 `s.pushNotification({type:'notify', content:'今日/本月 Fish 配额已用 $X / $Y,本轮切回 CosyVoice'})` |
+| `tests/test_cost_estimator.py`(新) | +280 / 34 cases / 7 estimate fish 单元 + 6 get_caps + 5 estimate_cost tts_log 桥接 + 6 集成(DB 聚合 + profile_data 覆盖触发 cap)+ 5 edge |
+| **DB UPDATE** `characters.id=101` | voice_model = `{"provider":"fish","voice":"mai5min_0033","model":"s2-pro","tts_language":"ja","reference_audio_path":"...","reference_text":"...","fish_temperature":0.2}` — PM 听感 lock T=0.2 + 其它 fish_* default(per PM "不强制覆盖 SDK 默认")|
+
+合计代码 +540 行 / 测试 +280 行 / docs +200 行 = ~1,000 行(略超 PM Phase 2 §7 ~250-300 LoC 预估,因 cost_estimator 完整 module + 34 cases 测试 + frontend 双向贯通)。
+
+### §7.2 cost 估算路径
+
+`tts_log.estimate_cost(input_chars, model, raw_text)` 双路径:
+
+```python
+if model in ("s2-pro", "s1", "v1.6"):
+    # Fish family · byte-based per INV-8 §1.3.6 $15/1M UTF-8 bytes
+    if raw_text:
+        return len(raw_text.encode("utf-8")) / 1_000_000 * 15.0  # 精确
+    return input_chars * 3 / 1_000_000 * 15.0  # 日语兜底
+else:
+    # cosyvoice / sovits / edge backward compat per-char rate
+    return input_chars * _COST_PER_CHAR.get(model, 0.0007)
+```
+
+**caller fish.py / cosyvoice.py** 调 `log_tts_call(input_preview=text, ...)` 传完整 text;`log_tts_call` 内部 `estimate_cost(raw_text=input_preview)` 算精确 bytes,然后 `input_preview` 才截 200 chars 给 log 表的 `input_preview` 列。
+
+### §7.3 cap check 路径(ws.py 主入口)
+
+```python
+# ws.py:_handle_message 读 voice_model 后
+if voice_model:
+    _vm = json.loads(voice_model)
+    if _vm.get("provider") == "fish":
+        cap_status = await check_fish_cost_cap_exceeded(user_id)
+        if cap_status["exceeded"]:
+            logger.warning("[tts] fish cost cap %s exceeded ...", cap_status["reason"])
+            voice_model = None  # fallback yaml default CosyVoice
+            await ws.send_json({"type": "tts_cost_cap_exceeded", ...})
+tts_engine = get_tts_engine(voice_model)  # voice_model=None → yaml default longyumi_v3 + tts_language=zh
+```
+
+**Fallback 路径副作用**:
+- voice_model=None → get_tts_engine yaml default 走 CosyVoice longyumi_v3 + tts_language="zh"
+- LLM 输出走 zh 路径(layer_a.j2 ja 分支不触发)→ 中文裸文本
+- **本轮**(turn)Mai 临时变 zh / cosyvoice 声音;下一轮 turn 用户若仍在 cap 内继续走 fish
+- 前端 NotificationToast 提示 "今日/本月 Fish 配额已用 $X / $Y,本轮切回 CosyVoice"(4 sec 自动消失)
+
+### §7.4 集成 test 触发链(`test_cost_estimator.py` Part 5)
+
+PR-grade 集成 test:
+1. INSERT `tts_call_log` 模拟 fish call cost=$0.01
+2. PATCH `users.default.profile_data` 加 `fish_daily_cost_cap_usd=0.0001`
+3. `check_fish_cost_cap_exceeded("default")` 返 `{exceeded: True, reason: "daily", today_cost: $0.81, daily_cap: $0.0001}`
+4. 验 `exceeded==True / reason=="daily" / daily_cap==0.0001`
+5. teardown:restore profile_data + DELETE test rows
+
+集成 test passed 实证完整 cap check 路径(profile_data 读 + DB 聚合 + 判定)。
+
+### §7.5 测试 + smoke · 345/345 PASS / 0 regression
+
+| Suite | Cases |
+|---|---|
+| `test_cost_estimator.py`(NEW) | **34/34** |
+| `test_fish_provider.py` | 37/37 |
+| `test_fish_marker_isolation.py` | 35/35 |
+| `test_sanitize_ja.py` | 32/32 |
+| `test_text_filters_ja_whitelist.py` | 38/38 |
+| `test_tts.py` CosyVoice/Edge/SoVITS legacy | 106/106 |
+| `test_bugfix_4_observability.py` | 31/31 |
+| `test_tts_final_guard.py` | 32/32 |
+| **TOTAL** | **345/345 PASS** |
+
+`tts_log.estimate_cost` signature 加 `raw_text=None` 默认参数 backward compat — `test_bugfix_4_observability.py` 31 case 全绿实证。
+
+### §7.6 cid=101 DB UPDATE(PM lock fish_temperature=0.2)
+
+```sql
+UPDATE characters SET voice_model = '{
+    "provider": "fish",
+    "voice": "mai5min_0033",
+    "model": "s2-pro",
+    "tts_language": "ja",
+    "reference_audio_path": "tts/fish/参考音频/mai/mai5min_0033.wav",
+    "reference_text": "自分の方が可愛いって自覚あるくせに、別の誰かのことを可愛いとか言ってる女がサクタは好きなの?",
+    "fish_temperature": 0.2
+}' WHERE id = 101;
+```
+
+DB 备份 `momoos.db.backup_inv9_§7_20260522_*` 已存(`.gitignore` 已加 `*.db.backup_*`)。
+
+Per PM "其它 fish_* 字段保持 default 不强制覆盖 SDK 默认":
+- 显式 lock:`fish_temperature=0.2`(per Part 1 listen verdict)
+- 不写 `fish_top_p`(VoiceConfig 默 None → 不传 TTSRequest → SDK 默 0.7)
+- 不写 `fish_seed`(per INV-9 #6 SDK 不识)
+- 不写 `fish_latency`(VoiceConfig 默 "balanced" — INV-8 §1.3.10 实测 ~593ms TTFA 最优)
+
+### §7.7 关键 invariant 锁(Phase 2 收尾)
+
+- ✅ **决策 5 实施完整**:本地 cost 累计(per-byte 精确 / per-char 兜底)+ profile_data per-user cap(default $1/$20)+ 触达 cap → fallback CosyVoice + frontend NotificationToast
+- ✅ **cap fail-safe**:DB 异常 / profile_data 读失败 → `check_fish_cost_cap_exceeded` 默认放行(不让 DB 抖动 fish 路径全断)
+- ✅ **historical row 偏保守**:旧 fish call cost_estimate(per-char rate 高估)被 SUM 时 fail-safe 偏早触发(不 leak 真实用量)
+- ✅ **cid=101 Mai 真实生产化**:DB row fish provider + fish_temperature=0.2 lock;用户 CharacterPanel UI 切到"樱岛麻衣"即走 fish + Mai 日语(per INV-8 §1.4.7 cid=101 三件事完整契合)
+- ✅ **single-user 假设**:tts_call_log 无 user_id 列,聚合不分 user(per single-user 现状);multi-user 精确 per-user 聚合留 v4.1+ backlog
+- 🔒 **backward compat**:cosyvoice / edge / sovits 路径完全不破(test_tts 106 + test_bugfix_4_observability 31 全绿);frontend 老前端忽略 `tts_cost_cap_exceeded` 未知 type(per useWebSocket 老前端无 case → silent ignore)
+
+### §7.8 收口
+
+- ✅ §7 改动 6 文件 ship(cost_estimator 新 / tts_log fish path / ws.py cap check + fallback + WS event / frontend useWebSocket toast handler / 34 test cases / DB cid=101 UPDATE)
+- ✅ 345/345 cases PASS / 0 regression
+- ✅ 集成 test 实证完整 cap trigger path(profile_data 极低 cap → exceeded=True → reason="daily")
+- ✅ frontend NotificationToast 复用现有 store `pushNotification` API(无需新 component)
+- 🔒 Phase 2 主体改造 7 文件全 ship(per INV-8 §1.5.10 + PM Phase 2 拍板清单 Q5)+ §1 sanitize fix + §2/3/4 抽象 + §5/6 双重隔离 + 中插 sweep 1/2/3 + §7 cost cap
+- 🔒 §8 cid=1→cid=101 数据迁移取消(per PM 2026-05-22 改手动 momo slot persona 更新)
+- 🔒 Phase 3 流式管线 + Step 6 H3 fix + 11 log 点 instrumentation 留待后续(per INV-8 §1.收口.4)
+
+### §7.9 lesson(沉淀)
+
+#### Lesson INV-9 #9 · cap fail-safe 方向选择 · 偏保守 vs 偏放行
+
+cost cap check 在 DB 异常 / profile_data 读失败时 2 选 1:
+- **偏放行**:`exceeded=False` 默认 → 不让 DB 抖动让 fish 路径全断;cost 可能短暂超 cap(unmonitored 短窗)
+- **偏保守**:`exceeded=True` 默认 → DB 抖动时整个 fish 路径自动 fallback CosyVoice;cost 不超 cap 但用户体感变化
+
+本 §7 选 **偏放行**(`exceeded=False` on error)— 理由:cap check 是辅助治理不是 critical path,DB 抖动让 fish 全断会让用户体感"突然中文化"频次过高;真实生产 cap 触达通常是渐进的(逐步累积接近 cap),不是瞬间 spike,放行短窗 cost 可控。
+
+**抽象**:辅助治理路径(quota / rate-limit / monitoring)的失败方向应该**偏向不打断主流程**(per 类比 INV-7 §1.7 lesson #10 `_CAPABILITY_TAG_RE` fallback 失效接受 trade-off — 同款"辅助路径失败不阻断主链"原则)。
+
+#### Lesson INV-9 #10 · estimate_cost signature 加 optional kwarg 模式
+
+`estimate_cost(input_chars, model, raw_text=None)` 新加 `raw_text` 默 None — 既支持精确 byte 估算(fish 路径 caller 传完整 text)又保持 backward compat(cosyvoice 老 caller 不传 raw_text 走 input_chars × rate)。
+
+**抽象**:估算 / 度量函数升级时,**新精度选项加 optional kwarg + 默 None** 是最 backward-compat 模式;不破现有 caller signature 不强制升级,新 caller 渐进采用。**类比 INV-9 #3 mode_A only validation parse 阶段 raise 不静默 fallback** — #10 是同款"渐进升级"思路在度量函数层面。
+
+→ Phase 2 §7 closed · Phase 2 整段 closed。
+
+### §7.10 Phase 2 整段 closure summary
+
+7 commits + 1 DB UPDATE:
+- ✅ §1 sanitize A1 fix(`0aba951`)
+- ✅ §2+§3+§4 TTS 抽象 + Fish provider(`f07a842`)
+- ✅ §5+§6 per-provider 双重隔离(`9a7608c`)
+- ✅ 中插 part 1 · 参数 sweep(`6ddc94f`)
+- ✅ 中插 part 2 · narrow window 变异度(`416d488`)
+- ✅ 中插 part 3 · diff audit + repro · stochastic verdict(`b34ad70`)
+- ✅ §7 cost cap + profile_data + cid=101 fish lock(本 commit)
+
+**Phase 2 整段 closed**。后续:
+- Phase 3 流式管线 + H3 fix + Step 6 instrumentation(per INV-8 §1.收口.4)
+- v4.1+ Mai voice fidelity 升级(per PM ROADMAP backlog · 远程 GPU fine-tune)
+- v4.1+ multi-user per-user cap 精确聚合(tts_call_log 加 user_id 列)
+- 等 PM 启 Phase 3 / next milestone
+
 
 
 ### sweep_part2.6 lesson 沉淀

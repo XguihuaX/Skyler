@@ -34,6 +34,12 @@ interface WsMessage {
   // Bug 2 修法:backend 在聊天 UI 类型 chunks 上附 conv_id;前端按
   // currentConversationId filter,stale chunks 丢弃。
   conversation_id?: number | null;
+  // INV-9 §7:'tts_cost_cap_exceeded' 事件字段(Fish daily/monthly cost cap)
+  reason?: 'daily' | 'monthly';
+  today_cost?: number;
+  month_cost?: number;
+  daily_cap?: number;
+  monthly_cap?: number;
 }
 
 // v3-G chunk 2 / 2.6 / 4: trigger.name -> toast 标题。后续加 trigger 时只在这里 append。
@@ -314,6 +320,22 @@ export function useWebSocket(): UseWebSocketReturn {
           s.setStreamingMessageId(null);
         }
         break;
+
+      case 'tts_cost_cap_exceeded': {
+        // INV-9 §7 · Fish daily / monthly cost cap 触达 → backend 已
+        // fallback CosyVoice yaml default · 前端 toast 提示用户
+        const reason = msg.reason as 'daily' | 'monthly' | undefined;
+        const todayCost = typeof msg.today_cost === 'number' ? msg.today_cost : 0;
+        const dailyCap = typeof msg.daily_cap === 'number' ? msg.daily_cap : 1;
+        const monthCost = typeof msg.month_cost === 'number' ? msg.month_cost : 0;
+        const monthlyCap = typeof msg.monthly_cap === 'number' ? msg.monthly_cap : 20;
+        const content = reason === 'monthly'
+          ? `本月 Fish 配额已用 $${monthCost.toFixed(3)} / $${monthlyCap}，本轮切回 CosyVoice`
+          : `今日 Fish 配额已用 $${todayCost.toFixed(3)} / $${dailyCap}，本轮切回 CosyVoice`;
+        console.warn('[WS] tts_cost_cap_exceeded:', { reason, todayCost, monthCost });
+        s.pushNotification({ type: 'notify', content });
+        break;
+      }
 
       case 'thinking': {
         // v3-F：AI 内心独白，每轮最多一次。UI 显示在 StatusBadge 旁
