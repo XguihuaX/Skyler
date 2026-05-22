@@ -783,9 +783,9 @@ PM 听完 Part 1 + Part 2 narrow window 全 sweep 后:
 - audit 实证 SDK `fish-audio-sdk 1.3.0` stochastic 行为(per part3.2 0/4 md5 match)
 - Lesson INV-9 #8 保留作长期 reference(future 类似 stochastic audit 沿用方法论)
 - 不再 iterate temperature / 不扩 sweep — 进 §7 收尾刀
-- 真正 fidelity 升级路径转入 **v4.1+ Mai voice fidelity 升级 backlog**(远程 GPU fine-tuning + zero-shot hybrid;详 ROADMAP)
+- 真正 fidelity 升级路径转入 **v4.1+ 多 provider 扩展 backlog**(per PM 2026-05-22 重定向 · GPU fine-tuned 远程 Fish 微调 hybrid + GSV (GPT-SoVITS) provider;详 ROADMAP v4.1+ 多 provider 扩展刀)
 
-**关键 reference 数据**:43 WAV outputs(part 1 19 + part 2 20 + repro 4)在 `scripts/fish_probe_outputs/` 本地保留,v4.1+ fine-tuning 时作 baseline 对比;5min Mai 素材在 `tts/fish/参考音频/mai/` 完整保留作训练 / 评测起点。
+**关键 reference 数据**:43 WAV outputs(part 1 19 + part 2 20 + repro 4)在 `scripts/fish_probe_outputs/` 本地保留,v4.1+ fine-tuning / 多 provider 评测时作 zero-shot baseline 对比;5min Mai 素材在 `tts/fish/参考音频/mai/` 完整保留作训练(GPU fine-tune)+ GSV reference 起点。
 
 ---
 
@@ -947,7 +947,11 @@ cost cap check 在 DB 异常 / profile_data 读失败时 2 选 1:
 
 **Phase 2 整段 closed**。后续:
 - Phase 3 流式管线 + H3 fix + Step 6 instrumentation(per INV-8 §1.收口.4)
-- v4.1+ Mai voice fidelity 升级(per PM ROADMAP backlog · 远程 GPU fine-tune)
+- **v4.1+ 多 provider 扩展刀**(per PM 2026-05-22 重定向 · ROADMAP v4.1+):
+  - **GPU 远程 inference** — FastAPI wrap `/tts` HTTP endpoint,backend 新 `RemoteFishTTS(TTSBase)` 对接(GPU always-on 配合 backend 直连**无冷启动延迟**)
+  - **GSV** — GPT-SoVITS 官方 `api.py` 直接用,backend 新 `GSVTTS(TTSBase)` provider
+  - 触发:PM GPU 资源就位 + API key 配齐
+  - reference:`b34ad70` audit 数据 + Lesson INV-9 #8 + `tts/fish/参考音频/mai/` 5min Mai 素材
 - v4.1+ multi-user per-user cap 精确聚合(tts_call_log 加 user_id 列)
 - 等 PM 启 Phase 3 / next milestone
 
