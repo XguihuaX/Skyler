@@ -947,6 +947,13 @@ cost cap check 在 DB 异常 / profile_data 读失败时 2 选 1:
 
 **Phase 2 整段 closed**。后续:
 - Phase 3 流式管线 + H3 fix + Step 6 instrumentation(per INV-8 §1.收口.4)
+- **v4.1+ Mai emotion marker 实测精炼刀**(per PM 2026-05-22 追加 · ROADMAP v4.1+):
+  - 现状:`layer_a.j2` fish 子分支 Mai marker 集基于 canon range 推测(本 §5 ship)
+  - 已知 work:`[composed]` / `[teasing]` / `[sarcastic]`
+  - 已知不 work / 怀疑:待 PM 进一步实测列出
+  - 任务:A/B 每 marker × 多 texts,统计 work rate → 精炼 → 更新 layer_a.j2 + INV-9 §5 reference
+  - 触发:v4.1+ Mai 产品级体验启动时
+  - 联动:跟"多 provider 扩展刀"cross-dependency(per-provider emotion 通道形态可能不同,marker 精炼需 per-provider per Hard Req)
 - **v4.1+ 多 provider 扩展刀**(per PM 2026-05-22 重定向 · ROADMAP v4.1+):
   - **GPU 远程 inference** — FastAPI wrap `/tts` HTTP endpoint,backend 新 `RemoteFishTTS(TTSBase)` 对接(GPU always-on 配合 backend 直连**无冷启动延迟**)
   - **GSV** — GPT-SoVITS 官方 `api.py` 直接用,backend 新 `GSVTTS(TTSBase)` provider
