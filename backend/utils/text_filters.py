@@ -313,6 +313,39 @@ def _has_unclosed_ja_en_tag(text: str) -> bool:
     return bool(_PARTIAL_JA_EN_OPEN_RE.search(stripped))
 
 
+# Phase 2 真机验收 hotfix(2026-05-22)· Unicode script 检测器:
+# tts_language=ja + 无 <ja> tag fallback 路径增强 — 区分"LLM 漏标整段中文"
+# (无假名 → skip 避免送 ja voice)vs "LLM 漏标但内容确是日语"(含假名 →
+# 仍 fallback send)。per PM 真机测试日志 13:39:45-51 暴露:LLM 输出
+# "嗯，下午好。「うん、こんにちは。」" 中日混排,sentence stream 切成
+# 两句,前句纯中文 + 无 <ja> → 旧 fallback strip_all_for_tts(raw) 整段送
+# Fish ja voice → 念中文音色错乱 + 浪费 cost。
+#
+# 平假名 U+3040-U+309F / 片假名 U+30A0-U+30FF / 半角片假名 U+FF65-U+FF9F /
+# 片假名扩展 U+31F0-U+31FF。汉字 U+4E00-U+9FFF 不算"日语 specific"(中日共享)。
+def _has_japanese_kana(text: str) -> bool:
+    """检测 text 是否含日语假名(平假名 / 片假名 / 半角片假名 / 片假名扩展)。
+
+    返 True 视作"日语内容";返 False 视作"纯中文"(若有汉字)或"纯 ASCII"。
+    用于 ``extract_tts_text`` fallback 路径 LLM 漏 <ja> tag 时判断:
+      - has_kana=True  → fallback 送 raw(LLM 漏标但内容确是日语)
+      - has_kana=False → skip(LLM 漏标中文 → 不送 ja voice + log warning)
+    """
+    if not text:
+        return False
+    for ch in text:
+        cp = ord(ch)
+        if 0x3040 <= cp <= 0x309F:  # 平假名
+            return True
+        if 0x30A0 <= cp <= 0x30FF:  # 片假名
+            return True
+        if 0xFF65 <= cp <= 0xFF9F:  # 半角片假名
+            return True
+        if 0x31F0 <= cp <= 0x31FF:  # 片假名扩展
+            return True
+    return False
+
+
 def extract_tts_text(raw_text: str, tts_language: str) -> str:
     """按 tts_language 选实际送 TTS 的文本。
 
@@ -354,12 +387,25 @@ def extract_tts_text(raw_text: str, tts_language: str) -> str:
                 "skip synth: preview=%r", raw_text[:80],
             )
             return ""
-        # 真无 tag(LLM 漏标整段) — 降级 fallback 原行为(送原文,日语 voice 念中文)
+        # Phase 2 真机验收 hotfix(2026-05-22)· Unicode script 检测:
+        # tts_language=ja + 无 <ja> tag → 看 raw 是否含假名
+        #   - 无假名(纯中文 / 纯 ASCII)→ skip + WARNING(LLM 漏标中文 →
+        #     不送 ja voice 避免音色错乱 + cost 浪费;原 fallback 行为反作用)
+        #   - 含假名 → fallback 送原文(LLM 漏 tag 但内容确是日语)
+        cleaned = strip_all_for_tts(raw_text)
+        if not _has_japanese_kana(cleaned):
+            logger.warning(
+                "[tts] tts_language=ja but no <ja> tag and no kana detected; "
+                "skip synth (LLM 漏标中文 → 不送 ja voice): preview=%r",
+                cleaned[:80],
+            )
+            return ""
         logger.warning(
-            "[tts] tts_language=ja but no <ja> tag found; "
-            "falling back to raw sentence(LLM 漏标 ja)"
+            "[tts] tts_language=ja but no <ja> tag; falling back to raw "
+            "(含假名,LLM 漏 tag 但内容确是日语): preview=%r",
+            cleaned[:80],
         )
-        return strip_all_for_tts(raw_text)
+        return cleaned
 
     if lang == "en":
         matches = _EN_TAG_RE.findall(raw_text)

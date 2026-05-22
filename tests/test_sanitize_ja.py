@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.utils.text_filters import (  # noqa: E402
     extract_tts_text,
     _has_unclosed_ja_en_tag,
+    _has_japanese_kana,
 )
 
 PASS = "\033[92m[PASS]\033[0m"
@@ -134,16 +135,81 @@ def test_case_6_zh_half_open_skip():
 
 
 # ---------------------------------------------------------------------------
-# Backward compat · ja_path 真无 tag(LLM 漏标整段)→ fallback 原行为保留
+# Case A7 · Phase 2 真机 hotfix · ja_path 无 <ja> + sentence 中日切分场景
+#   PM 实测日志(13:39:45-51):LLM 输出 "嗯，下午好。「うん、こんにちは。」"
+#   chat.py _safe_boundary 按句末 "。" 切句 → 第一句"嗯，下午好。"(纯中文)
+#   skip,第二句"「うん、こんにちは。」"(含假名)fallback send。
 # ---------------------------------------------------------------------------
-def test_backward_compat_ja_no_tag_fallback():
-    print("\n[backward compat] ja_path · 真无 <ja> tag(LLM 漏标整段)· fallback")
-    raw = "嗯,去吧。"  # 无 <ja> 字面
+def test_case_a7_hotfix_split_sentence_zh_then_ja():
+    print("\n[case A7] hotfix · ja_path 无 <ja> · sentence 切分后中文 skip / 日语 send")
+    # sentence yield 切分后的第一句:纯中文 + 无 <ja>
+    sent_zh = "嗯，下午好。"
+    out_zh = extract_tts_text(sent_zh, "ja")
+    check("纯中文 sentence skip(return '')", out_zh == "",
+          detail=f"got {out_zh!r}")
+    # 第二句:纯日语含假名 + 无 <ja>
+    sent_ja = "「うん、こんにちは。」"
+    out_ja = extract_tts_text(sent_ja, "ja")
+    check("纯日语 sentence fallback send", out_ja == "「うん、こんにちは。」",
+          detail=f"got {out_ja!r}")
+
+
+# ---------------------------------------------------------------------------
+# Case A8 · Phase 2 hotfix · ja_path 无 <ja> + 纯中文 → skip + WARNING
+#   原 backward compat 行为(fallback 送原文 → ja voice 念中文音色错乱)反转。
+# ---------------------------------------------------------------------------
+def test_case_a8_hotfix_ja_path_zh_only_skip():
+    print("\n[case A8] hotfix · ja_path 无 <ja> + 纯中文 · skip 不送 ja voice")
+    raw = "嗯,去吧。"  # 纯中文 · 无假名 · 无 <ja>
     out = extract_tts_text(raw, "ja")
-    # 原行为:fallback strip_all_for_tts(raw) → 送原中文(日语 voice 会念中文,
-    # 降级体验但不崩链);此 case 不进 NEW skip 分支(因无字面 <ja>)
-    check("fallback 送原文(降级)", out == "嗯,去吧。",
+    check("纯中文 skip(return '')", out == "",
+          detail=f"got {out!r} (期望 '' avoid ja voice 念中文)")
+    check("不返中文 raw", "嗯" not in out)
+
+
+# ---------------------------------------------------------------------------
+# Case A9 · Phase 2 hotfix · ja_path 无 <ja> + 纯日语含假名 → fallback send
+#   LLM 漏 tag 但内容确是日语 → fallback 仍送(保持有 audio 体验)。
+# ---------------------------------------------------------------------------
+def test_case_a9_hotfix_ja_path_kana_only_fallback_send():
+    print("\n[case A9] hotfix · ja_path 无 <ja> + 纯日语含假名 · fallback send")
+    raw = "おはようございます。"  # 纯日语 · 平假名 · 无 <ja>
+    out = extract_tts_text(raw, "ja")
+    check("纯日语 fallback send", out == "おはようございます。",
           detail=f"got {out!r}")
+
+
+def test_case_a9_hotfix_katakana_only():
+    print("\n[case A9.1] hotfix · ja_path 无 <ja> + 片假名 · fallback send")
+    raw = "コンニチハ。"  # 纯片假名
+    out = extract_tts_text(raw, "ja")
+    check("片假名 fallback send", out == "コンニチハ。", detail=f"got {out!r}")
+
+
+def test_case_a9_hotfix_mixed_kana_kanji():
+    print("\n[case A9.2] hotfix · ja_path 无 <ja> + 假名+日语汉字 · fallback send")
+    raw = "今日は天気がいいですね。"  # 日语句子(假名 + 日本汉字)
+    out = extract_tts_text(raw, "ja")
+    check("假名+汉字 fallback send", out == "今日は天気がいいですね。",
+          detail=f"got {out!r}")
+
+
+# ---------------------------------------------------------------------------
+# Helper · _has_japanese_kana 行为锁
+# ---------------------------------------------------------------------------
+def test_helper_kana_detection():
+    print("\n[helper] _has_japanese_kana 行为锁")
+    check("平假名 → True", _has_japanese_kana("おはよう") is True)
+    check("片假名 → True", _has_japanese_kana("コンニチハ") is True)
+    check("半角片假名 → True", _has_japanese_kana("ハロー") is True)
+    check("中日混排(含假名)→ True",
+          _has_japanese_kana("我说こんにちは") is True)
+    check("纯中文 → False", _has_japanese_kana("嗯,去吧。") is False)
+    check("纯 ASCII → False", _has_japanese_kana("hello world") is False)
+    check("空字符串 → False", _has_japanese_kana("") is False)
+    check("None → False", _has_japanese_kana(None) is False)
+    check("纯日语汉字(無假名)→ False(共享字符,Unicode 不判 ja)",
+          _has_japanese_kana("中国人") is False)
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +255,12 @@ def main():
     test_case_5_zh_strip_ja_block()
     test_case_5b_zh_strip_en_block()
     test_case_6_zh_half_open_skip()
-    test_backward_compat_ja_no_tag_fallback()
+    test_case_a7_hotfix_split_sentence_zh_then_ja()
+    test_case_a8_hotfix_ja_path_zh_only_skip()
+    test_case_a9_hotfix_ja_path_kana_only_fallback_send()
+    test_case_a9_hotfix_katakana_only()
+    test_case_a9_hotfix_mixed_kana_kanji()
+    test_helper_kana_detection()
     test_edge_empty()
     test_helper_unclosed_detection()
 
