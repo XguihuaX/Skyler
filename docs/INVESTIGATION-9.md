@@ -586,3 +586,98 @@ PM brief 期望"固定 seed=42"控制采样确定性,但 `fish-audio-sdk 1.3.0` 
 
 → Phase 2 中插刀 closed。等 PM 听 19 WAV → 拍板默认 → 进 §7 收尾刀。
 
+---
+
+## 中插 part 2 · T0.15/0.20/0.30 narrow window + T0.20 变异度(Phase 2 第 5 commit, 2026-05-22)
+
+> PM 听完 part 1 19 WAV 后:**T=0.2 倾向最优**,但要 narrow 邻域多探 + T=0.2 内变异度。**不下探 T<0.15**(PM:更低听感会过死板)。
+> 不动 backend(fish.py / voice_config.py 参数字段 part 1 已加),纯加 sweep 脚本。
+
+### sweep_part2.1 改动
+
+| 文件 | 改动 |
+|---|---|
+| `scripts/fish_param_sweep_part2.py`(新) | +250 行 / 20 calls grid + 变异度分析 + balance check + summary.json |
+
+### sweep_part2.2 Grid 结果 · 20/20 OK
+
+#### T=0.20 变异度分析(同 T 同 text 3 runs)
+
+| text | run1 bytes | run2 bytes | run3 bytes | range | range/min | unique md5 |
+|---|---|---|---|---|---|---|
+| S1 | 282,668 | 249,900 | 262,188 | 32,768 | **13.1%** | 3/3 |
+| S2 | 520,236 | 569,388 | 512,044 | 57,344 | 11.2% | 3/3 |
+| **S3** | 151,596 | 118,828 | 143,404 | 32,768 | **27.6%** | 3/3 |
+| S4 | 426,028 | 454,700 | 434,220 | 28,672 | 6.7% | 3/3 |
+
+**关键发现**:
+- ✅ T=0.20 同 text 3 runs **bytes 全不同 + md5 全不同**(per part 1 seed NON-FUNCTIONAL 一致 — 无 seed 控制 = 无 byte-identical 保证)
+- ⚠️ 变异度 **6.7%-27.6%**;短 text S3(`[teasing] あら、来たのね。` ≈ 1.5s audio)变异最大(短 text 采样随机性放大)
+- ✅ 长 text S4(~5s audio)变异最小(6.7%)— inherent stochastic dilutes in longer audio
+
+#### 跨 T 跨 text audio_dur_sec 总览
+
+```
+ temp |   S1 |   S2 |   S3 |   S4
+------+------+------+------+-------
+ T015 | 2.65 | 5.99 | 1.58 | 5.16
+T020.1| 3.20 | 5.90 | 1.72 | 4.83
+T020.2| 2.83 | 6.46 | 1.35 | 5.16
+T020.3| 2.97 | 5.81 | 1.63 | 4.92
+ T030 | 2.60 | 5.81 | 1.49 | 4.88
+```
+
+**关键观察**:T=0.20 三 runs 之间的差异 ≈ T015↔T030 跨 T 差异。**T 维度对 audio_dur 影响 ≈ inherent stochastic variance**(0.15-0.30 narrow window 内);"默认 T"更多看 PM 听感而非 audio length。
+
+#### Balance 观察(API 延迟刷新)
+
+| | 实测 |
+|---|---|
+| balance start | credit=$9.965695 / package=245,142/250,000 bytes |
+| balance end | credit=$9.965695 / package=245,142/250,000 bytes |
+| **delta** | **0 bytes / $0**(本次 batch update 滞后)|
+
+20 calls 实际跑通(WAV 输出正常 + 实际 Fish 服务响应)但 balance API 此次未刷新。Plus package API 已观察过 batch update 滞后(per part 1 也有 inflation 案例)。**生产监控建议**:cost cap 设计不依赖 balance API 实时 — 走本地 char→bytes 累计(per INV-8 §1.3.6 决策 5 重写),balance API 仅作 dashboard / 月报对账。
+
+### sweep_part2.3 输出
+
+20 WAV 文件:
+- `INV9_param2_T020_S{1|2|3|4}_run{1|2|3}.wav`(12)
+- `INV9_param2_T015_S{1|2|3|4}.wav`(4)
+- `INV9_param2_T030_S{1|2|3|4}.wav`(4)
+- `INV9_param_sweep_part2_summary.json`(全 20 records + 变异度分析 dict + balance start/end)
+
+全部进 `scripts/fish_probe_outputs/`(`.gitignore` 已加)。
+
+### sweep_part2.4 给 PM 听 + 拍板的维度
+
+PM 听 20 文件后选默认 T:
+- **维度 a · T015 vs T020 vs T030**:S1/S2/S3/S4 各跨 3 T 听音质稳定度(T015 死板 vs T030 飘的中间档)
+- **维度 b · T=0.20 三 runs 变异度可接受性**:听 T020_S{1-4}_run{1-3} 12 文件,判 6.7%-27.6% byte 变化在听感上的实际差异(若听感差异 small → 接受 T=0.20 作生产默认;若大 → 调更确定档 T=0.15)
+- **维度 c · 短 text 变异度(S3 27.6%)**:Mai 短句(如 `[teasing] あら` 1.5s)在生产是高频形态;若 S3 变异度过大 → 触发"短 text 走更低 T"per-call dynamic 设计(本轮不实施 Phase 3+ backlog)
+
+### sweep_part2.5 收口
+
+- ✅ 20/20 calls OK(12 T020 三 runs + 4 T015 + 4 T030)
+- ✅ T=0.20 同 text 3 runs **bytes/md5 全不同**实证 → 进一步落实 SDK stochastic sampling 无 deterministic 控制(per part 1 seed NON-FUNCTIONAL)
+- ✅ T 维度影响 ≈ inherent variance(0.15-0.30 narrow window 内)— 默认 T 选择**主要看 PM 听感**而非 audio_dur 量化指标
+- ✅ 20 WAV + summary part2.json 输出
+- ⚠️ Balance API 延迟刷新(0 delta)— 生产 cost 监控不依赖此 API
+- 🔒 0 backend 代码改动;0 LLM prompt 改动;不破任何回归
+
+→ **Phase 2 中插刀整段 closed**(part 1 19 calls + part 2 20 calls = 39 WAV outputs);等 PM 听 part 2 20 WAV → 拍板 final 默认 T(0.15 / 0.20 / 0.20 variance 接受 / 调 top_p)→ schema 默认值锁,进 §7 收尾刀(cost cap + profile_data JSON,**§8 cid 迁移已取消**)。
+
+### sweep_part2.6 lesson 沉淀
+
+#### Lesson INV-9 #7 · Stochastic sampling 的"参数 sweep 解释力"边界
+
+T=0.20 三 runs byte range 6.7%-27.6% × T015↔T030 跨 T audio_dur 差异同量级 → **T 维度信号被 inherent stochastic noise 淹没**(0.15-0.30 narrow window 内)。
+
+**抽象**:做 single-param sweep 调采样模型时,需先 audit"同参数多 runs 的 variance"作 noise floor;若 sweep dimension 影响 ≈ noise floor → **该 dimension 对生产决策的信号有限**,需要更激进 sweep range 或多维 sweep。
+
+**应用**:本轮 PM 拍板默认 T 的依据应该是**听感对比 6+ runs**(part 1 T02 + part 2 T020 × 3 runs)而非 audio_dur 量化指标;若听感 also 在 noise floor 内 → 默认 T 选择**对生产质量无显著影响**,选 SDK 默认 0.7 也 acceptable(降低维护配置 + 信任 SDK 调优)。
+
+**类比 INV-9 #6**(SDK 字段表 ground truth)— #7 是同款"实测胜过假设"在 stochastic 输出层面的应用。
+
+
+
