@@ -669,6 +669,74 @@ PM 听 20 文件后选默认 T:
 
 ---
 
+## Part 5 · 字幕显示层 bug audit + 历史失败 turn raw verify(2026-05-22 PM 真机)
+
+> PM 真机暴露 2 个独立观察:
+> A) 成功 turn(18:13 cid=101)chat 框显示 raw `"嗯，在。<ja>[composed]「うん、いるよ。」</ja>"`
+> B) 18:08 / 18:11 / 18:14 三连失败 turn WARNING "no <ja>/「」/kana detected; skip" → LLM 真没生成 ja vs sanitize 误判?
+
+### part5.1 任务 1 · 字幕剥离 audit + fix
+
+**audit**:
+- `backend/routes/ws.py:981` text_chunk send 路径 ✓ 经 `strip_ja_en_tags_for_subtitle(strip_all_for_tts(sentence))` → final_chunk **stripped 干净** + `send_json({"type": "text_chunk", "content": final_chunk})`
+- `backend/utils/text_filters.py:strip_ja_en_tags_for_subtitle` 实测 `'嗯，在。<ja>[composed]「うん、いるよ。」</ja>'` → `'嗯，在。'` ✓ 完美剥
+- `backend/routes/ws.py:406-408` `_update_memory` 入库前 5 道 strip(motion / emotion / state_update / thinking / tool_call_fallback)— **不剥 `<ja>` / `[bracket]`**!`<ja>` 在 `_SUSPICIOUS_TAG_WHITELIST` 白名单豁免;`[bracket]` 不在 sanitize chain
+- **chat_history.content 入库形态 = raw 含 `<ja>`/`[bracket]`**(per INV-8 §1.4.3 Option α by design · 保 LLM round-trip 信号)
+- `frontend/src/lib/config.ts:fetchMessages` 直接 return raw `ChatMessageRow[]`,**前端渲染未 strip**
+
+**bug verdict**:WS text_chunk push **正确 stripped**(用户**新发 turn 时**chat 流式显示 OK);**但** turn 完成 / 切 conv / refresh → frontend `fetchMessages` 拿 raw chat_history.content **重 render** → 用户看到 raw `<ja>` + `[bracket]`。这是 **Option α design 的 frontend display layer 副作用**。
+
+**fix** · client-side strip on display(单一变更点 · 不破 Option α LLM round-trip):
+- 新 `frontend/src/lib/subtitle_strip.ts` · `stripJaEnTagsForSubtitle(text)` mirror backend regex(`<ja>` / `<en>` / `[bracket]`)
+- `frontend/src/lib/config.ts:fetchMessages` 内 `rows.map(r => assistant ? strip(r.content) : r)` 显示前 strip;LLM context 路径(short_term / chat_history fetch for restore)仍读 raw 不动
+- backend regression test · `tests/test_fish_marker_isolation.py` 新增 `test_subtitle_pm_real_machine_2026_05_22` 锚 PM 实测 input case
+
+### part5.2 任务 2 · 18:08 / 18:11 / 18:14 三连失败 LLM raw
+
+DB query `SELECT * FROM chat_history WHERE character_id=101 AND created_at >= '2026-05-22 10:00:00'`:
+
+| id | conv | role | LT | content |
+|---|---|---|---|---|
+| 107 | 47 | user | 18:13:16 | 哈咯～，在吗学姐 |
+| **108** | 47 | assistant | 18:13:16 | **"嗯，在。\<ja\>[composed]「うん、いるよ。」\</ja\>"**(成功 turn:含 ja + marker)|
+| 109 | 49 | user | 18:14:42 | 哈咯哈咯～，在吗学姐 |
+| **110** | 49 | assistant | 18:14:42 | **"在啊。\n\n\n\n吃完了？还是还没去。"**(失败 turn:**纯中文 0 假名 0 ja tag 0 marker**)|
+
+**18:14 turn verdict** ⭐:LLM **真没生成日语**(纯中文 raw 入库)→ sanitize **行为完全正确**(per A8 hotfix 纯中文 skip · INV-9 §1 hotfix v1 + v2 fallback verdict)。**不是 sanitize 误判,是 LLM 漏标整段 ja**。
+
+**18:08 / 18:11 turn**:DB **无对应 row**(chat_history 18:00-18:20 区间仅 4 rows 107-110)→ 可能这两 turn 被 cancel(per ws.py interrupted path 不入 chat_history)/ LLM error / 时间记忆偏差。从可见数据无法 verify。
+
+**bug 暴露 prompt A+B 仍有漏标 edge case**(per INV-9 §1 任务 2.4 ship 后真机暴露):LLM 在用户"吃饭/日常话题"场景仍可能整段纯中文,prompt few-shot 5 + within-sentence 3 范例不足以保证 100% compliance。
+
+### part5.3 改动 + smoke
+
+| 文件 | 改动 |
+|---|---|
+| `frontend/src/lib/subtitle_strip.ts`(新) | `stripJaEnTagsForSubtitle` JS mirror backend regex(`<ja>` / `<en>` / `[bracket]`) |
+| `frontend/src/lib/config.ts:fetchMessages` | rows.map · assistant role strip content(user role 原样)|
+| `tests/test_fish_marker_isolation.py` | + `test_subtitle_pm_real_machine_2026_05_22` PM 真机 case regression 锚 |
+
+Smoke:
+- `test_fish_marker_isolation.py` **39/39 PASS**(原 35 + 4 新 PM 真机 regression)
+- `yarn tsc --noEmit` clean
+- Python regex 跟 JS regex 跨 3 case 等价 verify(`嗯，在。<ja>[composed]「...」</ja>` / `你好。<en>Hi.</en>` / `[teasing]嗯,真好笑。` 全 stripped 一致)
+
+### part5.4 Lesson · INV-9 #11 · Option α LLM round-trip vs frontend display 解耦
+
+`_SUSPICIOUS_TAG_WHITELIST = {"ja","en"}` 白名单 + `_update_memory` 不剥 `<ja>` = **Option α by design**(保 LLM context round-trip 信号 — LLM 见自己说过含 ja → 下 turn 继续 follow ja directive)。但 **frontend display layer 不该也消费 raw** — 这是 design 副作用。
+
+**抽象**:LLM context 路径(prompt history)vs UI display 路径(chat render)的**字段语义不同**,后者需独立 strip。Mixing 两路径用同 content 字段 → display bug 暴露。
+
+**应用**:类似 settings 需 strip 但 history 需 raw 的场景,**display 层独立 strip 函数**(client-side mirror)是最 clean 解;比 server-side stripped column / 2 个字段 / API flag 工程量小且 single change point。
+
+### part5.5 后续
+
+- **PM 真机重测** chat 显示是否干净(本 commit 后)
+- LLM 漏标 ja edge case(per 18:14 turn)→ prompt 进一步加强或工程兜底(retry / stricter directive · 留 follow-up)
+- 立绘馆 voice greeting 真机验收(INV-10)继续
+
+---
+
 ## 中插 part 3 · Part 1 vs Part 2 diff audit + repro(Phase 2 第 6 commit, 2026-05-22)
 
 > PM 听后确认:Part 1 T=0.2(`INV9_param_T02_S{1-4}.wav`)质量**明显好于** Part 2 T=0.2 三 runs → 不是抽样运气,两脚本有实质差异需查清。

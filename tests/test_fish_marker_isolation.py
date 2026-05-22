@@ -264,6 +264,22 @@ def test_subtitle_no_marker_pass():
     check("subtitle 仅中文", out == "嗯,去吧。", detail=f"got {out!r}")
 
 
+def test_subtitle_pm_real_machine_2026_05_22():
+    """PM 真机实测(2026-05-22 18:13 cid=101)chat_history raw 字符串。
+
+    用于 frontend stripJaEnTagsForSubtitle mirror 的 backend regression
+    锚点:确保 PM 看到的 raw 经 backend strip 后是预期字幕。
+    """
+    print("\n[4.4] subtitle · PM 真机 2026-05-22 18:13 chat_history regression")
+    raw = "嗯，在。<ja>[composed]「うん、いるよ。」</ja>"
+    out = strip_ja_en_tags_for_subtitle(raw)
+    check("stripped == '嗯，在。'", out == "嗯，在。",
+          detail=f"got {out!r}")
+    check("不含 <ja>", "<ja>" not in out and "</ja>" not in out)
+    check("不含 [composed] marker", "[composed]" not in out)
+    check("不含 「」", "「" not in out and "」" not in out)
+
+
 # ---------------------------------------------------------------------------
 # 5. layer_a.j2 fish 子分支渲染(voice_provider 分流)
 # ---------------------------------------------------------------------------
@@ -341,6 +357,7 @@ def main():
     test_subtitle_strips_markers_in_zh()
     test_subtitle_strips_orphan_markers()
     test_subtitle_no_marker_pass()
+    test_subtitle_pm_real_machine_2026_05_22()
     test_layer_a_fish_branch_renders_marker_guide()
     test_layer_a_cosyvoice_no_marker_guide()
     test_layer_a_zh_default_no_marker_guide()

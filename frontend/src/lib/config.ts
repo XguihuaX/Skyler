@@ -246,7 +246,17 @@ export async function fetchConversations(
 export async function fetchMessages(conversationId: number): Promise<ChatMessageRow[]> {
   const res = await fetch(`${BACKEND_BASE}/api/conversations/${conversationId}/messages`);
   if (!res.ok) throw new Error(`fetch messages failed: ${res.status}`);
-  return (await res.json()) as ChatMessageRow[];
+  const rows = (await res.json()) as ChatMessageRow[];
+  // 字幕剥离(2026-05-22 PM 真机暴露 bug fix):chat_history.content 入库
+  // 保 raw 让 LLM round-trip 学 ja pattern(per INV-9 §1.4.3 Option α);
+  // frontend 显示前 client-side strip <ja>/<en>/[bracket] 让用户看干净
+  // 中文。仅 assistant 行需要 strip(user 行不会含 meta tag)。
+  const { stripJaEnTagsForSubtitle } = await import('./subtitle_strip');
+  return rows.map((r) =>
+    r.role === 'assistant'
+      ? { ...r, content: stripJaEnTagsForSubtitle(r.content) }
+      : r,
+  );
 }
 
 export async function createConversation(
