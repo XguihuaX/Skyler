@@ -91,6 +91,26 @@ class VoiceConfig:
     fish_top_p: Optional[float] = None
     fish_seed: Optional[int] = None
 
+    # INV-12 Stage 2 新增(2026-05-23)· Fish TTS 配置管理 user_override 层(L1)。
+    #
+    # PM Q5 lock · 3 层 fallback semantic:
+    #   L1 user_override = user_* 字段(本任务前端上传 / 调整)
+    #   L2 角色 default  = 顶层 reference_audio_path / reference_text / fish_*
+    #                     (cid=101 INV-9 §7 a6af74b lock 自然保留)
+    #   L3 yaml global   = parse_voice_config(default) 兜底 cosyvoice longyumi_v3
+    #
+    # FishTTS merge 顺序 effective = L1 → L2 → L3 short-circuit。
+    #
+    # 配对约束 PM Q5 补充:
+    #   user_reference_audio_path + user_reference_text 必须同时存在或同时
+    #   None;违反 → log warning + 两字段全回退 L2(语义安全防脏数据合成)。
+    # 参数字段(user_fish_temperature / user_fish_top_p)不受配对约束 — 单独
+    # None 即独立回退该字段到 L2 default。
+    user_reference_audio_path: Optional[str] = None
+    user_reference_text: Optional[str] = None
+    user_fish_temperature: Optional[float] = None
+    user_fish_top_p: Optional[float] = None
+
 
 def parse_voice_config(
     voice_model: Optional[str], default: VoiceConfig,
@@ -165,6 +185,30 @@ def parse_voice_config(
             logger.warning("voice_model.fish_seed 不是整数, 忽略: %r", fish_seed)
             fish_seed = None
 
+    # INV-12 Stage 2 新增 user_override 4 字段 · 同款 type 容错 + None default。
+    # FishTTS merge 配对 validate 在 fish.py 内做(parse 阶段不强校验配对,
+    # 避免存量数据 partial user_* parse raise)。
+    user_reference_audio_path = data.get("user_reference_audio_path")
+    if user_reference_audio_path is not None and not isinstance(user_reference_audio_path, str):
+        user_reference_audio_path = None
+    user_reference_text = data.get("user_reference_text")
+    if user_reference_text is not None and not isinstance(user_reference_text, str):
+        user_reference_text = None
+    user_fish_temperature = data.get("user_fish_temperature")
+    if user_fish_temperature is not None:
+        try:
+            user_fish_temperature = float(user_fish_temperature)
+        except (TypeError, ValueError):
+            logger.warning("voice_model.user_fish_temperature 不是数字, 忽略: %r", user_fish_temperature)
+            user_fish_temperature = None
+    user_fish_top_p = data.get("user_fish_top_p")
+    if user_fish_top_p is not None:
+        try:
+            user_fish_top_p = float(user_fish_top_p)
+        except (TypeError, ValueError):
+            logger.warning("voice_model.user_fish_top_p 不是数字, 忽略: %r", user_fish_top_p)
+            user_fish_top_p = None
+
     # INV-9 §2 · fish mode_A only validation (per Step 5 决策 1 lock):
     # 不静默 fallback — 缺 ref 字段直接 raise,让上游(get_tts_engine /
     # _build_engine)失败立即报错,避免 fish 角色配错沉默走 default voice。
@@ -198,4 +242,14 @@ def parse_voice_config(
         fish_temperature=fish_temperature,
         fish_top_p=fish_top_p,
         fish_seed=fish_seed,
+        user_reference_audio_path=(user_reference_audio_path.strip()
+                                   if isinstance(user_reference_audio_path, str)
+                                   and user_reference_audio_path.strip()
+                                   else None),
+        user_reference_text=(user_reference_text.strip()
+                             if isinstance(user_reference_text, str)
+                             and user_reference_text.strip()
+                             else None),
+        user_fish_temperature=user_fish_temperature,
+        user_fish_top_p=user_fish_top_p,
     )

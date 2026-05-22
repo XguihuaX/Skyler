@@ -78,21 +78,52 @@ class FishTTS(TTSBase):
     """
 
     def __init__(self, voice_config: VoiceConfig) -> None:
-        # Defensive: parse_voice_config 已校验,这里再防 caller 直接构造时漏字段。
-        if not voice_config.reference_audio_path or not voice_config.reference_text:
+        # INV-12 Stage 2(2026-05-23)· PM Q5 lock 3 层 fallback merge:
+        # L1 user_override(voice_config.user_*) > L2 角色 default(voice_config.*)
+        # > L3 yaml global default(parse_voice_config 兜底 cfg.provider 已切走)
+        #
+        # 配对约束(audio + text):违反 → log warning + 两字段全回退 L2。
+        # 独立参数(temperature / top_p):单独 None 独立回退该字段到 L2。
+        _u_audio = voice_config.user_reference_audio_path
+        _u_text = voice_config.user_reference_text
+        _audio_paired = (_u_audio is not None and _u_text is not None)
+        _audio_violation = ((_u_audio is None) != (_u_text is None))
+        if _audio_violation:
+            logger.warning(
+                "[fish] user_reference_* 配对约束违反 audio=%s text=%s · "
+                "回退 L2 default reference(防 alignment 错位)",
+                bool(_u_audio), bool(_u_text),
+            )
+        ref_audio_path_effective = (_u_audio if _audio_paired
+                                    else voice_config.reference_audio_path)
+        ref_text_effective = (_u_text if _audio_paired
+                              else voice_config.reference_text)
+
+        # Defensive: parse_voice_config 已校验 L2 必填,但 user 可能没传 +
+        # L2 default 也没配的极端 case(per Q5 三层 fallback 之外的 raise hint)
+        if not ref_audio_path_effective or not ref_text_effective:
             raise ValueError(
                 "FishTTS requires reference_audio_path + reference_text "
-                "(mode_A only · INV-9 §4 defensive check)"
+                "(L1 user_override 或 L2 default 至少一层完整);"
+                "mode_A only · INV-9 §4 + INV-12 Stage 2 defensive check"
             )
 
         self.voice_config = voice_config
         # model field 承载 Fish backend 选择;本轮 lock 's2-pro'
         self.backend: str = voice_config.model or "s2-pro"
         self.latency: str = voice_config.fish_latency or "balanced"
-        # INV-9 参数 sweep 刀(2026-05-22)· 声学采样参数透传
-        # 仅 if not None 时传给 TTSRequest,确保未配 = SDK 真默认对照组(per PM)
-        self.temperature: Optional[float] = voice_config.fish_temperature
-        self.top_p: Optional[float] = voice_config.fish_top_p
+        # INV-9 参数 sweep 刀(2026-05-22)+ INV-12 Stage 2(2026-05-23)·
+        # 独立参数 user_override > default merge(短路 L1 → L2)
+        self.temperature: Optional[float] = (
+            voice_config.user_fish_temperature
+            if voice_config.user_fish_temperature is not None
+            else voice_config.fish_temperature
+        )
+        self.top_p: Optional[float] = (
+            voice_config.user_fish_top_p
+            if voice_config.user_fish_top_p is not None
+            else voice_config.fish_top_p
+        )
         # seed: SDK TTSRequest 字段表不含 seed;保留作 future hook,
         # 不向 TTSRequest 透传,仅 log warning 提醒
         self.seed: Optional[int] = voice_config.fish_seed
@@ -111,19 +142,27 @@ class FishTTS(TTSBase):
             )
         self._session: Optional[Session] = Session(api_key) if api_key else None
 
-        ref_path = _resolve_reference_path(voice_config.reference_audio_path)
+        # INV-12 Stage 2:用 merge 后的 effective ref path / text(L1 or L2)
+        ref_path = _resolve_reference_path(ref_audio_path_effective)
         if not ref_path.exists():
             raise FileNotFoundError(
                 f"FishTTS reference_audio_path not found: {ref_path}"
             )
         self._ref_audio_bytes: bytes = ref_path.read_bytes()
-        self._ref_text: str = voice_config.reference_text
+        self._ref_text: str = ref_text_effective
 
+        # INV-12 Stage 2:log 标 user_override 层是否生效(便 PM 真机 verify)
+        _ref_layer = "L1 user_override" if _audio_paired else "L2 default"
+        _temp_layer = ("L1" if voice_config.user_fish_temperature is not None
+                       else "L2")
+        _top_p_layer = ("L1" if voice_config.user_fish_top_p is not None
+                        else "L2")
         logger.info(
             "[fish] init voice=%s backend=%s latency=%s "
-            "ref=%s (%d bytes) ref_text_chars=%d",
+            "ref=%s (%d bytes) ref_text_chars=%d · merge: ref=%s temp=%s top_p=%s",
             voice_config.voice, self.backend, self.latency,
             ref_path.name, len(self._ref_audio_bytes), len(self._ref_text),
+            _ref_layer, _temp_layer, _top_p_layer,
         )
 
     def _build_request(self, text: str) -> TTSRequest:

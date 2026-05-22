@@ -70,3 +70,6 @@ scripts/fish_probe_outputs/
 # v4.0 voice greeting · 用户上传 audio 存盘(不进 git,per Live2D / splash-art
 # 同款 IP 隔离 + 体积考虑;迁机器靠 backup script)
 backend/static/voice_lines/
+
+# INV-12 Fish TTS 配置管理 · 用户上传 reference audio 存盘(同款 IP 隔离)
+backend/static/fish_references/

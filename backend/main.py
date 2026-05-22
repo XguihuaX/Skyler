@@ -916,6 +916,9 @@ app.include_router(character_state_router, prefix="/api", tags=["character_state
 # v4.0 voice greeting · character voice lines CRUD + random pick
 from backend.routes.voice_lines import router as voice_lines_router
 app.include_router(voice_lines_router,   prefix="/api", tags=["voice_lines"])
+# INV-12 · Fish TTS 配置管理(user_override 层)4 endpoints
+from backend.routes.fish_config import router as fish_config_router
+app.include_router(fish_config_router,   prefix="/api", tags=["fish_config"])
 
 # v4.0 voice greeting · StaticFiles mount 让前端通过
 # /static/voice_lines/<cid>/<uuid>.<ext> URL 直接 fetch audio。
@@ -927,6 +930,16 @@ app.mount(
     "/static/voice_lines",
     StaticFiles(directory=str(_VOICE_LINES_STATIC_DIR)),
     name="voice_lines",
+)
+
+# INV-12 · Fish TTS 配置管理 · StaticFiles mount /static/fish_references
+# (跟 /static/voice_lines 独立 mount,per Stage 1 §1.4 + Stage 2 spec)
+_FISH_REFS_STATIC_DIR = _VoicePath(__file__).resolve().parent / "static" / "fish_references"
+_FISH_REFS_STATIC_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/static/fish_references",
+    StaticFiles(directory=str(_FISH_REFS_STATIC_DIR)),
+    name="fish_references",
 )
 app.include_router(activity_router,      prefix="/api", tags=["activity"])
 app.include_router(mcp_router,           prefix="/api", tags=["mcp"])
