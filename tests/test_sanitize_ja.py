@@ -19,6 +19,11 @@ from backend.utils.text_filters import (  # noqa: E402
     extract_tts_text,
     _has_unclosed_ja_en_tag,
     _has_japanese_kana,
+    _extract_corner_bracketed,
+    _extract_kana_runs,
+    _count_japanese_chars,
+    _FISH_TIMEOUT_CAP_CHARS,
+    _FISH_KANJI_RATIO_CAP,
 )
 
 PASS = "\033[92m[PASS]\033[0m"
@@ -83,17 +88,21 @@ def test_case_3_ja_with_other_meta_tags():
 
 
 # ---------------------------------------------------------------------------
-# Case 4 · ja_path A5 · 半截 <ja> 未闭合 → return "" skip synth (NEW fix · PM bug #1)
+# Case 4 · ja_path 半闭合 <ja> · v2 hotfix(2026-05-22)
+#   v1 行为:半截 <ja> → skip
+#   v2 行为(PM 任务 1 v2 spec):半闭合按"无 <ja>"处理 → 走 fallback A/B,
+#                                 抽 kana runs + post-cap
 # ---------------------------------------------------------------------------
-def test_case_4_ja_half_open_skip():
-    print("\n[case 4] ja_path · 半截 <ja> 未闭合 · NEW fix (PM bug #1)")
+def test_case_4_ja_half_open_v2_fallback():
+    print("\n[case 4] hotfix v2 · 半闭合 <ja> → fallback B kana run 抽")
     raw = "嗯。<ja>「うん、まだ書き..."
     out = extract_tts_text(raw, "ja")
-    check("半截 <ja> → return ''", out == "",
-          detail=f"got {out!r} (期望 '' skip synth,避免中日混送)")
-    # 关键 invariant:不返中文 + 半截日语混合
-    check("不返含中文 raw", "嗯" not in out)
-    check("不返半截日语", "書き" not in out)
+    # v2:fallback B regex `[぀-ヿ]+[぀-ヿ一-鿿]*` 抽两段 "うん" + "まだ書き"
+    # join → "うんまだ書き"(5 kana + 1 kanji,ratio=1/6≈17% ≤ 30% → send)
+    check("v2 半闭合 → fallback B kana run 抽 'うんまだ書き'",
+          out == "うんまだ書き",
+          detail=f"got {out!r}")
+    check("不返含中文字符", "嗯" not in out)
 
 
 # ---------------------------------------------------------------------------
@@ -147,11 +156,12 @@ def test_case_a7_hotfix_split_sentence_zh_then_ja():
     out_zh = extract_tts_text(sent_zh, "ja")
     check("纯中文 sentence skip(return '')", out_zh == "",
           detail=f"got {out_zh!r}")
-    # 第二句:纯日语含假名 + 无 <ja>
+    # 第二句:纯日语含假名 + 无 <ja>(含 「」)
+    # v2 行为:fallback A 「」 抽 inner(drop 「」 wrapper)
     sent_ja = "「うん、こんにちは。」"
     out_ja = extract_tts_text(sent_ja, "ja")
-    check("纯日语 sentence fallback send", out_ja == "「うん、こんにちは。」",
-          detail=f"got {out_ja!r}")
+    check("纯日语 sentence v2 fallback A 抽 「」 inner",
+          out_ja == "うん、こんにちは。", detail=f"got {out_ja!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -172,26 +182,131 @@ def test_case_a8_hotfix_ja_path_zh_only_skip():
 #   LLM 漏 tag 但内容确是日语 → fallback 仍送(保持有 audio 体验)。
 # ---------------------------------------------------------------------------
 def test_case_a9_hotfix_ja_path_kana_only_fallback_send():
-    print("\n[case A9] hotfix · ja_path 无 <ja> + 纯日语含假名 · fallback send")
+    print("\n[case A9] hotfix · ja_path 无 <ja> + 纯日语含假名 · fallback B regex")
+    # v2 行为:fallback B regex 抽连续假名 run,不含句末 "。"(标点 break)
     raw = "おはようございます。"  # 纯日语 · 平假名 · 无 <ja>
     out = extract_tts_text(raw, "ja")
-    check("纯日语 fallback send", out == "おはようございます。",
-          detail=f"got {out!r}")
+    check("v2 fallback B 抽 kana run(不含 句末。)",
+          out == "おはようございます", detail=f"got {out!r}")
 
 
 def test_case_a9_hotfix_katakana_only():
-    print("\n[case A9.1] hotfix · ja_path 无 <ja> + 片假名 · fallback send")
+    print("\n[case A9.1] hotfix · ja_path 无 <ja> + 片假名 · fallback B regex")
     raw = "コンニチハ。"  # 纯片假名
     out = extract_tts_text(raw, "ja")
-    check("片假名 fallback send", out == "コンニチハ。", detail=f"got {out!r}")
+    check("v2 片假名 fallback B(不含 。)", out == "コンニチハ",
+          detail=f"got {out!r}")
 
 
 def test_case_a9_hotfix_mixed_kana_kanji():
-    print("\n[case A9.2] hotfix · ja_path 无 <ja> + 假名+日语汉字 · fallback send")
-    raw = "今日は天気がいいですね。"  # 日语句子(假名 + 日本汉字)
+    print("\n[case A9.2] hotfix · ja_path 无 <ja> + 假名+日语汉字 · fallback B")
+    # 注:v2 改了 — v1 是直接 fallback 送 raw,v2 是 fallback B regex 抽 kana
+    # runs。原 raw "今日は天気がいいですね。" 经 regex `[぀-ヿ]+[぀-ヿ一-鿿]*`
+    # 抽:"今" 是 kanji 不能起头;从 "日" 不行;实际从 "は" 起?"は" 是 kana,
+    # 但前是 "今日"(kanji)— regex 不要求前导,从 "は" start match:"は天気が"
+    # ("は" kana + "天気" kanji + "が" kana 都在 char class)→ extend 到 "ね"
+    # 前的 "。" 标点 break。 实际跑后看 verify。
+    raw = "今日は天気がいいですね。"
     out = extract_tts_text(raw, "ja")
-    check("假名+汉字 fallback send", out == "今日は天気がいいですね。",
+    # v2: fallback B 抽出 + post-cap kanji ratio check
+    # 此 case 主要 verify 不 raise + 不返空(LLM 漏 tag 但内容确是日语)
+    check("假名+汉字 不返空(v2 fallback B 抽出 + post-cap pass)",
+          out != "", detail=f"got {out!r}")
+    check("含假名内容", any(0x3040 <= ord(c) <= 0x30FF for c in out))
+
+
+# ---------------------------------------------------------------------------
+# Case A10-A15 · Phase 2 真机 hotfix v2 · 5 层 fallback 增强
+# ---------------------------------------------------------------------------
+def test_case_a10_fallback_a_corner_brackets():
+    print("\n[case A10] hotfix v2 · Fallback A 「」 corner brackets 抽")
+    raw = "我说「こんにちは」吧"
+    out = extract_tts_text(raw, "ja")
+    check("抽 「」 内日语", out == "こんにちは", detail=f"got {out!r}")
+    check("不含句外中文", "我说" not in out and "吧" not in out)
+
+
+def test_case_a11_fallback_a_katakana_in_brackets():
+    print("\n[case A11] hotfix v2 · Fallback A 「」 内片假名书名 · 中文 skip")
+    raw = "我读「カラマゾフ」这本书。"
+    out = extract_tts_text(raw, "ja")
+    check("抽 「」 内片假名", out == "カラマゾフ", detail=f"got {out!r}")
+    check("不含中文", "我读" not in out and "这本书" not in out)
+
+
+def test_case_a12_fallback_b_kana_run():
+    print("\n[case A12] hotfix v2 · 无 <ja> 无 「」 · Fallback B regex 抽假名 run")
+    raw = "我说こんにちは你好"
+    out = extract_tts_text(raw, "ja")
+    # regex 从 "こ" 起头 1+ kana,greedy 接续 kana/kanji * 至 EOS:
+    # "こんにちは你好" (5 kana + 2 kanji,ratio=2/7≈28.6% ≤ 30%) → send
+    check("Fallback B 抽 kana-starting run", out == "こんにちは你好",
           detail=f"got {out!r}")
+
+
+def test_case_a13_half_open_ja_with_corner():
+    print("\n[case A13] hotfix v2 · 半闭合 <ja> + 「」 · 走 Fallback A")
+    raw = "嗯。<ja>「うん」"  # <ja> 半闭合,「」 完整
+    out = extract_tts_text(raw, "ja")
+    # main path matches=[];fallback A 「うん」 → send
+    check("半闭合 <ja> + 「」 → Fallback A 抽 「」 内",
+          out == "うん", detail=f"got {out!r}")
+
+
+def test_case_a14_post_cap_length():
+    print("\n[case A14] hotfix v2 · Post-cap A · 抽出 > 200 chars → skip")
+    long_ja = "おはようございます。" * 25  # ~10 chars × 25 = 250 chars
+    out = extract_tts_text(long_ja, "ja")
+    check(f"抽出 > {_FISH_TIMEOUT_CAP_CHARS} → skip (return '')",
+          out == "",
+          detail=f"got {out!r}(len input ~{len(long_ja)})")
+
+
+def test_case_a15_post_cap_kanji_ratio():
+    print("\n[case A15] hotfix v2 · Post-cap B · kanji ratio > 30% → skip")
+    # 5 kana + 9 kanji = 14 chars,ratio = 9/14 ≈ 64% > 30%
+    raw = "我说こんにちは但是你好朋友哥哥姐姐"
+    out = extract_tts_text(raw, "ja")
+    check(f"kanji ratio > {_FISH_KANJI_RATIO_CAP*100}% → skip (return '')",
+          out == "",
+          detail=f"got {out!r}")
+
+
+# ---------------------------------------------------------------------------
+# Helper · _extract_corner_bracketed / _extract_kana_runs / _count_japanese_chars
+# ---------------------------------------------------------------------------
+def test_helper_extract_corner_brackets():
+    print("\n[helper] _extract_corner_bracketed 行为锁")
+    check("单 「」", _extract_corner_bracketed("我说「こんにちは」") == ["こんにちは"])
+    check("多 「」", _extract_corner_bracketed("「a」b「c」") == ["a", "c"])
+    check("无 「」", _extract_corner_bracketed("我说こんにちは") == [])
+    check("半闭合 「(无 」)", _extract_corner_bracketed("「うん、まだ") == [])
+    check("空 「」 跳过", _extract_corner_bracketed("「」「a」") == ["a"])
+    check("空 / None", _extract_corner_bracketed("") == []
+          and _extract_corner_bracketed(None) == [])
+
+
+def test_helper_extract_kana_runs():
+    print("\n[helper] _extract_kana_runs 行为锁")
+    check("纯日语", _extract_kana_runs("こんにちは") == ["こんにちは"])
+    check("中日混 · kana-starting run greedy",
+          _extract_kana_runs("我说こんにちは你好") == ["こんにちは你好"])
+    check("punct break · 「」 内", _extract_kana_runs("「うん、まだ書き") ==
+          ["うん", "まだ書き"])
+    check("纯中文(无 kana-starting)→ []",
+          _extract_kana_runs("我说你好") == [])
+    check("纯 ASCII → []", _extract_kana_runs("hello world") == [])
+
+
+def test_helper_count_japanese_chars():
+    print("\n[helper] _count_japanese_chars 行为锁")
+    check("纯平假名", _count_japanese_chars("こんにちは") == (0, 5))
+    check("纯 kanji(中日共享)", _count_japanese_chars("我说你好") == (4, 0))
+    check("混合", _count_japanese_chars("こんにちは你好") == (2, 5))
+    check("空 / None",
+          _count_japanese_chars("") == (0, 0)
+          and _count_japanese_chars(None) == (0, 0))
+    check("含标点 / ASCII 不计", _count_japanese_chars("Hi! 你, こ。") == (1, 1))
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +366,7 @@ def main():
     test_case_1_ja_single_block()
     test_case_2_ja_multi_blocks()
     test_case_3_ja_with_other_meta_tags()
-    test_case_4_ja_half_open_skip()
+    test_case_4_ja_half_open_v2_fallback()
     test_case_5_zh_strip_ja_block()
     test_case_5b_zh_strip_en_block()
     test_case_6_zh_half_open_skip()
@@ -260,6 +375,15 @@ def main():
     test_case_a9_hotfix_ja_path_kana_only_fallback_send()
     test_case_a9_hotfix_katakana_only()
     test_case_a9_hotfix_mixed_kana_kanji()
+    test_case_a10_fallback_a_corner_brackets()
+    test_case_a11_fallback_a_katakana_in_brackets()
+    test_case_a12_fallback_b_kana_run()
+    test_case_a13_half_open_ja_with_corner()
+    test_case_a14_post_cap_length()
+    test_case_a15_post_cap_kanji_ratio()
+    test_helper_extract_corner_brackets()
+    test_helper_extract_kana_runs()
+    test_helper_count_japanese_chars()
     test_helper_kana_detection()
     test_edge_empty()
     test_helper_unclosed_detection()

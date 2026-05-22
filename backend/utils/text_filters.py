@@ -327,9 +327,7 @@ def _has_japanese_kana(text: str) -> bool:
     """检测 text 是否含日语假名(平假名 / 片假名 / 半角片假名 / 片假名扩展)。
 
     返 True 视作"日语内容";返 False 视作"纯中文"(若有汉字)或"纯 ASCII"。
-    用于 ``extract_tts_text`` fallback 路径 LLM 漏 <ja> tag 时判断:
-      - has_kana=True  → fallback 送 raw(LLM 漏标但内容确是日语)
-      - has_kana=False → skip(LLM 漏标中文 → 不送 ja voice + log warning)
+    用于 ``extract_tts_text`` fallback 路径 LLM 漏 <ja> tag 时判断。
     """
     if not text:
         return False
@@ -344,6 +342,62 @@ def _has_japanese_kana(text: str) -> bool:
         if 0x31F0 <= cp <= 0x31FF:  # 片假名扩展
             return True
     return False
+
+
+# Phase 2 真机 hotfix v2(2026-05-22)· 5 层 fallback 增强 + post-cap:
+# 任务 1 v1 部分 work 但 within-sentence 中日混排无 <ja> 仍走 raw fallback。
+# v2 加 fallback A (corner brackets「」) + fallback B (kana-starting regex) +
+# post-cap (长度 200 防 Fish timeout + kanji ratio 30% 防中文混入)。
+_JA_CORNER_BRACKET_RE = re.compile(r"「([^「」]*?)」")
+# PM 任务 1 v2 spec regex:起头 1+ 假名(U+3040-U+30FF),然后 0+ (假名 | 汉字)。
+# 注:Unicode U+4E00-U+9FFF 中日 kanji 共享 codepoint,fallback B 抽出可能
+# 含中文字符;post-cap kanji ratio 兜底拦截。
+_JA_KANA_RUN_RE = re.compile(r"[぀-ヿ]+[぀-ヿ一-鿿]*")
+_FISH_TIMEOUT_CAP_CHARS: int = 200       # > 200 chars → skip 防 Fish timeout
+_FISH_KANJI_RATIO_CAP: float = 0.30      # kanji/(kanji+kana) > 30% → skip 防中文混入
+
+
+def _extract_corner_bracketed(text: str) -> list[str]:
+    """Fallback A · 抽出所有 ``「...」`` 内文本(非贪婪,跨段多 match)。
+
+    PM 实测:LLM 偶发用 corner brackets `「」` 作 Japanese segment 分隔
+    (替代 ``<ja>`` tag)。
+    """
+    if not text:
+        return []
+    return [m for m in _JA_CORNER_BRACKET_RE.findall(text) if m.strip()]
+
+
+def _extract_kana_runs(text: str) -> list[str]:
+    """Fallback B · regex 抽连续假名起头 + 假名/汉字 mixed run(跨段多 match)。
+
+    严格按 PM 任务 1 v2 spec regex:``[぀-ヿ]+[぀-ヿ一-鿿]*``。
+    Unicode 不区分中日 kanji,抽出可能 leak 中文 — post-cap kanji ratio 兜底。
+    """
+    if not text:
+        return []
+    return [m for m in _JA_KANA_RUN_RE.findall(text) if m.strip()]
+
+
+def _count_japanese_chars(text: str) -> tuple[int, int]:
+    """返 (kanji_count, kana_count)。
+
+    kanji = U+4E00-U+9FFF(CJK Unified · 中日共享 codepoint)
+    kana = U+3040-U+30FF(平假名 + 片假名 main range)+ 扩展 ranges
+    """
+    if not text:
+        return (0, 0)
+    kanji = 0
+    kana = 0
+    for ch in text:
+        cp = ord(ch)
+        if 0x4E00 <= cp <= 0x9FFF:
+            kanji += 1
+        elif (0x3040 <= cp <= 0x30FF
+              or 0xFF65 <= cp <= 0xFF9F
+              or 0x31F0 <= cp <= 0x31FF):
+            kana += 1
+    return (kanji, kana)
 
 
 def extract_tts_text(raw_text: str, tts_language: str) -> str:
@@ -377,35 +431,69 @@ def extract_tts_text(raw_text: str, tts_language: str) -> str:
     lang = (tts_language or "zh").lower()
 
     if lang == "ja":
+        # 主路径:完整闭合 <ja>...</ja>
         matches = _JA_TAG_RE.findall(raw_text)
         if matches:
             return "".join(strip_all_for_tts(m).strip() for m in matches if m)
-        # INV-9 §1 fix (PM bug #1):半截 <ja> 未闭合 → skip synth(避免中日混送)
-        if _has_unclosed_ja_en_tag(raw_text):
-            logger.warning(
-                "[tts] tts_language=ja but <ja> unclosed (半截/stream 截断), "
-                "skip synth: preview=%r", raw_text[:80],
-            )
-            return ""
-        # Phase 2 真机验收 hotfix(2026-05-22)· Unicode script 检测:
-        # tts_language=ja + 无 <ja> tag → 看 raw 是否含假名
-        #   - 无假名(纯中文 / 纯 ASCII)→ skip + WARNING(LLM 漏标中文 →
-        #     不送 ja voice 避免音色错乱 + cost 浪费;原 fallback 行为反作用)
-        #   - 含假名 → fallback 送原文(LLM 漏 tag 但内容确是日语)
+
+        # Phase 2 真机 hotfix v2(2026-05-22)· 5 层 fallback:
+        # 1) <ja> 完整闭合(上方主路径)
+        # 2) Fallback A · 「...」 corner brackets 抽出
+        # 3) Fallback B · 假名起头 + 假名/汉字 run regex 抽出
+        # 4) Post-cap A · 抽出 > 200 chars → skip(防 Fish timeout)
+        # 5) Post-cap B · 抽出 kanji/(kanji+kana) > 30% → skip(防中文混入)
+        # 6) 全 fail → skip + WARNING
+        #
+        # 注:v1 半截 <ja> early skip 行为已撤(per PM v2 spec "半闭合按
+        # '无 <ja>' 处理走 fallback A/B");zh path 半闭合 skip 仍保留。
         cleaned = strip_all_for_tts(raw_text)
-        if not _has_japanese_kana(cleaned):
+
+        # Fallback A · 「...」
+        corner_matches = _extract_corner_bracketed(cleaned)
+        extracted = "".join(m.strip() for m in corner_matches).strip() if corner_matches else ""
+
+        # Fallback B · 假名起头 run regex(if A 空)
+        if not extracted:
+            kana_runs = _extract_kana_runs(cleaned)
+            extracted = "".join(r.strip() for r in kana_runs).strip() if kana_runs else ""
+
+        if not extracted:
             logger.warning(
-                "[tts] tts_language=ja but no <ja> tag and no kana detected; "
-                "skip synth (LLM 漏标中文 → 不送 ja voice): preview=%r",
+                "[tts] tts_language=ja no <ja>/「」/kana detected; skip: %r",
                 cleaned[:80],
             )
             return ""
-        logger.warning(
-            "[tts] tts_language=ja but no <ja> tag; falling back to raw "
-            "(含假名,LLM 漏 tag 但内容确是日语): preview=%r",
-            cleaned[:80],
+
+        # Post-cap A · 长度防 Fish timeout
+        if len(extracted) > _FISH_TIMEOUT_CAP_CHARS:
+            logger.warning(
+                "[tts] extracted len %d > cap %d, skip (防 Fish timeout): %r",
+                len(extracted), _FISH_TIMEOUT_CAP_CHARS, extracted[:80],
+            )
+            return ""
+
+        # Post-cap B · kanji ratio 防中文混入(中日共享 codepoint,regex 可能 leak)
+        kanji_count, kana_count = _count_japanese_chars(extracted)
+        total_meaningful = kanji_count + kana_count
+        if total_meaningful > 0:
+            ratio_kanji = kanji_count / total_meaningful
+            if ratio_kanji > _FISH_KANJI_RATIO_CAP:
+                logger.warning(
+                    "[tts] extracted kanji ratio %.2f > cap %.2f (>30%% 中文 "
+                    "倾向),skip: %r",
+                    ratio_kanji, _FISH_KANJI_RATIO_CAP, extracted[:80],
+                )
+                return ""
+
+        logger.info(
+            "[tts] tts_language=ja fallback %s extracted (kanji=%d kana=%d "
+            "ratio=%.2f): %r",
+            "A 「」" if corner_matches else "B regex",
+            kanji_count, kana_count,
+            kanji_count / total_meaningful if total_meaningful > 0 else 0.0,
+            extracted[:80],
         )
-        return cleaned
+        return extracted
 
     if lang == "en":
         matches = _EN_TAG_RE.findall(raw_text)
