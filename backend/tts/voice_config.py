@@ -75,6 +75,21 @@ class VoiceConfig:
     reference_audio_path: Optional[str] = None
     reference_text: Optional[str] = None
     fish_latency: str = "balanced"
+    # INV-9 参数 sweep 刀 新增(2026-05-22)· Fish s2-pro 声学采样参数:
+    #
+    #   - fish_temperature: 声学采样 temperature(SDK default 0.7;低值更确定,
+    #                       高值更多样)。None → 不传给 TTSRequest,SDK 用默认。
+    #   - fish_top_p: 声学采样 top_p(SDK default 0.7)。None → 不传,SDK 默认。
+    #   - fish_seed: 保留作 future hook(SDK TTSRequest 字段表**不含**此字段;
+    #                FishTTS 当前实现不向 TTSRequest 透传 seed,仅 log warning
+    #                若用户配了);sweep 实证 byte-identical 与否标注 SDK 是
+    #                否暗中支持。
+    #
+    # 缺字段(默 None)→ parse_voice_config 不 raise,backward compat per 现有
+    # cosyvoice/edge/sovits voice_model JSON 不传新字段。
+    fish_temperature: Optional[float] = None
+    fish_top_p: Optional[float] = None
+    fish_seed: Optional[int] = None
 
 
 def parse_voice_config(
@@ -127,6 +142,29 @@ def parse_voice_config(
     fish_latency_raw = data.get("fish_latency") or "balanced"
     fish_latency = fish_latency_raw.lower() if isinstance(fish_latency_raw, str) else "balanced"
 
+    # INV-9 参数 sweep 刀 新增字段(都 Optional, 缺则 SDK 默认):
+    fish_temperature = data.get("fish_temperature")
+    if fish_temperature is not None:
+        try:
+            fish_temperature = float(fish_temperature)
+        except (TypeError, ValueError):
+            logger.warning("voice_model.fish_temperature 不是数字, 忽略: %r", fish_temperature)
+            fish_temperature = None
+    fish_top_p = data.get("fish_top_p")
+    if fish_top_p is not None:
+        try:
+            fish_top_p = float(fish_top_p)
+        except (TypeError, ValueError):
+            logger.warning("voice_model.fish_top_p 不是数字, 忽略: %r", fish_top_p)
+            fish_top_p = None
+    fish_seed = data.get("fish_seed")
+    if fish_seed is not None:
+        try:
+            fish_seed = int(fish_seed)
+        except (TypeError, ValueError):
+            logger.warning("voice_model.fish_seed 不是整数, 忽略: %r", fish_seed)
+            fish_seed = None
+
     # INV-9 §2 · fish mode_A only validation (per Step 5 决策 1 lock):
     # 不静默 fallback — 缺 ref 字段直接 raise,让上游(get_tts_engine /
     # _build_engine)失败立即报错,避免 fish 角色配错沉默走 default voice。
@@ -157,4 +195,7 @@ def parse_voice_config(
                         and reference_text.strip()
                         else None),
         fish_latency=fish_latency,
+        fish_temperature=fish_temperature,
+        fish_top_p=fish_top_p,
+        fish_seed=fish_seed,
     )

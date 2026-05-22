@@ -486,3 +486,103 @@ PM 决策"§5 + §6 合刀"立 lesson 实证 — 单端落地任一,系统都不
 - ⏳ §7 cost cap + profile_data JSON(Phase 2 收尾刀)
 - ❌ ~~§8 cid=1→cid=101 数据迁移~~(per PM 2026-05-22 取消 · 改 PM 手动 momo slot persona 更新)
 
+---
+
+## 中插 · 参数 sweep 刀(Phase 2 第 4 commit, 2026-05-22)
+
+> PM Phase 2 中插刀(承接听 INV9_smoke_basic_ja + soft_chuckle 不够像 Mai 的观察)— Fish s2-pro temperature × text grid 实验诊断 Mai 音色 fidelity。
+> 跟主线非冲突:仅改 provider 层(VoiceConfig + FishTTS)+ 加 sweep 脚本;不动 §5+§6 已 ship 的 prompt / sanitize 链路。
+> Phase 2 §7 收尾刀 unblocked,本刀完后 PM 听 19 文件 → 拍板默认参数锁进 schema → 进 §7。
+
+### sweep.1 改动文件清单
+
+| 文件 | 改动 |
+|---|---|
+| `backend/tts/voice_config.py` | +24 行 / VoiceConfig 加 3 字段 `fish_temperature` / `fish_top_p` / `fish_seed`(都 Optional 默 None,parse_voice_config 缺字段不 raise per backward compat);float / int 类型转换 + log warning 容错 |
+| `backend/tts/fish.py` | +20 行 / FishTTS 构造接 3 参数;`_build_request` 改 kwargs 模式 + 仅 if not None 透传 TTSRequest(确保未配 = SDK 真默认对照组);`fish_seed` 构造时 log warning("SDK TTSRequest does not accept 'seed' field; param ignored") |
+| `scripts/fish_param_sweep.py`(新) | +240 行 / 16 主表 grid + 3 seed sanity + balance check + summary.json + 视觉表格 |
+
+**关键设计决策**:
+- `if self.temperature is not None: kwargs["temperature"] = self.temperature` — 未传 = SDK 默认(0.7);避免无意覆盖默认对照组
+- `fish_seed` 字段保留作 future hook(SDK 1.3.0 TTSRequest 字段表实测**无 seed**字段,per `inspect TTSRequest.model_fields`);构造时 log warning,sweep 实证 byte-identical 与否
+
+### sweep.2 Grid 结果 · 16 主表 + 3 seed sanity = 19/19 OK
+
+#### Grid 矩阵(audio_dur_sec 视觉对比)
+
+| temp | S1 (basic 日语) | S2 (Mai 自介 canon) | S3 (短 + marker) | S4 (长 + marker) | ms 中位数 |
+|---|---|---|---|---|---|
+| **T02** (0.2) | 2.37s | 6.50s | 1.53s | 5.02s | ~2610ms |
+| **T04** (0.4) | 2.51s | 5.76s | 1.53s | 5.20s | ~2452ms |
+| **T06** (0.6) | 3.20s | 6.04s | 1.72s | 5.43s | ~2903ms |
+| **T08** (0.8) | 2.69s | 5.71s | 1.58s | 5.06s | ~2563ms |
+
+19 WAV 输出 `scripts/fish_probe_outputs/INV9_param_T{02|04|06|08}_S{1|2|3|4}.wav` + `INV9_param_T04_S2_run{1|2|3}.wav`,`summary.json` 含每条 temp / text_id / seed / latency_ms / bytes / md5 + Grid 视觉总览 + seed verdict。
+
+#### Seed sanity verdict · seed param NON-FUNCTIONAL(per PM 预案标注)
+
+3 runs `T=0.4 S=S2 seed=42` 实测 md5:
+- run1: `f37dd64467f52f664da898bdad068742`(585,772 bytes / 6.64s)
+- run2: `85dc365d4a3c001958db3f941bd25441`(573,484 bytes / 6.50s)
+- run3: `cfb6b78f3b47878926bc0c7928610772`(499,756 bytes / 5.67s)
+
+**3 runs 全不同 md5 + 不同 audio bytes** → **seed param NON-FUNCTIONAL** 实证。这与 SDK introspect 结果一致(`fish-audio-sdk 1.3.0` `TTSRequest.model_fields` 不含 `seed`)。
+
+PM 预案"不 identical → 在 summary 标注 'seed param non-functional'" 触发,`summary.json["seed_verdict"]` 明示。FishTTS 当前实现保留 `fish_seed` 字段作 future hook(若未来 SDK 加 seed 支持,改 FishTTS `_build_request` 加一行 `kwargs["seed"] = self.seed` 即可)。
+
+#### Cost 实测 vs 估算
+
+| 项 | 值 |
+|---|---|
+| 估算成本 | ~19 × $0.025 ≈ $0.50 |
+| 实测 credit delta | $0.000(几乎不动 — Plus package 优先消耗) |
+| 实测 package delta | 247,000 → 245,142 = **1,858 bytes** 实扣 |
+| 折算 cost | 1858 / 1,000,000 × $15 = **~$0.028** |
+| 实测 / 估算比 | ~5.6% — **远低于估算**!(估算用了"日语 1 char ≈ 3 bytes"但 sweep texts 总 char 数远低于估算的"19 × 100 字") |
+
+**生产监控启示**:每 turn Mai 日语 100 字 ≈ 300 bytes,**实际 cost ~$0.0045/turn**;而非 INV-8 §1.3.6 估算的 $0.025/turn(estimate 偏高 ~5x)。Phase 2 §7 cost cap 设计可放宽 daily/monthly cap upper bound(per-user $1/day 已足 ~220 turns 余裕)。
+
+### sweep.3 回归 + 测试 · 248/248 PASS / 0 regression
+
+| Suite | Cases |
+|---|---|
+| `test_fish_provider.py`(VoiceConfig + parse fish + _build_engine)| 37/37 |
+| `test_fish_marker_isolation.py`(per-provider 双重隔离) | 35/35 |
+| `test_sanitize_ja.py` | 32/32 |
+| `test_text_filters_ja_whitelist.py` | 38/38 |
+| `test_tts.py` CosyVoice/Edge/SoVITS legacy | 106/106 |
+| **TOTAL** | **248/248 PASS** |
+
+VoiceConfig 加 3 新字段全部 Optional 默 None,**所有现有 voice_model JSON 不破**(verify 37 fish_provider cases + 106 cosyvoice cases legacy 全绿)。
+
+### sweep.4 收口
+
+- ✅ 19/19 calls OK(16 grid + 3 seed sanity)
+- ✅ 19 WAV outputs + summary.json 输出 `scripts/fish_probe_outputs/`(`.gitignore` 已加)给 PM 听感对比拍板默认参数
+- ✅ **seed param NON-FUNCTIONAL** 实证标注 + future hook 保留
+- ✅ Cost 实测 ~$0.028(估算 5.6%);生产 cap 设计可放宽
+- ✅ 0 regression(248 邻近 cases 全绿)
+- 🔒 0 LLM prompt / sanitize 链路改动;Hard Req 双重隔离不受影响
+- ⏳ PM 听 19 文件后拍板默认 (temperature, top_p) → schema 默认值锁,进 Phase 2 §7 收尾刀
+
+### sweep.5 给 PM 听 + 拍板的点
+
+PM 听 19 WAV 后选默认(temperature × top_p)组合(可能 across-S 共识 best 或 per-text 偏好):
+
+- **维度 a · temperature 默认**:0.2 vs 0.4 vs 0.6 vs 0.8(各 4 文件对比)
+- **维度 b · 单 text 跨 temp 偏好**:S1/S2/S3/S4 各跨 4 temp 听感最稳的那档
+- **维度 c · seed 已 NON-FUNCTIONAL**:`fish_seed` 字段是否真 lock 进 schema 默认(CC leaning **保留**字段作 future hook,但 schema 默认 None 表示不传)
+- **维度 d · 是否启用 top_p 调优**:本刀 top_p=0.7 固定未做 sweep;PM 若觉 temperature 不够 → 加 top_p sweep 单独刀
+
+`summary.json` 含完整 19 条记录可读取交叉对比。
+
+### sweep.6 lesson(沉淀)
+
+#### Lesson INV-9 #6 · 第三方 SDK 字段表是真实接受参数集的 ground truth
+
+PM brief 期望"固定 seed=42"控制采样确定性,但 `fish-audio-sdk 1.3.0` `TTSRequest.model_fields` introspect 实测**无 seed 字段** — sweep 实证 3 runs 全不同 md5 落实 verdict "seed NON-FUNCTIONAL"。
+
+**抽象**:第三方 SDK 字段表(`pydantic.model_fields` / `dataclasses.fields()` / 类似 introspect)是**真实接受参数集的 ground truth**;docs 描述 / 用户假设可能与字段表偏离。引入新参数时必先 introspect,**不 blind 传 unknown field**(Pydantic 严格 unknown field 会 raise;非严格类型会 silently drop)。**类比 INV-9 #2(docs 是 contract / SDK 是 truth)** — INV-9 #6 是 SDK 字段表层面的同款 lesson。
+
+→ Phase 2 中插刀 closed。等 PM 听 19 WAV → 拍板默认 → 进 §7 收尾刀。
+

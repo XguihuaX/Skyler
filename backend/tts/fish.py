@@ -89,6 +89,19 @@ class FishTTS(TTSBase):
         # model field 承载 Fish backend 选择;本轮 lock 's2-pro'
         self.backend: str = voice_config.model or "s2-pro"
         self.latency: str = voice_config.fish_latency or "balanced"
+        # INV-9 参数 sweep 刀(2026-05-22)· 声学采样参数透传
+        # 仅 if not None 时传给 TTSRequest,确保未配 = SDK 真默认对照组(per PM)
+        self.temperature: Optional[float] = voice_config.fish_temperature
+        self.top_p: Optional[float] = voice_config.fish_top_p
+        # seed: SDK TTSRequest 字段表不含 seed;保留作 future hook,
+        # 不向 TTSRequest 透传,仅 log warning 提醒
+        self.seed: Optional[int] = voice_config.fish_seed
+        if self.seed is not None:
+            logger.warning(
+                "[fish] voice_config.fish_seed=%r configured but SDK TTSRequest "
+                "does not accept 'seed' field; param ignored (future SDK hook)",
+                self.seed,
+            )
 
         api_key = _resolve_fish_api_key()
         if not api_key:
@@ -114,14 +127,22 @@ class FishTTS(TTSBase):
         )
 
     def _build_request(self, text: str) -> TTSRequest:
-        return TTSRequest(
-            text=text,
-            references=[ReferenceAudio(
+        # INV-9 参数 sweep 刀 · 仅 if not None 时传 temperature / top_p;
+        # 未传 = SDK 真默认(0.7 / 0.7)作对照组,per PM lock
+        kwargs: dict = {
+            "text": text,
+            "references": [ReferenceAudio(
                 audio=self._ref_audio_bytes, text=self._ref_text,
             )],
-            format="wav",
-            latency=self.latency,
-        )
+            "format": "wav",
+            "latency": self.latency,
+        }
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        if self.top_p is not None:
+            kwargs["top_p"] = self.top_p
+        # seed: SDK 不接受,见构造 log warning(此处不传)
+        return TTSRequest(**kwargs)
 
     def _blocking_synth(self, text: str) -> Optional[bytes]:
         """SDK ``Session.tts()`` 返 ``Generator[bytes]``;sync collect to bytes。
