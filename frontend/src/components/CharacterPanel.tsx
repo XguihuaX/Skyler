@@ -26,6 +26,7 @@ import {
 import Live2DDropzone from './live2d/Live2DDropzone';
 import MotionMapConfirmDialog from './live2d/MotionMapConfirmDialog';
 import SplashArtDropzone from './character/SplashArtDropzone';
+import VoiceLinesSection from './character/VoiceLinesSection';
 import { deleteSplashArt } from '../lib/characters';
 import {
   fetchBackgrounds,
@@ -1115,6 +1116,14 @@ export default function CharacterPanel() {
                 Persona 内核(7 字段 Tier-1)在下方 "Personas" 区域编辑(PersonaEditorModal)。 */}
             {form.mode === 'edit' && form.id !== null && (
               <PersonasSection
+                characterId={form.id}
+                showToast={showToast}
+              />
+            )}
+
+            {/* v4.0 voice greeting (2026-05-22) · 立绘馆放大 onEnter 随机播 */}
+            {form.mode === 'edit' && form.id !== null && (
+              <VoiceLinesSection
                 characterId={form.id}
                 showToast={showToast}
               />

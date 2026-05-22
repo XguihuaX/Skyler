@@ -32,6 +32,8 @@ import { fetchCharacterState, type CharacterStateResponse, type CharacterMood } 
 import type { CharacterRow } from '../../lib/config';
 // v4 segment 2 D-S2-1:用 active variant 取代旧 character.persona 文本展示
 import { getActivePersona, type CharacterPersonaRow } from '../../lib/personas';
+// v4.0 voice greeting:onMount 随机播放 voice line(per PM dispatch 2026-05-22)
+import { playRandomVoiceGreeting } from '../../lib/voice_lines';
 
 const MOOD_EMOJI: Record<CharacterMood, string> = {
   happy: '😊', sad: '😢', curious: '🤔', calm: '😌',
@@ -89,6 +91,28 @@ export default function CharacterDetailModal({
       .then((p) => { if (!cancelled) setActivePersona(p); })
       .catch(() => { /* silent — 旧角色无 active variant 时 404 是正常 */ });
     return () => { cancelled = true; };
+  }, [character.id]);
+
+  // v4.0 voice greeting · per PM dispatch 2026-05-22:
+  // 立绘馆放大 onEnter(本 modal mount)→ fetch 1 random voice line + play。
+  // 空 list / fetch fail 静默不播(per spec);unmount 时 pause 防 leak。
+  useEffect(() => {
+    let cancelled = false;
+    let audioEl: HTMLAudioElement | null = null;
+    playRandomVoiceGreeting(character.id).then((a) => {
+      if (cancelled) {
+        // 用户已 close modal,pause 当前 audio(若有)
+        if (a) a.pause();
+      } else {
+        audioEl = a;
+      }
+    });
+    return () => {
+      cancelled = true;
+      if (audioEl) {
+        try { audioEl.pause(); } catch { /* ignore */ }
+      }
+    };
   }, [character.id]);
 
   return (

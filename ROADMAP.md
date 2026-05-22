@@ -14,6 +14,12 @@
 
 > v4-beta 收口批次(2026-05-16)的"本 session 已 ship 并真机验证"7 行成就清单已剥离归档至 [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)(2026-05-19 docs 第二刀)。
 
+### 本 session 已 ship（2026-05-22）
+
+| Status | Item | Notes |
+|---|---|---|
+| ✅ | **v4.0 立绘馆 voice greeting feature** ship(独立主线 · 不挡 Phase 3)| backend(`2b597bc`)· DB character_voice_lines + 4 endpoints + StaticFiles + 31/31 tests + cid=101 6 Mai seed(canon range markers);frontend(本 session)· lib/voice_lines.ts + CharacterDetailModal onMount fetch random + play + CharacterPanel "🎙 语音问候" section(list/upload/preview/delete);PM 提前上传音频系统纯 storage+serve · 不走 TTS 预渲染。详 INVESTIGATION-10.md |
+
 ### 本 session 已 ship（2026-05-19）
 
 | Status | Item | Notes |
