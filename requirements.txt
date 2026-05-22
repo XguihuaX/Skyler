@@ -38,3 +38,4 @@ bilibili-api-python>=17.4
 readability-lxml>=0.8
 # v4 persona engineering segment 1 — 5-layer prompt templates (Jinja2)
 jinja2>=3.0
+mutagen>=1.47.0

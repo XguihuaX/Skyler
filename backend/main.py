@@ -27,6 +27,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.asr.whisper import whisper_asr
@@ -141,6 +142,10 @@ from backend.database.migrations.v4_0_0_conversation_summary import (
 # v4-beta Stage 2 supersede+墓碑 Phase B:memory_tombstone 表(删过的持久事实不再重抽)
 from backend.database.migrations.v4_0_0_memory_tombstone import (
     run_migration as migrate_v4_0_0_memory_tombstone,
+)
+# v4.0 voice greeting:character_voice_lines 表(立绘馆放大 onEnter 随机播放)
+from backend.database.migrations.v4_voice_greeting import (
+    run_migration as migrate_v4_voice_greeting,
 )
 from backend.database.services import create_user, get_user
 from backend.memory import long_term as long_term_memory
@@ -387,6 +392,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # dup-check 额外比对它(精确 content 或 cosine ≥ 0.92)以压重抽。
     # CREATE IF NOT EXISTS,幂等。不动 memory / 任何现存表 schema。
     await migrate_v4_0_0_memory_tombstone()
+
+    # ── 1b34. v4.0 voice greeting:character_voice_lines 表 ─────────────────
+    # 立绘馆放大组件 onEnter 触发随机 voice line 播放;PM 提前上传音频文件,
+    # 系统纯 storage + serve(不走 TTS 预渲染)。CREATE IF NOT EXISTS,幂等。
+    await migrate_v4_voice_greeting()
 
     # ── 2. Default user ──────────────────────────────────────────────────────
     default_uid: str  = config_yaml.get("default_user_id", "default")
@@ -903,6 +913,21 @@ app.include_router(integrations_router,  prefix="/api", tags=["integrations"])
 app.include_router(webhooks_router,      prefix="/api", tags=["webhooks"])
 app.include_router(briefing_router,      prefix="/api", tags=["briefing"])
 app.include_router(character_state_router, prefix="/api", tags=["character_state"])
+# v4.0 voice greeting · character voice lines CRUD + random pick
+from backend.routes.voice_lines import router as voice_lines_router
+app.include_router(voice_lines_router,   prefix="/api", tags=["voice_lines"])
+
+# v4.0 voice greeting · StaticFiles mount 让前端通过
+# /static/voice_lines/<cid>/<uuid>.<ext> URL 直接 fetch audio。
+# 目录由 voice_lines router 上传时按需创建(per_character 子目录)。
+from pathlib import Path as _VoicePath
+_VOICE_LINES_STATIC_DIR = _VoicePath(__file__).resolve().parent / "static" / "voice_lines"
+_VOICE_LINES_STATIC_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/static/voice_lines",
+    StaticFiles(directory=str(_VOICE_LINES_STATIC_DIR)),
+    name="voice_lines",
+)
 app.include_router(activity_router,      prefix="/api", tags=["activity"])
 app.include_router(mcp_router,           prefix="/api", tags=["mcp"])
 # bugfix-3.1: AI Providers REST API (vendors + providers + credentials + activate)
