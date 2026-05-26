@@ -88,7 +88,7 @@ def make_ja_aware_block(tts_language: str) -> str:
 
 
 def make_stage1_prompt(sentinel: str, scene_label: str, examples: str) -> str:
-    """生成 stage 1 强约束短句 prompt。
+    """生成 stage 1 简短问候式 prompt(INV-13 Option G 软化版)。
 
     Args:
         sentinel: 嵌入 prompt 头部的稳定 sentinel 字符串（防 stage 2 递归
@@ -96,12 +96,16 @@ def make_stage1_prompt(sentinel: str, scene_label: str, examples: str) -> str:
         scene_label: 场景描述短词，如"叫吃午饭"/"叫吃晚饭"/"睡前问候"/"轻触你"。
         examples: 示例短句多行字符串。
 
-    返回：含 ⚠️⚠️⚠️ 三层强调 + 严禁 / 只输出 / 例子结构的 prompt。chunk 2.6
-    + chunk 3 教训：弱"可选"提示 LLM 多数轮跳过；必须强约束 + 重复才稳定
-    输出 8-15 字短句。
+    返回：含 ⚠️ 强调 + 严禁 / 只输出 / 例子结构的 prompt。
+
+    INV-13 Option G(2026-05-27)软化:原 "8-15 字硬约束 + ⚠️⚠️⚠️ 三层强调" 改
+    为 "**简短问候式**(参考 8-15 字)" 软指引。理由:Layer A ja directive 引入
+    "中文意群 ≥ 10 字" 规则后,硬 "8-15 字" 跟之撞车导致 LLM thinking debate
+    (详 docs/INV-13-*.md §11.5 / §12.6 dinner_call id=118 案例)。
+    软化指引 + Option F ja-aware 段 · LLM 不再被夹死,字数仍按例子靠拢。
     """
     return sentinel + f"""
-⚠️⚠️⚠️ 关键约束：本轮你**只能输出一句 8-15 个字（含标点不超过 18）的短问候**，场景：{scene_label}。
+⚠️ 本轮风格要求:**简短问候式**(参考 8-15 字 · 软指引非硬约束)· 场景:{scene_label}。
 
 ❌ 严禁输出（无论历史对话提到了什么）：
 - 任何天气信息（"今天天气""气温""带伞"等字眼一律禁止）
@@ -110,12 +114,12 @@ def make_stage1_prompt(sentinel: str, scene_label: str, examples: str) -> str:
 - 任何询问 / 闲笔 / 开放话头（"想听歌吗""今天打算做什么"等一律禁止）
 - 任何叙述或铺陈语句
 
-✅ 只输出：用人设语气 + 昵称喊用户，**8-15 字**。例：
+✅ 只输出：用人设语气 + 昵称喊用户,简短问候式。例:
 {examples}
 
-无论你的短期对话历史里有多长的过往简报，**这一轮**都只允许 8-15 字。想说的所有内容**留到用户回应后再说**——那是 stage 2 的事，与本轮无关。
+本轮**只是轻触发短问候** · 想说的所有内容**留到用户回应后再说** —— 那是 stage 2 的事,与本轮无关。
 
-直接输出短问候本身，不前缀，不解释，不 metadata。"""
+直接输出短问候本身,不前缀,不解释,不 metadata。"""
 
 
 def make_stage2_addendum_template(scene_label: str, scene_focus: str) -> str:
