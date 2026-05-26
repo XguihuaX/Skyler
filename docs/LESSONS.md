@@ -4,15 +4,15 @@
 > 完整正文见 `~/.claude/projects/.../memory/inv11_lesson_N_*.md`(或对应 INV doc 沉淀段)。
 >
 > 更新时机:新 lesson 沉淀 → 同步加一行;不删旧 lesson。
-> 当前覆盖:INV-7/8/9/10/11 阶段 lessons(15 条)。
+> 当前覆盖:INV-7/8/9/10/11/13 阶段 lessons(18 条)。
 
 ---
 
 ## TL;DR · 高频引用 top 3
 
+- **#17 audit 必须 DB 定量 + counter-example · 防 narrative 先行** · INV-13 §11 误诊教训 · 推 Option D 后 §12 数据反驳
 - **#11 backward compat fallback 短期可接受 · long-term force migration** · 不要把 fallback 当永久补丁
 - **#14 hardcoded ≥ 5 entries → 升级 json config + pydantic** · 防 model/registry 数据膨胀
-- **#12 paradigm 完整后 modal → inline 体验更好** · UX 演进决策依据
 
 ---
 
@@ -35,6 +35,9 @@
 | 13 | label 必须如实 reflect 行为 | cosyvoice-v3.5-plus 起初标 "复刻 voice 专用" 误导用户 · 实际支持系统 + 复刻双轨 · label 不准 = 功能 hidden | INV-11 Stage 1.5 followup Part A |
 | 14 | hardcoded → json config 升级触发条件 | ≥ 5 entries + "改这个数据"是非开发活动(运维 / PM 配)→ 升级 json + pydantic validate + 启动 fail-fast + missing-file fallback | INV-11 Stage 1.5 followup Part B |
 | 15 | GSV paradigm 2 mode (trained vs zeroshot) schema 前瞻 | tts_models.json gsv model entry 带 `mode` 字段 · 缺省视为 "trained" 向后兼容 · zeroshot 占位为 future ref upload UI 预留 | INV-11 Stage 1.5 followup Part C |
+| 16 | audit_ja_persist 残留 policy 在大切换后需 review | `main.py:484` strip ja 是为 Mai zh-only 时代设计 · INV-11 切 ja 后该 policy 没人复查 · 也没人想起来撤 · 大架构切换时应该全 grep 老 policy(eg `grep -rn "audit_ja\|ja_persist\|zh_revert"`)审视前提是否仍成立 | INV-13 §11.7 / §12.7 |
+| 17 | audit 必须 DB 定量 + counter-example · 防 narrative 先行 | INV-13 §11 audit 漏做 DB 定量统计就 jump 到 root cause · 推 Option D 误诊。§12 用 conv=62 20-turn JA streak counter-example + per-source compliance ratio(proactive 100% / normal 91%)直接否定 §11 假设。先 numbers 后 narrative · 假设有矛盾时 search 现成 fix(`grep skip_short_term`)防 reinvent | INV-13 §11.8 / §12 method |
+| 18 | 旧 zh-only 字数约束在 ja 切换后会跟 directive 撞车 | trigger prompts `_invite_base.py` "8-15 字硬约束"(2026-05-08 chunk4-C 写)+ Layer A ja directive "中文意群 ≥ 10 字"(INV-11 加)= LLM 陷 thinking debug · token 耗尽。修法 = trigger prompt 加 ja-aware 段(字数按中文部分算)+ 软化硬约束。设老约束时复查"未来语种切换会破吗?" | INV-13 §11.5 + Option F+G ship |
 
 ---
 
@@ -51,6 +54,9 @@
 
 ### 度量 / 治理 (INV-7 / INV-9)
 #9 cap fail-safe 放行 / #10 度量函数 backward-compat
+
+### Audit 方法论 (INV-13)
+#17 DB 定量 + counter-example 先行 / #16 大切换后老 policy review / #18 旧约束在切换后撞车
 
 ---
 

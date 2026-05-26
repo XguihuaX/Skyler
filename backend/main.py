@@ -453,6 +453,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ``SHORT_TERM_MAX`` 条最近(与 short_term.add 的 trim cap 同一常量,
     # 保证重启冷启动 bucket = 稳态 bucket,与 fold cap_cutoff 接缝无 gap)。
     # 然后 add(user, role, cleaned_content, character_id=cid)。
+    #
+    # ── INV-13 deprecation notice (2026-05-27 audit verify) ─────────────────
+    # Historical (b5b0a47 2026-05-16 audit_ja_persist):
+    #   设计意图 = "Mai 改 tts_language=zh 后仍出日语"防御 ·
+    #             LLM 抄 history 里 <ja>「日本語」</ja> precedent
+    #   场景 = character.tts_language 从 ja 切回 zh 时(零→ja→零 转向)
+    #
+    # 现状 (INV-11 Stage 1 · 2026-05-25 → 现在 cid=1 stable ja):
+    #   cid=1 Mai 切 gsv mai_v4 ja · 当前 ja-stable 期此 strip 行为**无害**
+    #   INV-13 §11.4 + §12.4 实证: post-restart 第一个 turn LLM 立即按 Layer A
+    #   ja directive 输出 ja markup · 不依赖 history precedent · strip 不导致
+    #   后续 ja drop。Option D(per-char tts_language gate skip strip)经数据
+    #   verify 不需要 · **保留 strip 行为**。
+    #
+    # Future · 若 Mai 永久切 ja 且确认无 zh 回退场景:
+    #   可以加 per-char gate (tts_language in {ja, en} → keep · zh → strip)
+    #   但目前没有充分理由(strip 当前 ja-stable 期无害 · 又为未来 ja→zh
+    #   transition 保留防御)。
+    # 详细 audit: docs/INV-13-proactive-shortterm-pollution-audit.md §11.7 / §12.7
     from sqlalchemy import distinct as _distinct, select as _select
     from backend.database.models import ChatHistory as _ChatHistory
     from backend.utils.text_filters import (
