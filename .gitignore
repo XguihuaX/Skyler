@@ -73,3 +73,14 @@ backend/static/voice_lines/
 
 # INV-12 Fish TTS 配置管理 · 用户上传 reference audio 存盘(同款 IP 隔离)
 backend/static/fish_references/
+
+momoos.db*
+logs/
+# /tts/ 仅 ignore 顶层(emotion bank wav + 用户 ref audio · IP 隔离);
+# backend/tts/*.py 源码 (含 INV-11 gsv.py / registry.py) 必须入库。
+# 历史 typo `tts/` (无前导斜杠 / 匹配任意深度) 误吞 backend/tts/gsv.py + registry.py。
+/tts/
+test1111.py
+voice_clone_local.py
+frontend/src/assets/
+

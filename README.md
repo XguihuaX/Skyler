@@ -4,7 +4,9 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/v4--beta-🚧%20wrapping%20up-orange)
 
-> **Latest**: v4-beta (May 2026) — Persona Engineering five-layer framework + memory/conversation isolation fixes + conversation-anchored binding semantics + unified chat UI. Currently focused on **Mai as a single-character, Chinese-only companion** (other characters land in v4.1). See [ROADMAP](ROADMAP.md).
+> **Latest**: v4-beta + **INV-11 全段** (May 2026) — Persona Engineering five-layer framework + memory/conversation isolation fixes + conversation-anchored binding semantics + unified chat UI + **Mai ja TTS via self-hosted GSV mai_v4** + **9-character provider × model × voice paradigm**. See [ROADMAP](ROADMAP.md) + [docs/adding-new-tts-model.md](docs/adding-new-tts-model.md).
+>
+> **2026-05-26 update**: 9 character DB rows · 3 TTS provider(CosyVoice / Fish / GSV)· 4 model · 1 Live2D model(Hiyori bound to cid=1 Mai). VoicePicker inline paradigm B(modal → inline, auto-save debounce 300ms). tts_models.json + pydantic validation + GSV 2-mode schema(trained / zeroshot future placeholder)。
 >
 > *Project formerly known as MomoOS — renamed to Skyler in 2026-05.*
 
@@ -30,7 +32,8 @@ v4-beta is a **wrap-up phase** — the goal is one character done solidly before
 
 Fixed and verified on-device this cycle:
 
-- **Reverted to Chinese-only** — the Japanese-voice pipeline (alternating `<ja>` tag synthesis) never reached stable quality across several iterations; v4.0.0 reverts Mai to Chinese-only (persona untouched, only the voice path changes). Japanese voice returns in v4.1 via a **post-processing translation architecture** (LLM emits Chinese → translate before TTS → synthesize) done right once. The ja-chain code is fully preserved but dormant.
+- **Mai ja voice restored via GSV mai_v4** (INV-11 Stage 1, 2026-05-26) — the earlier "reverted to Chinese-only" status is superseded. Mai (`cid=1`) now runs on a self-hosted GPT-SoVITS server (`106.75.224.167:9880`) with the `mai_v4` model + 16-emotion bank (LLM emits emotion → server routes to matching ref wav); CosyVoice/Fish remain available per-character. The earlier "LLM alternates `<ja>` tags in real time" path stayed dormant; INV-11 sidestepped that uncertainty by routing the entire Japanese path through GSV server-side (`tts_language=ja` in voice_model JSON), and the F0 post-processing-translation backlog item is now obsolete. See `docs/INV-11-*.md` + Lesson #11 in `docs/LESSONS.md`.
+- **Per-character TTS paradigm shipped** (INV-11 Stage 1.5, 2026-05-26) — 9 characters can each pick provider × model × voice via an inline `VoicePicker` (paradigm B; the original modal was removed). The static registry lives in `backend/config/tts_models.json` (pydantic-validated, fail-fast on schema error, hardcoded fallback when missing). GSV models declare a `mode` field (`trained` shipping for `mai_v4`; `zeroshot` placeholder reserved for future ref-upload). Playbook for adding new models: `docs/adding-new-tts-model.md`.
 - **Memory/conversation cross-talk fixed** — short-term memory upgraded from user-only slicing to **(user, character, conversation)** three-level isolation + conversation-filtered restore on restart. "Switch to Yae but it says it's Mai" and "deleted the conversation, restarted, still remembers old context" are both resolved.
 - **Conversation-anchored binding** — switching character = switch to that character's latest conversation (or create one). **Rule A**: a user-initiated turn locks its conversation at send time; the response is delivered back to the originating conversation unconditionally (not dropped even if you switch away mid-flight). **Rule B**: a system-initiated proactive message snapshots its conversation at trigger time and is validated before delivery; stale ones are dropped. `character_switch` no longer kills the in-flight turn.
 - **Unified chat UI** — the separate top-right "history" entry and the old fading dialogue bubble are both removed; conversation content is served by a single **left-side push/pull chat panel**; left conversation-list + right chat-panel both push/pull, both collapsed = pure-avatar Galgame immersion; window <1280px auto-degrades layout.
@@ -168,8 +171,7 @@ Here's what Skyler currently does. None of these are locked — every layer is b
   - **VAD mode** — click to activate; auto-detects speech via Web Audio API; auto-sends after 1.5 s silence; 60 s idle returns to sleep
 - **ASR result preview** — recognized text shown above input box in real time via `asr_result` WS message; persists into chat history
 - **Streaming output** — text and audio arrive sentence by sentence
-- **TTS** — CosyVoice (DashScope, default) → Edge-TTS fallback; per-character `voice_model` config; SoVITS planned
-  - **v4-beta**: the focus character Mai is reverted to **Chinese-only** (Chinese voice `longyumi_v3`). The Japanese-voice path (alternating `<ja>` synthesis) is kept in code but dormant; v4.1 redoes it via a post-processing translation architecture (LLM emits Chinese → qwen-turbo translates before TTS → CosyVoice), removing the "LLM self-alternates ja tags in real time" uncertainty from the chain entirely.
+- **TTS** — 3 provider paradigm (INV-11 Stage 1.5, 2026-05-26): CosyVoice (DashScope, default + cloned voice 双轨) · Fish Audio (cloud, reference upload per-character) · GSV (GPT-SoVITS, self-hosted). Edge-TTS legacy fallback. Per-character `voice_model` JSON resolves provider × model × voice; registry in `backend/config/tts_models.json`. Mai (`cid=1`) currently runs GSV `mai_v4` with 16-emotion bank (ja TTS). VoicePicker UI is inline (paradigm B) with auto-save (debounce 300ms). Add new models via `docs/adding-new-tts-model.md`.
 - **Auto-mute mic** when the assistant is speaking (prevents feedback loop)
 - **Tool-call transition** — when the agent calls a tool, it first emits a short transition line ("let me check…") and the input area shows a contextual loading pill ("checking calendar…") so you're never left wondering whether it's frozen. chunk 14 producer/consumer + chunk 6b TTS pipeline implement sentence-by-sentence streaming, verified smooth on-device in chunk 15.
 
@@ -194,7 +196,7 @@ Here's what Skyler currently does. None of these are locked — every layer is b
 - **Conversation-anchored** — switching character = switch to that character's **latest conversation** (or create one); one conversation is 1:1 bound to one character; character identity is derived from the conversation
 - **Rule A (user-initiated)** — a turn locks its conversation the moment it's sent, and the response stays bound to that conversation for its whole lifecycle; even if you switch away mid-flight, the reply is delivered back to the originating conversation unconditionally (not dropped)
 - **Rule B (system-initiated)** — a proactive message snapshots its conversation at trigger time and is validated before delivery; if it's stale (you've switched away) it is silently dropped, never surfacing in the wrong conversation
-- **Per-character voice** — `character.voice_model` JSON: `{provider, voice, instruct_supported}`; empty falls back to global default
+- **Per-character voice** — `character.voice_model` JSON: cosyvoice slim schema `{provider, model, voice, instruct_supported, tts_language?}` or fish/gsv full schema (model defaults spread from `tts_models.json`: `gpt_weights` / `sovits_weights` / `server_url` / `emotion_bank_dir` / `inference_params` / etc); empty falls back to global default
 - **Known limitation** — v4-beta only Mai (`cid=1`) has a full persona; other characters are empty skeletons, filled one by one in v4.1 (F1)
 
 ### 🎨 Chat UI (v4-beta unified)
@@ -314,7 +316,7 @@ Activity timeline:
 
 - **Backend**: Python 3.10 / FastAPI / SQLAlchemy (async) / APScheduler / LiteLLM / faster-whisper / sentence-transformers / pyobjc (macOS-only bits)
 - **Frontend**: Tauri 2 / React 18 / TypeScript / Vite / Tailwind / Zustand / lucide-react / pixi-live2d-display (Cubism 3 + 4)
-- **TTS**: CosyVoice (DashScope) primary / Edge-TTS fallback / SoVITS planned (v4-beta Mai = Chinese-only)
+- **TTS**: 3-provider paradigm (CosyVoice / Fish Audio / GPT-SoVITS self-hosted) per-character, registry in `backend/config/tts_models.json` (pydantic-validated). Edge-TTS legacy fallback. Mai (`cid=1`) currently runs GSV `mai_v4` with 16-emotion bank (ja). Inline VoicePicker UI (paradigm B, auto-save). See `docs/adding-new-tts-model.md`.
 - **ASR**: faster-whisper (local)
 - **LLM**: LiteLLM (Qwen / DeepSeek / OpenAI / Claude / local Ollama — config switchable)
 - **DB**: SQLite + Alembic migrations
@@ -408,10 +410,13 @@ We list these honestly because the gaps matter. They're also the roadmap.
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the full picture.
+See [ROADMAP.md](ROADMAP.md) for the full picture (P1 / P2 / P3 / 5070ti-triggered tracks below are the current week's view; INV-11 全段 闭环段 lists shipped stages 0 / -1 / 1 / 1.5).
 
 - **v4.0.0 wrap-up (in progress)**: long-term memory chain audit ✅ (remediation shipped, code-verified; pending real-device regression) → TTS per-user daily char cap + main-chat throttle → Stage3 Tauri packaging / dmg / dogfood / tag
-- **v4.1**: ja post-processing translation redo (F0) / seven real character personas (F1) / long-term memory ownership tiering (F8) / "Memory Architecture v2" (one permanent conversation stream per character + RAG) / switch-character conversation linkage cleanup (F2) / LLM performance / CosyVoice weak-network timeout / test-debt cleanup
+- **P1 (本周候选)**: Conversation-vs-Character paradigm decision / Proactive 污染 short_term long-term fix / 句子并发 TTS pipeline (chunk 15 复活) / Persona 蒸馏 Mai 三层
+- **P2 (~2 周)**: GSV server GPU 持久化 / ASR whisper preload offline fix / 加新角色 yae_v1 (走完整 json config trained mode flow) / Migration v2 force upgrade (Lesson #11) / UI polish (当前 voice 高亮 / TTS 语言 dropdown 上移 / search box)
+- **P3 (长线)**: INV-12 Stage 3 frontend universal TTS config (Stage 1.5 已 cover 大部分) / Memory v4.1 (20k buffer / RAG fallback / character cognition · 友测后触发) / Phase 3 streaming + H3 fix
+- **5070ti 触发** (PM 已订 · 等到货): zero-shot GSV mode 真实施(本地 server · 不需 SFTP) / 多 character GSV trained model 本地 train / LLM 本地化 (qwen2.5-7b-instruct 4bit ~5GB) / Skyler 全本地化 (去云端依赖)
 - **Medium-term**: filling the honest gaps above (messaging gateway, training data export, capability marketplace)
 - **Long-term**: persona-level learning (`character_states` that actually grow)
 - **Long-vision**: a small, loyal hobbyist ecosystem around hackable AI characters on the desktop
@@ -586,9 +591,9 @@ Where they're ahead of Skyler today is in [Comparison](#comparison) above — li
 
 ## Project Status
 
-**v4-beta wrap-up phase (May 2026).** Persona Engineering five-layer framework + memory/conversation three-level isolation + conversation-anchored binding semantics + unified chat UI are shipped and verified on-device. Currently focused on Mai as a single-character, Chinese-only companion.
+**v4-beta wrap-up phase + INV-11 全段 ship (May 2026).** Persona Engineering five-layer framework + memory/conversation three-level isolation + conversation-anchored binding semantics + unified chat UI + Mai ja TTS via self-hosted GSV mai_v4 + 9-character provider × model × voice paradigm are shipped and verified on-device.
 
-Remaining v4.0.0 wrap-up items: long-term memory chain audit ✅ (remediation shipped & code-verified; pending real-device regression) → TTS/conversation cost gates → Stage3 packaging & release. The full implementation log (every chunk, hotfix, UX iteration) lives in [ROADMAP.md](ROADMAP.md) — that's the honest history.
+Remaining v4.0.0 wrap-up items: long-term memory chain audit ✅ (remediation shipped & code-verified; pending real-device regression) → TTS/conversation cost gates → Stage3 packaging & release. P1/P2/P3 + 5070ti-triggered tracks see ROADMAP. The full implementation log (every chunk, hotfix, UX iteration) lives in [ROADMAP.md](ROADMAP.md) — that's the honest history.
 
 ---
 

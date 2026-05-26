@@ -2,9 +2,60 @@
 
 > Skyler 是一个**可塑型 AI 角色容器** —— 桌面端、角色驱动、能拆到 agent 内核、所有权归你。这条路线图按四条支柱组织,版本号 / chunk 罗列见末尾 [Implementation Log](#implementation-log-historical)。
 
-> **状态(2026-05-16)**:v4-beta 收口阶段。Persona Engineering 五层框架 + 记忆/对话三级隔离 + conversation 锚定绑定语义 + 对话 UI 统一已 ship 并真机验证。当前主推 Mai 单角色纯中文陪伴,剩余 v4.0.0 收口项见下方 Now。
+> **状态(2026-05-26)**:v4-beta 收口阶段后期 + **INV-11 全段 ship**(GSV 真接入 + 全角色 provider × model × voice paradigm)。Persona Engineering 五层框架 + 记忆/对话三级隔离 + conversation 锚定绑定语义 + 对话 UI 统一 + Mai ja TTS via GSV mai_v4 emotion bank 全部 ship 并真机验证。9 character · 3 TTS provider(cosyvoice / fish / gsv)· 4 model · 1 Live2D model(Hiyori on cid=1 Mai)。下方 Now / P1 / P2 / P3 + 5070ti 触发清单见 INV-11 闭环段。
 
 **Legend**: ✅ shipped · 🚧 in progress · 📋 planned · 🔬 research
+
+---
+
+## INV-11 全段闭环(2026-05-25/26 · 主线 GSV + provider paradigm)
+
+| Stage | 主题 | 状态 | Notes |
+|---|---|---|---|
+| ✅ | **Stage 0 · LLM output audit** | shipped | docs/INV-11-stage0-llm-output-audit.md · audit baseline · GSV 接入前 layer A 形态 |
+| ✅ | **Stage -1 · prompt experiment** | shipped(V3 success)| docs/INV-11-stage-minus1-prompt-experiment.md · Layer A1 ja directive 配 GSV 16 emotion 输出格式实证 work |
+| ✅ | **Stage 1 · GSV 真接入** | shipped + 真机 ✓ | `backend/tts/gsv.py` GSVTTS provider · mai_v4 emotion-aware ja TTS · `/set_gpt_weights` lazy-init + 16 emotion bank LLM 路由 · DB cid=1 voice_model 切到 gsv mai_v4 |
+| ✅ | **Stage 1.5 · 全角色 provider × model × voice paradigm** | shipped + 真机 ✓ | `backend/tts/registry.py`(pydantic + json config + GSV 2 mode schema)· `backend/config/tts_models.json`(3 provider · 4 model)· `frontend/src/components/character/VoicePicker.tsx`(inline paradigm B · auto-save debounce 300ms)· `docs/adding-new-tts-model.md` playbook · Lesson INV-11 #11-#15 沉淀 |
+
+> 详 docs/LESSONS.md(#11 fallback 阶段化 / #12 modal→inline / #13 label 真 / #14 hardcoded→json / #15 GSV 2 mode 前瞻)+ INVESTIGATION-INDEX 主题聚类 §0。
+
+---
+
+## P1 (本周候选)
+
+| Status | Item | Goal | Notes |
+|---|---|---|---|
+| 📋 | **Conversation-vs-Character paradigm 决策** | 现状:conversation 1:1 绑 character(§5.9 锚定语义);PM 提出 "一 character 多 conversation" vs "一 character 一永久 stream + RAG 远期" 选型未定 · 影响记忆架构 v2 / F8 归属分级路径 | 待 PM 拍板 |
+| 📋 | **Proactive 污染 short_term 长期 fix** | proactive 推送 turn 写入 short_term · 跟用户主动 turn 混 · 长期影响"对话连贯感";现状靠 proactive 文本压缩 mitigate · 长期解 = 分桶 + 注入分层 | 立项 |
+| 📋 | **句子并发 TTS pipeline(chunk 15 复活)** | sentence-level 并发合成 + 顺序播放 · 改善 ja TTS 长句首字延迟(现 GSV ja 7-15s 单句串行)· chunk 15 实施过但未 ship 留 backlog | INV-8 §1.1 Step 6 instrumentation 复用 |
+| 📋 | **Persona 蒸馏 Mai 三层** | 现 persona 把防御层(讥讽/调侃/话少)当人格本体写成常量 · 缺底色层与切换规则。重构方向:①补内核底色(被审视的孤独 + 对真实连接的隐秘渴望)②防御层标注为试探机制非本性 ③讥讽/话少由常量改为随对方真诚度变化的变量。蒸馏纪律:素材驱动、写约束非形容词、少而硬、给正反例 | 内容方向 · 立项 |
+
+## P2 (~2 周)
+
+| Status | Item | Goal | Notes |
+|---|---|---|---|
+| 📋 | **GSV server GPU 持久化** | reboot 后 tts_infer.yaml 回 cpu 已知 bug · 手动 SSH 改回 GPU + restart · 用 systemd unit + 配置 baseline 锁 | INV-11 Stage 1 衍生 |
+| 📋 | **ASR whisper preload HF_HUB_OFFLINE** | LocalEntryNotFoundError on cold start + offline mode · whisper 模型 pre-warm 触发不准 · 加 startup hook validate model cache 完整 | dogfood 期间偶发 |
+| 📋 | **加新角色 yae_v1**(走完整 json config trained mode flow)| `docs/adding-new-tts-model.md` Example 1 落地验证 · 8 步流程(server weights + emotion bank rsync + 本地 lab cache + 编辑 tts_models.json + backend restart)· dogfood paradigm 完整性 | INV-11 Stage 1.5 followup 衍生 |
+| 📋 | **Migration v2 force upgrade** | phase out GSVTTS `_resolve_weights_field` `gpt_weights/gpt_path` 字段名 fallback(Lesson #11)· DB 批量 normalize voice_model JSON schema · 老字段名 drop | Lesson #11 立项 |
+| 📋 | **UI polish**(当前 voice 高亮 / TTS 语言 dropdown 上移 / search box)| VoicePicker 增量 UX · 当前 voice radio 视觉强化 + TTS 语言挪到 model dropdown 上方(语义对齐)+ system voice 列表加 search box(7 voice 不算多 · 但 dogfood 增 system voice 后受益)| backlog |
+
+## P3 (长线)
+
+| Status | Item | Goal | Notes |
+|---|---|---|---|
+| 📋 | **INV-12 Stage 3 frontend universal TTS config** | Fish reference upload UI per-character + 通用 TTS config 编辑(覆盖 model default)· Stage 1.5 已 cover provider/model/voice 选择 · Stage 3 补 reference upload + custom 参数 | INV-12 Stage 2 backend 已 ship |
+| 📋 | **Memory v4.1**(20k buffer / RAG fallback / character cognition)| short_term cap 30 → 20k token buffer(短期 token 治理)· RAG fallback(远期记忆)· character cognition(角色独立认知)· 友测后触发 | 友测反馈驱动 |
+| 📋 | **Phase 3 streaming + H3 fix** | INV-8 §1 Step 6 instrumentation 11 log 点 + 前端 WebAudio API 序列拼接重构 + H3 +1000ms safety margin fix | 立项 backlog |
+
+## 5070ti 触发(PM 已订 · 等到货)
+
+| Status | Item | Goal | Notes |
+|---|---|---|---|
+| 🔬 | **zero-shot GSV mode 真实施** | 本地跑 GSV server · ref 本地完成 · 不需 server SFTP push · 配套 Stage 1.5 followup Part C tts_models.json `mode: "zeroshot"` schema 预留 + frontend ref upload UI(复用 Fish reference upload pattern)| GSV server 5070ti 本地化 |
+| 🔬 | **多 character GSV trained model 本地 train** | yae_v1 / 凝光 / 其他角色 GPT + SoVITS weights 本地训 · 不依赖 GPU 远程 server · 配套 tts_models.json mode="trained" 加 entry | 5070ti GPU 算力 |
+| 🔬 | **LLM 本地化**(qwen2.5-7b-instruct 4bit ~5GB) | 配 GSV ~4GB · 余 7GB buffer(假设 5070ti 16GB VRAM)· 本地推理 / Ollama / 自部署 | 性能与质量 trade-off 待评测 |
+| 🔬 | **Skyler 全本地化** | 去云端依赖 · DashScope / Fish cloud / OpenAI 全切本地 · privacy / 离线场景就绪 | 长期 vision |
 
 ---
 

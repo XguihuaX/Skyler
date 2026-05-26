@@ -186,7 +186,7 @@ _chat_agent = ChatAgent()
 # ---------------------------------------------------------------------------
 
 TTS_CONCURRENCY = 3
-TTS_TIMEOUT_S = 10.0
+TTS_TIMEOUT_S = 30.0  # INV-11 Stage 1 (2026-05-25): 10s → 30s · GSV CPU 模式 ~50s 会 timeout 早 fallback stub(比 user 静默等 90s 强);GPU 模式 ~5s 6x buffer 充足。per-voice_provider 细分 timeout 留 v4.1。
 _tts_semaphore = asyncio.Semaphore(TTS_CONCURRENCY)
 
 

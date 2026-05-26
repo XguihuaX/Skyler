@@ -1,9 +1,16 @@
 # FRONTEND-OVERVIEW
 
 > 前端代码现状图 · 前后端对接全貌 · 漂移点
-> 生成时间：2026-05-19 02:05｜更新：2026-05-19 docs 第二刀｜HEAD = `c1d65ff`（左右 resize handle 4 文件改动已实现真机验证通过未 commit）
+> 生成时间：2026-05-19 02:05｜更新：2026-05-26 docs 第三刀(INV-11 Stage 1.5 paradigm B 反映)｜HEAD = `c1d65ff` + INV-11/12 增量
 > 只读勘查；未改任何代码 / DB / commit / stash / backend 未启动 / 未跑构建
-> 配套：`docs/BACKEND-OVERVIEW.md` / `docs/archive/INVESTIGATION.md`（已归档）+ `docs/INVESTIGATION-2.md`
+> 配套：`docs/BACKEND-OVERVIEW.md` / `docs/archive/INVESTIGATION.md`（已归档）+ `docs/INVESTIGATION-2.md` + `docs/INV-11-*.md` + `docs/INV-12-fish-config-audit.md` + `docs/adding-new-tts-model.md`
+
+## 第 0 节 · 2026-05-26 INV-11 Stage 1.5 paradigm B 更新点(增量速读)
+
+- **`components/VoicePickerModal.tsx` 删除** · 替代为 `components/character/VoicePicker.tsx`(inline 3 级 dropdown:provider × model × voice + voice list 含系统/复刻双 section header + TTS 语言 + auto-save debounce 300ms)
+- **CharacterPanel.tsx** TTS section 改:删原 simplified 两级 dropdown + 删 [📢 试听并选 voice] modal trigger button + 内联 `<VoicePicker .../>`
+- ttsProviders / clonedVoices / voiceAliases / ttsLoading 等 state 从 CharacterPanel **内化进 VoicePicker**(自己 fetch `/api/tts/providers` nested tree + aliases)
+- 详 `docs/INV-11-stage0-llm-output-audit.md` + `docs/adding-new-tts-model.md` + Lesson INV-11 #12 (`docs/LESSONS.md`)
 
 ---
 
@@ -69,12 +76,14 @@ Widget 模式（`Widget.tsx 85`）只显示 `CharacterView` + `CharacterStatePan
 ### 1.4 组件清单（按职责分组）
 
 - **对话主链**：`ConversationList` / `ChatHistoryPanel` / `ChatHistory` / `ChatInput` / `ControlBar` / `AsrPreview` / `VadBar`（注：`VoiceButton.tsx` 见 §3.1，**实测死代码**待清，不在主链）
-- **角色相关**：`CharacterPanel` / `CharacterView` / `CharacterSelect` / `CharacterSwitcher` / `CharacterStatePanel` / `character/{CharacterCard, CharacterDetailModal, CharacterGallery, FanLayout, SplashArtDropzone}` / `PersonaEditorModal`
+- **角色相关**：`CharacterPanel` / `CharacterView` / `CharacterSelect` / `CharacterSwitcher` / `CharacterStatePanel` / `character/{CharacterCard, CharacterDetailModal, CharacterGallery, FanLayout, SplashArtDropzone, VoiceLinesSection, VoicePicker}` / `PersonaEditorModal`
+  - `character/VoicePicker.tsx` — INV-11 Stage 1.5 paradigm B(2026-05-26)inline 3 级 voice picker · 替代原 `VoicePickerModal.tsx`(已删)
 - **Live2D**：`Live2DCanvas` + `live2d/{Live2DDropzone, MotionMapConfirmDialog}`
 - **能力/扩展**：`CapabilityPanel` / `CapabilityRow` / `capabilities/{CapabilitiesPanel, AddModelModal, AddVendorModal, AIProvidersSection, VendorCredentialsModal}` / `ExtensionsSection` / `extensions/AddMCPServerForm`
 - **记忆**：`MemoryManagerDrawer`（注：`MemoryViewer.tsx` 见 §3.1，**实测死代码**待清）
 - **活动感知**：`ActivityAwarenessSection` / `ActivityPermissionModal` / `ActivityTimelineDrawer`
-- **设置**：`settings/SettingsPanelV2` / `SettingsPanelLegacy(@deprecated)` / `UserProfileSection` / `VoicePickerModal`
+- **设置**：`settings/SettingsPanelV2` / `SettingsPanelLegacy(@deprecated)` / `UserProfileSection`
+  - 注:`VoicePickerModal` 已删(2026-05-26 INV-11 Stage 1.5 paradigm B inline 化);voice 选择见 `character/VoicePicker.tsx`
 - **基础壳**：`TopBar` / `Sidebar` / `TwoPaneShell` / `SplashOverlay` / `NotificationToast` / `ConnectionDot` / `StatusBadge`
 
 ### 1.5 状态管理

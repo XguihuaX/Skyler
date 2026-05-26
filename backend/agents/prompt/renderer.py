@@ -113,11 +113,19 @@ def _render_layer_a(
     available_motions: Optional[List[str]],
     tts_language: str = "zh",
     voice_provider: str = "cosyvoice",
+    voice_model_name: Optional[str] = None,
 ) -> str:
+    # INV-11 Stage 0' V2'' per-(provider, model) prompt 段架构:
+    # voice_model_name 来自 character.voice_model JSON 的 `model` 字段
+    # (例如 'mai_v4' / 'cosyvoice-v3.5-plus' / 's2-pro') · jinja 模板按
+    # `voice_provider == 'gsv' and voice_model_name == 'mai_v4'` 路由 V2''
+    # GSV mai_v4 段。None / 空 / 任意值都安全 — jinja `==` 与 None 比较
+    # 返 False · 该 character 不命中该 sub-template 即自然跳过。
     return _jinja_env.get_template("layer_a.j2").render(
         available_motions=available_motions or [],
         tts_language=tts_language,
         voice_provider=voice_provider,
+        voice_model_name=voice_model_name,
     )
 
 
@@ -214,6 +222,7 @@ async def render_system_prompt(
     llm_vendor: str = "qwen",
     tts_language: str = "zh",
     voice_provider: str = "cosyvoice",
+    voice_model_name: Optional[str] = None,
 ) -> tuple[str, str]:
     """渲染 5 层 system prompt,返 (stable_prefix, variable_suffix) 二元组。
 
@@ -273,7 +282,7 @@ async def render_system_prompt(
 
     # ── stable 段:Layer A + B + C stable + (addendum 已在 B 内) ──────────
     stable_parts: List[str] = [
-        _render_layer_a(available_motions, tts_language, voice_provider),
+        _render_layer_a(available_motions, tts_language, voice_provider, voice_model_name),
         _render_layer_b(mode, tool_prompt_addendum),
         _render_layer_c_stable(persona, states, llm_vendor, filtered_samples),
     ]

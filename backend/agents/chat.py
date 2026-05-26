@@ -71,27 +71,41 @@ timing_logger = logging.getLogger("momoos.timing")
 # v3-D: 情感标签
 # ---------------------------------------------------------------------------
 
-# 形如 "<emotion>开心</emotion>剩余正文..." —— 必须出现在文本最开头，
-# re.match 会自动锚定 ^。
-_EMOTION_RE = re.compile(r"<emotion>(.*?)</emotion>(.*)", re.DOTALL)
+# 形如 "<emotion>开心</emotion>剩余正文..." 的标签匹配。
+# V3b (2026-05-25 INV-11 §3 fix · per PM lock):去掉原 group(2) ``(.*)`` rest
+# carrier · 改用 ``text[:m.start()] + text[m.end():]`` 重组 rest。原 regex
+# group(2) 设计仅服务于 re.match 时代的"emotion 必须在最开头"语义,re.search
+# 时代 group(2) 贪婪吃尾会让 ``.sub`` 误删尾巴,改成纯 tag-only 匹配。
+_EMOTION_RE = re.compile(r"<emotion>(.*?)</emotion>", re.DOTALL)
 
 
 def _parse_emotion(text: str) -> Tuple[str, str]:
     """解析并剥离情感标签。
 
     返回 (emotion, stripped_text)：
-      - 命中 "<emotion>X</emotion>剩余" → (X.strip(), 剩余.strip())
+      - 命中 ``<emotion>X</emotion>`` (text 任意位置) → (X.strip(), 剥离后的剩余.strip())
       - 未命中 → ("默认", 原文)
 
-    标签必须出现在文本最开头；中间出现的不会被剥离 —— 由 system prompt
-    约束 LLM 只在开头出现一次。
+    V3b (2026-05-25 INV-11 §3 NEW Finding · per PM lock):
+    re.match → re.search。原 re.match 锚 ^ · 仅当 <emotion> tag 在文本最开头
+    才命中;实测 (turn 10) LLM 真实输出 ``<thinking>...</thinking>
+    <state_update .../><emotion>放松</emotion>真好啊`` 时 emotion 在 thinking
+    之后 → re.match 抓不到 → 误 fallback "默认"。改 re.search 后任意位置都能
+    命中;rest 用 ``text[:m.start()] + text[m.end():]`` 重组 = prefix(emotion
+    之前的 thinking/state_update 等)+ suffix(emotion 之后的正文)· 保留
+    emotion 之前的 tag 不丢失(由后续 _parse_thinking / _parse_state_update
+    各自单独剥)。
+
+    多个 <emotion> tag 行为:re.search 仍命中第一个(跟 re.match 一致);
+    rest 重组仅剥第一个 tag · 后续 tag 若存在会留在 rest 里,由
+    sanitize 链 (strip_emotion in text_filters.py) 兜底剥除。
     """
     if not text:
         return "默认", text
-    m = _EMOTION_RE.match(text)
+    m = _EMOTION_RE.search(text)
     if m:
         emotion = (m.group(1) or "").strip() or "默认"
-        rest = (m.group(2) or "").strip()
+        rest = (text[:m.start()] + text[m.end():]).strip()
         return emotion, rest
     return "默认", text
 
@@ -1210,8 +1224,12 @@ async def _build_messages(
             # v4 segment 2 §2.1:从 character.voice_model JSON 抽 tts_language。
             # ja/en 走 layer_a.j2 双语 directive,LLM 输出 <ja>...</ja>。
             # INV-9 §5:同段抽 voice_provider 给 Layer A1 fish 子分支教 markers。
+            # INV-11 Stage 0' V2'' (2026-05-25):再抽 voice_model_name 字段给
+            # layer_a.j2 per-(provider, model) sub-template 路由(例如
+            # 'gsv' + 'mai_v4' → V2'' GSV mai_v4 段)。
             tts_language = "zh"
             voice_provider = "cosyvoice"
+            voice_model_name: Optional[str] = None
             try:
                 async with AsyncSessionLocal() as session:
                     vm_str = (await session.execute(
@@ -1226,6 +1244,9 @@ async def _build_messages(
                         _p = _vm.get("provider")
                         if isinstance(_p, str) and _p.strip():
                             voice_provider = _p.strip().lower()
+                        _m = _vm.get("model")
+                        if isinstance(_m, str) and _m.strip():
+                            voice_model_name = _m.strip().lower()
             except (json.JSONDecodeError, TypeError):
                 pass
             except Exception:
@@ -1250,6 +1271,7 @@ async def _build_messages(
                 llm_vendor=llm_vendor,
                 tts_language=tts_language,
                 voice_provider=voice_provider,
+                voice_model_name=voice_model_name,
             )
             logger.info(
                 "[renderer] mode_origin=%s character_id=%s "

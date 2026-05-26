@@ -12,10 +12,11 @@
 > - **v4-beta 收口批次** shipped 并真机验证 2026-05-16(回退纯中文 / short_term 三级隔离 / conversation 锚定绑定语义 / character_switch 不杀 in-flight turn / 对话 UI 统一 / token 成本治理)
 > - 下一站:文档纠真 ✅ → 长期记忆链路 audit ✅(修复链 ship,代码核验,待真机回归)→ TTS cap/throttle → Stage 3 v4.0.0 MVP 封装
 
-> ⚠️ **接管必读(3 个 red flag,新 Claude 先看这个)**:
-> 1. **Mai 已回退纯中文** —— ja 中日交替强约束(§6.5 旧描述)**已放弃**,ja 链代码保留休眠;`cid=1` `tts_language=zh` + voice `longyumi_v3`,人格不动。日语原声 = v4.1 F0 后处理翻译重做。**不要再给 ja 交替打补丁。**
-> 2. **长期记忆链路 audit 完结、修复链已 ship** —— 根因=抽取 prompt 偏 fact-only + 闲聊→合法 [];子 bug=purge 不重置指针。修复链(滚动摘要层 + 指针自愈/reconcile + prompt 重平衡 + 墓碑)已 ship 且代码核验;**陪伴质量待真机回归(验收门)**。§4 声明已更新;详 DESIGN §五·补 + §十五之 Z.5.1。
-> 3. **conversation 锚定绑定语义已上线(§5.9)** —— 切角色/串台/回复被吃全靠这套规则 A/B。改对话/角色/proactive 投递相关代码前必读 §5.9,别破坏绑定。
+> ⚠️ **接管必读(4 个 red flag,新 Claude 先看这个)**:
+> 1. **Mai ja TTS 已活路径 via GSV mai_v4**(2026-05-26 INV-11 Stage 1 ship,**取代** v4-beta "回退纯中文" 旧状态)—— `cid=1` voice_model 切到 `provider=gsv` `model=mai_v4` `tts_language=ja` 完整 schema · GPT-SoVITS 自托管 server(`106.75.224.167:9880`)+ 16 emotion bank LLM 路由 · 人格不动 · 旧 ja 中日交替链(§6.5)仍 deprecated · F0 后处理翻译路径也已 deprecated(因 GSV 直接日语原声达成同目标)。新加 model 走 `backend/config/tts_models.json` + `docs/adding-new-tts-model.md` playbook。
+> 2. **TTS provider × model × voice paradigm**(INV-11 Stage 1.5)—— 三级解耦 · `backend/tts/registry.py` + `backend/config/tts_models.json`(pydantic + fail-fast + missing-file fallback)· VoicePicker inline paradigm B(原 modal 已删)· 详 §5.8.5。改 TTS 链前必读。
+> 3. **长期记忆链路 audit 完结、修复链已 ship** —— 根因=抽取 prompt 偏 fact-only + 闲聊→合法 [];子 bug=purge 不重置指针。修复链(滚动摘要层 + 指针自愈/reconcile + prompt 重平衡 + 墓碑)已 ship 且代码核验;**陪伴质量待真机回归(验收门)**。§4 声明已更新;详 DESIGN §五·补 + §十五之 Z.5.1。
+> 4. **conversation 锚定绑定语义已上线(§5.9)** —— 切角色/串台/回复被吃全靠这套规则 A/B。改对话/角色/proactive 投递相关代码前必读 §5.9,别破坏绑定。
 
 ---
 
@@ -310,6 +311,92 @@ _BOUNDARY_PAIRED_TAGS = {
 - psutil 抓 RAM/CPU/Whisper/network,3s 刷新
 - 见 §7
 
+### 5.8.5 TTS Provider × Model × Voice paradigm(INV-11 Stage 1.5,2026-05-26)
+
+> 接管必读:加新 TTS provider / 加 model / 改 voice_model JSON shape 前必读 + `docs/adding-new-tts-model.md` playbook。
+
+#### 三级解耦架构
+
+```
+provider           model                    voice
+─────────          ─────────                ─────────
+cosyvoice    →     cosyvoice-v3-flash   →   7 系统(longyumi_v3 等)
+cosyvoice    →     cosyvoice-v3.5-plus  →   7 系统 + N 复刻(双轨)
+fish         →     s2-pro               →   reference upload(per-character)
+gsv          →     mai_v4               →   emotion bank(16 ref LLM 路由)
+gsv (future) →     gsv-zeroshot-v4      →   reference upload(per-character)
+```
+
+#### 注册表 single source of truth
+
+`backend/config/tts_models.json`(项目根 `backend/config/` 下,与 characters.yaml 同级)— 静态 provider × model 配置;pydantic schema validate 启动期 fail-fast;file missing → hardcoded fallback(`backend/tts/registry.py::_hardcoded_fallback`)。
+
+cosyvoice 复刻 voice 不在 json · 走 DB 抽(`characters.voice_model` 字段含 `cosyvoice-v3.5-plus-bailian-*` 前缀的 row · 见 `registry.py::_load_cloned_voices_from_db`)· 跟 json 静态合并产出 `get_provider_tree()`。
+
+#### voice_model JSON schema(per character DB 字段)
+
+```
+cosyvoice slim schema(legacy + 现 VoicePicker 写):
+  {provider, model, voice, instruct_supported, tts_language?}
+
+fish/gsv 完整 schema(modelMeta spread):
+  {provider, model, voice?, tts_language, gpt_weights, sovits_weights,
+   emotion_bank_dir, remote_emotion_bank_dir, default_emotion,
+   server_url, inference_params, fish_latency, ...}
+```
+
+backward compat:GSV `_resolve_weights_field(gpt_weights/gpt_path)` 双字段名 fallback(Lesson #11)· 长期 v4.1 migration v2 force upgrade 立项。
+
+#### GSV 2 mode schema(Part C 预留)
+
+| Mode | 状态 | server 端 | 本地端 | 加新流程 |
+|---|---|---|---|---|
+| `trained` | 已实施(mai_v4) | 训好的 GPT + SoVITS weights + emotion bank(16 wav + 16 lab) | lab cache(`tts/gsv/<model_id>/*.lab`)| server rsync weights + 16 ref · 本地 rsync .lab · 改 json |
+| `zeroshot` | 占位 schema · frontend 待实施 | v4 pretrained base(已存 · 无需新 train) | 用户上传单个 ref audio + prompt text(类似 Fish s2-pro) | 编辑 tts_models.json `mode: "zeroshot"` · ref upload UI 复用 Fish reference upload pattern |
+
+`registry.py::list_voices` 按 mode 分支返不同 placeholder voice(trained → `emotion_bank` · zeroshot → `reference` + `requires_reference_upload=true` + `gsv_mode: "zeroshot"`)· frontend 据 `gsv_mode` 决定 UI 形态。
+
+> 缺省 mode 字段视为 "trained" 向后兼容旧 schema(加 mode 字段前的 gsv entry 仍 work)。
+
+#### Character ↔ Voice ↔ Provider 关系图
+
+```
+characters table(DB)
+  ┌─────────────────────────────────────────────────────────────┐
+  │ id │ name      │ voice_model (JSON)                         │
+  ├────┼───────────┼────────────────────────────────────────────┤
+  │  1 │ Momo(Mai)│ {provider:"gsv", model:"mai_v4", ...}       │
+  │  3 │ 荧        │ {provider:"cosyvoice", model:"v3.5-plus",  │
+  │    │           │  voice:"cosyvoice-v3.5-plus-bailian-..."}  │
+  │  4 │ 凝光      │ ""(empty · global default fallback)        │
+  │101 │ 樱岛麻衣  │ {provider:"fish", model:"s2-pro",          │
+  │    │           │  reference_audio_path:..., fish_temp:0.2}  │
+  └─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ get_tts_engine(voice_model)
+  backend/tts/__init__.py::_build_engine
+       cosyvoice → CosyVoiceTTS / fish → FishTTS / gsv → GSVTTS
+                              │
+                              ▼ synthesize(text) → wav bytes
+                       ws.py audio_chunk push
+
+  GET /api/tts/providers(nested tree from registry.py + DB merge)
+                              │
+                              ▼
+  frontend/components/character/VoicePicker.tsx
+    inline 3 级 dropdown (paradigm B):provider × model × voice
+    + voice list 系统音/复刻双 section header
+    + auto-save debounce 300ms PATCH /api/characters/{cid}
+```
+
+#### inline VoicePicker(paradigm B,Lesson #12)
+
+原 `VoicePickerModal.tsx`(modal 形态)已删 · 替代为 `character/VoicePicker.tsx` inline 进 CharacterPanel · 一屏看全部 voice config + dropdown change auto-save(debounce 300ms · 仅 edit 模式)。触发条件:picker 字段 ≥ 3 级 + 父表单还有其他字段并存 + 用户预期 hover-see-all 而非 click-into。
+
+#### 加新 model 流程速查
+
+详 `docs/adding-new-tts-model.md`(3 例:GSV trained / GSV zeroshot placeholder / Fish 新 model + schema 字段表 + 排错)。Trained model 8 步:server rsync weights + 16 emotion ref · 本地 rsync .lab · 编辑 tts_models.json · backend restart(pydantic validate)· 前端 dropdown 自动显示 · PATCH character voice_model · chat 验证。
+
 ### 5.9 conversation 锚定绑定语义(v4-beta 收口,接管必读)
 
 **模型**:切角色 = 切到该角色**最新 conversation**(无则新建);一个 conversation 1:1 绑一个角色,角色身份**由 conversation 推导**(不是由"UI 当前选中")。
@@ -385,8 +472,11 @@ UI 滑块拖动立即生效。**`cliche_tolerance` 数值本身 LLM 不响应**(
 ### 6.6 Mai 借 Momo 壳(dogfood 第一个完整 persona)
 ```
 characters.id=1  name='Momo'  live2d_model='hiyori'
-  voice='longyumi_v3'        ← v4-beta 回退纯中文(原 ja voice 已换)
-  tts_language='zh'          ← v4-beta(原 'ja' 已改;勿动)
+  voice_model = {provider:'gsv', model:'mai_v4', tts_language:'ja',
+                 gpt_weights:..., sovits_weights:..., 
+                 emotion_bank_dir:'tts/gsv/mai_v4', server_url:...}
+  ← INV-11 Stage 1 ship(2026-05-26):由 GSV mai_v4 emotion bank 真接入
+    取代旧 cosyvoice longyumi_v3 zh-only · 人格不动 · 真机 chat 验证 OK
 
 character_personas (character_id=1, variant='default'):
   identity.name='樱岛麻衣'  aliases=['麻衣', '麻衣学姐', 'Mai']

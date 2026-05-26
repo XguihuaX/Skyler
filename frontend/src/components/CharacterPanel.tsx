@@ -27,18 +27,12 @@ import Live2DDropzone from './live2d/Live2DDropzone';
 import MotionMapConfirmDialog from './live2d/MotionMapConfirmDialog';
 import SplashArtDropzone from './character/SplashArtDropzone';
 import VoiceLinesSection from './character/VoiceLinesSection';
+import VoicePicker from './character/VoicePicker';
 import { deleteSplashArt } from '../lib/characters';
 import {
   fetchBackgrounds,
   type BackgroundItem,
 } from '../lib/backgrounds';
-import {
-  buildVoiceModelJson,
-  fetchTtsVoices,
-  parseVoiceModelJson,
-} from '../lib/tts';
-import VoicePickerModal from './VoicePickerModal';
-import { fetchVoiceAliases, resolveVoiceName } from '../lib/voiceAliases';
 // v4 segment 2:Persona variant 编辑入口取代老 persona textarea
 import PersonaEditorModal from './PersonaEditorModal';
 import {
@@ -534,13 +528,10 @@ export default function CharacterPanel() {
   const live2dModels    = useAppStore((s) => s.live2dModels);
   const setLive2dModels = useAppStore((s) => s.setLive2dModels);
 
-  // v3-G' chunk 1b：TTS provider + voice 清单，两级下拉数据源。
-  // 由 App.tsx mount 时 eager-load；patch (d) 在 CharacterPanel mount 时
-  // 兜底再拉一次 + 加手动刷新按钮，应对 dev 模式下"前端先开后端"导致
-  // eager-load 失败的时序问题（生产 Tauri sidecar 时序固定无此问题，
-  // patch 同时改善 dev DX 与生产兜底）。
-  const ttsProviders    = useAppStore((s) => s.ttsProviders);
-  const setTtsProviders = useAppStore((s) => s.setTtsProviders);
+  // INV-11 Stage 1.5 paradigm B (2026-05-26): TTS provider/model/voice 内化
+  // 进 character/VoicePicker · CharacterPanel 不再持有 ttsProviders /
+  // clonedVoices / voiceAliases / ttsLoading state(VoicePicker 自己 fetch
+  // /api/tts/providers nested tree + aliases · 一屏 inline 显示)。
 
   const [characters, setCharacters] = useState<CharacterRow[]>([]);
   const [loading, setLoading]       = useState(false);
@@ -550,8 +541,6 @@ export default function CharacterPanel() {
   const [toasts, setToasts]         = useState<ToastInfo[]>([]);
   const [live2dLoading, setLive2dLoading] = useState(false);
   const [live2dError,   setLive2dError]   = useState<string | null>(null);
-  const [ttsLoading,    setTtsLoading]    = useState(false);
-  const [ttsError,      setTtsError]      = useState<string | null>(null);
   // v3.5 chunk 5a：背景资产清单（GET /api/backgrounds）。空数组 = 未扫
   // 到，下拉退化为只有 "(无)"。
   const [backgrounds, setBackgrounds]     = useState<BackgroundItem[]>([]);
@@ -565,12 +554,6 @@ export default function CharacterPanel() {
 
   // Stage 2.2.1: Live2D dropzone modal + 上传成功后的 motion_map 确认弹窗
   const [showLive2DUpload, setShowLive2DUpload] = useState(false);
-  // bugfix-3.3.1: VoicePickerModal 开关
-  const [voicePickerOpen, setVoicePickerOpen] = useState(false);
-  // bugfix-3.4: cloned voice + aliases — dropdown 列全部 cloned voice 而非
-  // 仅当前角色,让用户能 cross-assign。aliases 给友好名显示。
-  const [clonedVoices, setClonedVoices] = useState<Array<{ voice_id: string }>>([]);
-  const [voiceAliases, setVoiceAliases] = useState<Record<string, string>>({});
   const [pendingMotionMap, setPendingMotionMap] = useState<{
     targetCharacterId: number;
     targetCharacterName: string;
@@ -774,53 +757,9 @@ export default function CharacterPanel() {
     void refreshBackgrounds();
   }, [refreshBackgrounds]);
 
-  // v3-G' patch (d)：TTS voices 列表加载 + 刷新按钮共享同一回调。
-  // App.tsx mount 时已经 eager-load 一次；这里只在 store 还空时兜底
-  // 再拉，避免重复请求。
-  const refreshTts = useCallback(async () => {
-    setTtsLoading(true);
-    setTtsError(null);
-    try {
-      const data = await fetchTtsVoices();
-      setTtsProviders(data.providers);
-    } catch (e) {
-      const msg = (e as Error).message;
-      console.error('[CharacterPanel] tts voices fetch failed:', e);
-      setTtsError(msg);
-    } finally {
-      setTtsLoading(false);
-    }
-  }, [setTtsProviders]);
-
-  useEffect(() => {
-    if (ttsProviders.length === 0) {
-      void refreshTts();
-    }
-    // 依赖只挂 refreshTts —— 仅 mount 时判一次，后续 ttsProviders 变化不
-    // 触发重拉（避免清空后又自动重拉成死循环）。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshTts]);
-
-  // bugfix-3.4: 拉全 cloned voice (DashScope) + aliases map (友好名)。
-  // 让 TTS voice dropdown 能看到所有 cloned voice (含其他角色绑的) → 用户
-  // 可 cross-assign,例如把"八重神子 voice"分给"凝光"。
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch('http://127.0.0.1:8000/api/tts/voices/cloned');
-        if (r.ok) {
-          const j = await r.json() as { voices: Array<{ voice_id: string }> };
-          if (!cancelled) setClonedVoices(j.voices);
-        }
-      } catch { /* 静默 — dropdown 无 cloned 也能用 */ }
-      try {
-        const m = await fetchVoiceAliases();
-        if (!cancelled) setVoiceAliases(m);
-      } catch { /* ignore */ }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+  // INV-11 Stage 1.5 paradigm B: TTS provider/voice fetch 内化进 VoicePicker
+  // (自己 fetch /api/tts/providers nested tree + voice aliases)· CharacterPanel
+  // 不再持有这些 state。
 
   const startCreate = () => {
     setForm({ ...EMPTY_FORM, mode: 'create' });
@@ -1141,299 +1080,20 @@ export default function CharacterPanel() {
               </p>
             )}
 
-            {/* v3-G' chunk 1b：TTS 声音两级下拉（provider → voice）。
-                form.voice_model 仍是 character.voice_model JSON 字符串，
-                下拉编辑后通过 buildVoiceModelJson 写回；老格式 / 自定义内容
-                显示成"未识别 / 自定义"做向后兼容。*/}
-            {(() => {
-              const parsed = parseVoiceModelJson(form.voice_model);
-              const isCustomLegacy = !!form.voice_model.trim() && parsed === null;
-              const selectedProviderId = parsed?.provider ?? '';
-              const selectedVoiceId    = parsed?.voice ?? '';
-              const selectedProvider = ttsProviders.find(
-                (p) => p.id === selectedProviderId,
-              );
-              const selectedVoice = selectedProvider?.voices.find(
-                (v) => v.id === selectedVoiceId,
-              );
-
-              const onProviderChange = (newProviderId: string): void => {
-                if (!newProviderId) {
-                  setForm({ ...form, voice_model: '' });
-                  return;
-                }
-                const p = ttsProviders.find((x) => x.id === newProviderId);
-                const firstVoice = p?.voices[0];
-                if (!firstVoice) {
-                  // 该 provider 暂无 voice，留空让用户重选
-                  setForm({ ...form, voice_model: '' });
-                  return;
-                }
-                setForm({
-                  ...form,
-                  voice_model: buildVoiceModelJson(
-                    newProviderId,
-                    firstVoice.id,
-                    firstVoice.instruct === true,
-                  ),
-                });
-              };
-
-              const onVoiceChange = (newVoiceId: string): void => {
-                if (!selectedProvider || !newVoiceId) return;
-                const v = selectedProvider.voices.find((x) => x.id === newVoiceId);
-                if (!v) return;
-                setForm({
-                  ...form,
-                  voice_model: buildVoiceModelJson(
-                    selectedProvider.id,
-                    v.id,
-                    v.instruct === true,
-                  ),
-                });
-              };
-
-              return (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label
-                      className="block text-xs"
-                      style={{ color: 'var(--color-text-primary)' }}
-                    >
-                      TTS 声音
-                    </label>
-                    {/* v3-G' patch (d)：手动刷新音色列表。dev 模式下前端先开
-                        后端会让 App.tsx eager-load 失败，此处给用户兜底入口；
-                        加载中图标自旋，颜色用 secondary（themes.css 没专门的
-                        muted 变量，统一沿用 secondary 做弱化色）。*/}
-                    <button
-                      type="button"
-                      onClick={() => void refreshTts()}
-                      disabled={ttsLoading}
-                      className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
-                      style={{ color: 'var(--color-text-secondary)' }}
-                      title="刷新音色列表（重新调 /api/tts/voices）"
-                    >
-                      <RefreshCw
-                        size={10}
-                        className={ttsLoading ? 'animate-spin' : ''}
-                      />
-                      刷新
-                    </button>
-                  </div>
-
-                  {/* Provider 下拉 */}
-                  <div className="relative mb-1">
-                    <select
-                      value={selectedProviderId}
-                      onChange={(e) => onProviderChange(e.target.value)}
-                      className="w-full appearance-none rounded-md px-2 py-1.5 pr-8 text-sm focus:outline-none"
-                      style={inputStyle}
-                    >
-                      <option value="">未配置（使用全局默认）</option>
-                      {ttsProviders.map((p) => (
-                        <option key={p.id} value={p.id}>{p.label}</option>
-                      ))}
-                    </select>
-                    <ChevronDown
-                      size={14}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
-                      style={{ color: 'var(--color-text-secondary)' }}
-                    />
-                  </div>
-
-                  {/* Voice 下拉（仅在 provider 选中后显示） */}
-                  {selectedProvider && (
-                    <div className="relative mb-1">
-                      <select
-                        value={selectedVoiceId}
-                        onChange={(e) => {
-                          // bugfix-3.4: cloned voice option → 走 instruct_supported=true
-                          // (即便模型 v3.5-plus 当前 backend 会 skip instruction)。
-                          const newId = e.target.value;
-                          const isCloned = clonedVoices.some((c) => c.voice_id === newId);
-                          if (isCloned) {
-                            // 跟 VoicePickerModal 同样的 voice_model JSON shape
-                            setForm({
-                              ...form,
-                              voice_model: buildVoiceModelJson(
-                                'cosyvoice', newId, true,
-                              ),
-                            });
-                          } else {
-                            onVoiceChange(newId);
-                          }
-                        }}
-                        className="w-full appearance-none rounded-md px-2 py-1.5 pr-8 text-sm focus:outline-none"
-                        style={inputStyle}
-                      >
-                        {/* 当前 voice 不在新拉的列表里 → 保留为"自定义"项不丢
-                            数据（比如配置文件 yaml 删了某个音色但角色还在用）*/}
-                        {selectedVoiceId
-                          && !selectedProvider.voices.some((v) => v.id === selectedVoiceId)
-                          && !clonedVoices.some((c) => c.voice_id === selectedVoiceId) && (
-                            <option value={selectedVoiceId}>
-                              自定义:{selectedVoiceId}
-                            </option>
-                          )}
-                        {/* bugfix-3.4: cosyvoice provider 下额外把所有 cloned voice
-                            列出来 (跨角色), 友好名走 voiceAliases。其他 provider
-                            (edge/sovits) 不展示 cloned。 */}
-                        {selectedProvider.id === 'cosyvoice' && clonedVoices.length > 0 && (
-                          <optgroup label="── 用户复刻 ──">
-                            {clonedVoices.map((c) => (
-                              <option key={c.voice_id} value={c.voice_id}>
-                                {resolveVoiceName(c.voice_id, voiceAliases)} · 复刻
-                              </option>
-                            ))}
-                          </optgroup>
-                        )}
-                        {selectedProvider.voices.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.label}
-                            {v.traits ? ` · ${v.traits}` : ''}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown
-                        size={14}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
-                        style={{ color: 'var(--color-text-secondary)' }}
-                      />
-                    </div>
-                  )}
-
-                  {/* v3-G' patch：badge 只剩 Instruct（emotion 真生效与否）。
-                      true → 绿色"情感控制"；false → outline "纯音色"；null
-                      → 不显示（音色 instruct 支持未确认）。 */}
-                  {selectedVoice && selectedVoice.instruct !== null && (
-                    <div className="flex items-center gap-1 mt-1 flex-wrap text-[10px]">
-                      {selectedVoice.instruct === true ? (
-                        <span
-                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
-                          style={{
-                            background: 'var(--color-accent)',
-                            color: 'var(--color-bubble-ai-text)',
-                          }}
-                        >
-                          <CheckCircle2 size={10} />
-                          情感控制
-                        </span>
-                      ) : (
-                        <span
-                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
-                          style={{
-                            background: 'var(--color-bg-elevated)',
-                            color: 'var(--color-text-secondary)',
-                            border: '1px solid var(--color-border)',
-                          }}
-                        >
-                          纯音色
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* v3-G' patch (d)：列表加载失败兜底文字。颜色沿用
-                      secondary（themes.css 无 error 变量），图标 + 重试提示
-                      让用户知道下拉为空不是配置问题而是网络问题。*/}
-                  {ttsError && (
-                    <p
-                      className="text-[10px] mt-1"
-                      style={{ color: 'var(--color-text-secondary)' }}
-                    >
-                      未能加载音色列表，请稍后重试（{ttsError}）
-                    </p>
-                  )}
-
-                  {/* 老格式 / 未识别值兜底（向后兼容） */}
-                  {isCustomLegacy && (
-                    <div
-                      className="mt-1 flex items-start gap-1 text-[10px]"
-                      style={{ color: 'var(--color-text-secondary)' }}
-                    >
-                      <AlertTriangle
-                        size={10}
-                        className="flex-shrink-0 mt-[1px]"
-                      />
-                      <span>
-                        当前 voice_model 是旧格式或自定义内容："
-                        {form.voice_model.length > 60
-                          ? form.voice_model.slice(0, 60) + '…'
-                          : form.voice_model}
-                        "。重新选 provider + voice 会覆盖。
-                      </span>
-                    </div>
-                  )}
-
-                  <p
-                    className="text-[10px] mt-1"
-                    style={{ color: 'var(--color-text-secondary)' }}
-                  >
-                    选项来自 config.yaml ``tts.available_voices``。"情感控制"
-                    标记：选中此音色时，跟你说不同情感的话 TTS 会按 emotion
-                    引导（happy / sad / angry / surprised）。留"未配置"则用
-                    全局默认音色。
-                  </p>
-
-                  {/* bugfix-3.3.1: VoicePickerModal 入口 — 含系统 + 用户在
-                      DashScope 复刻的 voice + 试听 + 反向显示已用于角色。 */}
-                  <button
-                    type="button"
-                    onClick={() => setVoicePickerOpen(true)}
-                    className="mt-2 text-[11px] inline-flex items-center gap-1 px-2 py-1 rounded hover:opacity-80"
-                    style={{
-                      background: 'var(--color-bg-input)',
-                      border: '1px solid var(--color-border)',
-                      color: 'var(--color-text-primary)',
-                    }}
-                    title="打开 voice 选择器: 系统音色 + 你的 DashScope 复刻 voice + 试听"
-                  >
-                    🎙 试听并选 voice (含复刻)
-                  </button>
-
-                  {/* v4 segment 2 §2.1 + §4.4:TTS 语言 ── ja/en 音色走双语
-                      模式(中文字幕 + 目标语言朗读)。仅在选了 voice 后可用,
-                      avoid 给 "未配置" 还能选 ja(没用)。 */}
-                  {parsed && (
-                    <div className="mt-2">
-                      <label
-                        className="block text-[11px] mb-1"
-                        style={{ color: 'var(--color-text-primary)' }}
-                      >
-                        TTS 语言
-                      </label>
-                      <select
-                        value={parsed.tts_language ?? 'zh'}
-                        onChange={(e) => {
-                          const newLang = e.target.value as 'zh' | 'ja' | 'en';
-                          setForm({
-                            ...form,
-                            voice_model: buildVoiceModelJson(
-                              parsed.provider, parsed.voice,
-                              parsed.instruct_supported, newLang,
-                            ),
-                          });
-                        }}
-                        className="w-full appearance-none rounded-md px-2 py-1.5 text-xs focus:outline-none"
-                        style={inputStyle}
-                      >
-                        <option value="zh">中文(默认)</option>
-                        <option value="ja">日语(中文字幕 + 日语朗读)</option>
-                        <option value="en">英语(中文字幕 + 英文朗读)</option>
-                      </select>
-                      <p
-                        className="text-[10px] mt-1"
-                        style={{ color: 'var(--color-text-secondary)' }}
-                      >
-                        选 ja/en 时,LLM 自动输出双语:中文给字幕,目标语言给 TTS。
-                        Mai 复刻的日语 voice 应选 "日语" 才自然。
-                      </p>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+            {/* INV-11 Stage 1.5 paradigm B (2026-05-26): inline VoicePicker —
+                provider × model × voice 3 级 dropdown 一屏可见 · dropdown
+                change → 自动 PATCH(debounce 300ms · edit 模式)。取代旧
+                ttsProviders 简化下拉 + VoicePickerModal 入口 button。 */}
+            <VoicePicker
+              voiceModel={form.voice_model}
+              characterId={form.mode === 'edit' ? form.id : null}
+              characterName={form.name || undefined}
+              onVoiceModelChange={(json) =>
+                setForm((f) => (f ? { ...f, voice_model: json } : f))
+              }
+              showToast={showToast}
+              inputStyle={inputStyle}
+            />
 
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -1825,28 +1485,6 @@ export default function CharacterPanel() {
           applying={applyingMotionMap}
           onApply={() => void onApplyMotionMap()}
           onSkip={onSkipMotionMap}
-        />
-      )}
-
-      {/* bugfix-3.3.1: VoicePickerModal — 系统 voice + 复刻 voice + 试听。
-          form 可能为 null (用户尚未点编辑某 char), 但本按钮只在 form 里
-          render, 所以打开时 form 一定非 null。 */}
-      {voicePickerOpen && form && (
-        <VoicePickerModal
-          currentVoice={parseVoiceModelJson(form.voice_model)?.voice ?? null}
-          characterName={form.name || undefined}
-          onClose={() => setVoicePickerOpen(false)}
-          onSave={({ voiceId, instructSupported }) => {
-            // 选定 voice 写回 form.voice_model;provider 固定 cosyvoice
-            // (本 stage 不支持给 character 切 Edge/SoVITS provider)。
-            setForm((f) => f ? ({
-              ...f,
-              voice_model: buildVoiceModelJson('cosyvoice', voiceId, instructSupported),
-            }) : f);
-            setVoicePickerOpen(false);
-            showToast(`已选 voice ${voiceId.slice(0, 40)}…; 记得点 [保存]`);
-          }}
-          showToast={showToast}
         />
       )}
 

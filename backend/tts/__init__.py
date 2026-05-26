@@ -368,6 +368,14 @@ def _build_engine(voice_model: Optional[str] = None) -> TTSBase:
         # FishTTS 构造时读 reference_audio bytes + Fish API key + 一次性 cached。
         from backend.tts.fish import FishTTS
         return FishTTS(voice_config=cfg)
+    if cfg.provider == "gsv":
+        # INV-11 Stage 1(2026-05-25):真接入 9880/tts。
+        # 透传 raw voice_model JSON 给 GSVTTS · GSVTTS 内部 parse 拿 gsv 专用
+        # 字段(server_url / gpt_weights / sovits_weights / emotion_bank_dir
+        # / remote_emotion_bank_dir / inference_params)· 不污染 VoiceConfig
+        # dataclass schema(避免 fish/cosyvoice tests 受 gsv 字段影响)。
+        from backend.tts.gsv import GSVTTS
+        return GSVTTS(voice_config=cfg, voice_model_json=voice_model)
     if cfg.provider == "edge":
         return _LegacyProviderAdapter(EdgeTTSProvider(), character=cfg.voice)
     if cfg.provider == "sovits":

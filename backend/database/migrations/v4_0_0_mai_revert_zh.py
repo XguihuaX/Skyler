@@ -61,12 +61,27 @@ WHERE id = :cid
   AND (
       voice_model IS NULL
       OR voice_model = ''
+      OR json_extract(voice_model, '$.provider') IS NULL
+      OR json_extract(voice_model, '$.provider') = 'cosyvoice'
+  )
+  AND (
+      voice_model IS NULL
+      OR voice_model = ''
       OR json_extract(voice_model, '$.voice') IS NULL
       OR json_extract(voice_model, '$.voice') != 'longyumi_v3'
       OR json_extract(voice_model, '$.tts_language') IS NULL
       OR json_extract(voice_model, '$.tts_language') != 'zh'
   )
 """
+# INV-11 Stage -1 hotfix (2026-05-25):WHERE 上半段加 provider scope。
+# 原 migration ship-call 目标是把误标 ja 的 cid=1 cosyvoice voice 推回
+# longyumi_v3/zh,**不应**强制 cid=1 永远绑 cosyvoice。漏 scope 导致
+# INV-11 Stage -1 切 cid=1 → gsv 后每次 lifespan startup 都回滚。
+# 加 `provider IN (NULL, 'cosyvoice')` 守卫:仅在 NULL / 已是 cosyvoice
+# 体系时 nudge voice/lang。切去 gsv/fish/edge/sovits 后 short-circuit
+# 不动 voice_model。语义跟 ship-call 本意一致。
+# 实验后清理:`git checkout` 本文件 restore origin(或保留此 hotfix,
+# 因为它本来就是 design bug 的 surgical fix)。
 
 
 async def run_migration() -> None:

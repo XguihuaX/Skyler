@@ -22,8 +22,10 @@ os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 import asyncio
 import logging
+import logging.handlers  # INV-11 Lesson #2 · RotatingFileHandler
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path  # INV-11 Lesson #2 · logs/ 目录 · (L954 _VoicePath alias 不冲突)
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
@@ -205,12 +207,40 @@ import backend.proactive.triggers.bedtime_chat  # noqa: F401, E402
 import backend.proactive.triggers.long_idle     # noqa: F401, E402
 from backend.mcp import server as mcp_server  # noqa: E402  v3-G chunk 1.5
 
+# INV-11 Lesson #2 (2026-05-25):加 RotatingFileHandler 写 logs/backend.log
+# 之前 backend log 只 → stderr/terminal scroll buffer · INV-11 Stage -1 实验差
+# 点丢全部 emotion 数据,靠 PM 没关 terminal 抢救出来。本 fix 让 future 实验
+# 可从 log file grep · 不依赖 scroll。logs/ 目录 .gitignore 已含 *.log。
+_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_LOG_FILE = _LOG_DIR / "backend.log"
+
+_file_handler = logging.handlers.RotatingFileHandler(
+    str(_LOG_FILE),
+    maxBytes=20 * 1024 * 1024,  # 20MB / file · 实验期 ~1h 跑 10 turn 远小于
+    backupCount=5,              # 留 5 个 backup · backend.log.1..5 ring buffer
+    encoding="utf-8",
+)
+_file_handler.setLevel(logging.INFO)
+_file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(name)s %(levelname)s %(message)s"
+))
+
+_stream_handler = logging.StreamHandler()  # 保留 stderr · backend dev mode 仍看终端
+_stream_handler.setLevel(logging.INFO)
+_stream_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(name)s %(levelname)s %(message)s"
+))
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    handlers=[_file_handler, _stream_handler],
+    force=True,  # 覆盖已有 handler(避免 importlib reload / uvicorn --reload 重复添加)
 )
 
 logger = logging.getLogger(__name__)
+logger.info("[logging] FileHandler enabled · path=%s", _LOG_FILE)
 
 
 # ---------------------------------------------------------------------------

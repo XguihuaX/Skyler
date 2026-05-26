@@ -67,6 +67,26 @@ def _coerce_voice(raw: dict) -> VoiceInfo:
     )
 
 
+@router.get("/tts/providers")
+async def list_tts_providers() -> dict:
+    """INV-11 Stage 1.5(2026-05-26)· provider × model × voice nested registry。
+
+    给前端 ``VoicePickerModal`` 3 step dropdown 一次性 fetch:
+      provider (cosyvoice/fish/gsv)
+        → model (依赖 provider)
+          → voice (依赖 model)
+
+    merge sources(per ``backend/tts/registry.py``):
+      - config.yaml ``tts.available_voices.cosyvoice``(7 静态)
+      - DB ``characters.voice_model`` 抽 ``cosyvoice-v3.5-plus-bailian-*`` 复刻 voice
+      - hardcoded gsv mai_v4 / fish s2-pro models
+
+    不替代 ``/tts/voices``(legacy · 单 provider 形态)· 共存。
+    """
+    from backend.tts.registry import get_provider_tree
+    return await get_provider_tree()
+
+
 @router.get("/tts/voices")
 async def list_tts_voices() -> TtsVoicesResponse:
     """Return providers + voices currently available to CharacterPanel.

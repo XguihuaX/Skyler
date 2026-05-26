@@ -113,6 +113,14 @@
 {% endif %}
 
 {# C3d 情绪触发参考(Tier-2 lore.emotion_triggers)#}
+{# V3a (2026-05-25 INV-11 H5 fix · per PM lock):#}
+{# 删除 `TTS 标签:<emotion>{{ ssml_tag }}</emotion>` 渲染行,#}
+{# 避免给 LLM 看到 2 套 <emotion> 词表(Layer A1 V2'' 16 中文 vs 此处 ssml_tag #}
+{# 6 英文)导致 LLM hedge bet 选 emotion 时漂移到 lore 词表(e.g. turn 6 LLM #}
+{# 输出 <emotion>calm</emotion> 命中 lore amused.ssml_tag)。lore.ssml_tag #}
+{# JSON 字段保留(backend 0 消费 · v3 SSML 历史遗留 · per audit doc §3.2), #}
+{# 仅本渲染层不再透传给 LLM。emotion_name + intensity + triggers + expression #}
+{# 仍渲染 — LLM 看到 character 行为指引但不会误把 ssml_tag 当输出词表。 #}
 {% if persona.lore and persona.lore.emotion_triggers %}
 [情绪触发参考]
 不同情境下你的情绪倾向:
@@ -120,7 +128,5 @@
 - {{ emotion_name }}{% if config.intensity is defined %}(强度 {{ config.intensity }}){% endif %}:
 {% if config.triggers %}  触发:{{ config.triggers | join('、') }}
 {% endif %}{% if config.expression %}  表现:{{ config.expression }}
-{% endif %}{% if config.ssml_tag %}  TTS 标签:<emotion>{{ config.ssml_tag }}</emotion>
-{% endif %}
-{% endfor %}
+{% endif %}{% endfor %}
 {% endif %}
