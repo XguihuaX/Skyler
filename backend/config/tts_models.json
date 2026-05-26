@@ -1,0 +1,61 @@
+{
+  "$schema_version": 1,
+  "_comment": "INV-11 Stage 1.5 followup (2026-05-26) — TTS Provider × Model 静态注册表. cosyvoice 复刻 voice 仍走 DB 抽 (cosyvoice-v3.5-plus-bailian-* 前缀 · 见 backend/tts/registry.py::_load_cloned_voices_from_db); fish reference / gsv emotion bank 由 GSVTTS/Fish 内部 resolve (registry 只暴露 1 占位 voice). 加新 model 见 docs/adding-new-tts-model.md.",
+
+  "providers": [
+    {
+      "id": "cosyvoice",
+      "label": "CosyVoice(阿里云 DashScope · zh)",
+      "models": [
+        {
+          "id": "cosyvoice-v3-flash",
+          "label": "v3-flash(快 · 系统 voice)",
+          "tts_language": "zh"
+        },
+        {
+          "id": "cosyvoice-v3.5-plus",
+          "label": "v3.5-plus(系统音 + 复刻双轨)",
+          "tts_language": "zh"
+        }
+      ]
+    },
+
+    {
+      "id": "fish",
+      "label": "Fish Audio(cloud · zh/ja)",
+      "models": [
+        {
+          "id": "s2-pro",
+          "label": "Fish s2-pro(cloud · reference upload)",
+          "tts_language": "ja",
+          "fish_latency": "balanced"
+        }
+      ]
+    },
+
+    {
+      "id": "gsv",
+      "label": "GPT-SoVITS(self-hosted · ja)",
+      "models": [
+        {
+          "id": "mai_v4",
+          "label": "Mai v4(樱岛麻衣 ja)",
+          "mode": "trained",
+          "tts_language": "ja",
+          "gpt_weights": "GPT_weights_v4/mai_v4-e15.ckpt",
+          "sovits_weights": "SoVITS_weights_v4/mai_v4_e5_s1380_l32.pth",
+          "emotion_bank_dir": "tts/gsv/mai_v4",
+          "remote_emotion_bank_dir": "/workspace/GSVI/mai_emotion_bank/",
+          "default_emotion": "日常",
+          "server_url": "http://106.75.224.167:9880",
+          "inference_params": {
+            "top_k": 15,
+            "top_p": 1.0,
+            "temperature": 1.0,
+            "speed_factor": 1.0
+          }
+        }
+      ]
+    }
+  ]
+}
