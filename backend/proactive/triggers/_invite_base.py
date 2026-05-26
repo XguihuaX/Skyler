@@ -20,10 +20,71 @@ prompt 字符串，行为通过 engine.run_wake_call_trigger 执行。这样新 
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from backend.database.models import Character
 from backend.proactive.engine import ProactiveTrigger
+
+
+# ---------------------------------------------------------------------------
+# INV-13 Option F (2026-05-27) — ja-aware injection helpers
+# ---------------------------------------------------------------------------
+#
+# 历史 trigger prompt(2026-05-08 chunk4-C / 2026-05-12 chunk8a / wake_call)在
+# Mai 还是 cosyvoice zh-only 时 ship · "8-15 字" / "40-80 字" 硬约束按中文计算
+# 即可。INV-11 Stage 1(2026-05-25)cid=1 切 gsv mai_v4 ja 后 Layer A 注入 ja
+# directive("中文 + <ja>日语翻译</ja>" 双语意群)· 老约束 "8-15 字" 跟 ja
+# directive "中文意群 ≥ 10 字" 隐性撞车 · LLM 偶发陷入 thinking debate(见
+# docs/INV-13-*.md §11.5 / §12.6 dinner_call id=118 案例)。
+#
+# Option F 修法:trigger prompt 注入 ja-aware 段 · 明确告诉 LLM "字数约束按
+# **中文部分**算 · ja 翻译不计入"。仅在 tts_language != "zh" 时注入(zh-only
+# 角色不需要 · 省 ~150 chars system prompt token)。
+#
+# 触发面:本 helper 被 invite 系列 trigger(lunch_call / dinner_call /
+# bedtime_chat / long_idle)+ wake_call_briefing + activity_* 共用。
+
+
+def _extract_tts_language(character: Optional[Character]) -> str:
+    """从 character.voice_model JSON 抽 tts_language · 默认 'zh'。
+
+    多 character 切 ja/en voice 后(INV-11 Stage 1+)· trigger prompt 需知道
+    voice 语种 · 决定是否注入 ja-aware 段。
+    """
+    if character is None or not character.voice_model:
+        return "zh"
+    try:
+        data = json.loads(character.voice_model)
+        if isinstance(data, dict):
+            t = data.get("tts_language")
+            if t in ("zh", "ja", "en"):
+                return str(t)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return "zh"
+
+
+_JA_AWARE_BLOCK_TEMPLATE = """\
+⚠️ **本角色 voice 是 {lang_name}**(Layer A 已注入 ``<ja>...</ja>`` 双语 directive):
+- 本轮字数指引按**中文部分**计算 · **不**含 ``<ja>...</ja>`` 内的日语意群
+- 即: 中文 + 日语翻译 配对输出 · 中文部分按指引长度 · ja 块按 Layer A 意群规则
+- 示例(短问候 + ja):``"嗯,下午好。"<ja>「うん、こんにちは。」</ja>``
+- 不要因为 ja 块加进来导致整体字数超 · 也不要为了符合字数缩短中文反而省略 ja"""
+
+
+def make_ja_aware_block(tts_language: str) -> str:
+    """生成 ja-aware 提示段 · 仅 tts_language ja/en 时返非空。
+
+    返空字符串(zh / unknown)= caller 不附加 · 不污染 zh-only 角色 prompt。
+    """
+    if tts_language == "ja":
+        return _JA_AWARE_BLOCK_TEMPLATE.format(lang_name="日语")
+    if tts_language == "en":
+        return _JA_AWARE_BLOCK_TEMPLATE.format(lang_name="英语").replace(
+            "``<ja>...</ja>``", "``<en>...</en>``"
+        ).replace("「うん、こんにちは。」", "\"Yes, good afternoon.\"").replace("ja 块", "en 块").replace("日语意群", "英语意群").replace("日语翻译", "英文翻译")
+    return ""
 
 
 def make_stage1_prompt(sentinel: str, scene_label: str, examples: str) -> str:
@@ -104,7 +165,14 @@ class InviteTriggerBase(ProactiveTrigger):
     _STAGE1_PROMPT: str = ""  # 子类必填
 
     async def build_system_prompt(self, character: Optional[Character]) -> str:
-        return self._STAGE1_PROMPT
+        # INV-13 Option F:tts_language != zh 时附 ja-aware 段 · zh-only 角色
+        # 走原 _STAGE1_PROMPT(static)零额外 token。详 docs/INV-13-*.md §11+§12。
+        base = self._STAGE1_PROMPT
+        tts_lang = _extract_tts_language(character)
+        ja_block = make_ja_aware_block(tts_lang)
+        if ja_block:
+            return f"{base}\n\n{ja_block}"
+        return base
 
     async def resolve_capabilities(self) -> list[str]:
         return []  # stage 1 不需要工具
@@ -114,4 +182,6 @@ __all__ = [
     "InviteTriggerBase",
     "make_stage1_prompt",
     "make_stage2_addendum_template",
+    "make_ja_aware_block",
+    "_extract_tts_language",
 ]

@@ -16,6 +16,10 @@ from typing import Optional
 
 from backend.database.models import Character
 from backend.proactive.engine import ProactiveTrigger
+from backend.proactive.triggers._invite_base import (
+    _extract_tts_language,
+    make_ja_aware_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +160,16 @@ class ActivityProactiveTrigger(ProactiveTrigger):
         self.event_source = None
 
     async def build_system_prompt(self, character: Optional[Character]) -> str:
+        # INV-13 Option F:activity prompt 共享 _BASE_GUIDANCE 含 "40-80 字"
+        # 指引 · tts_language ja/en 时附 ja-aware 段告诉 LLM 字数按中文部分算
+        # 不含 <ja>...</ja> 内日语意群(详 docs/INV-13-*.md §11.5)。
         builder = _PROMPT_BUILDERS[self.name]
-        return builder(self.detail)
+        base = builder(self.detail)
+        tts_lang = _extract_tts_language(character)
+        ja_block = make_ja_aware_block(tts_lang)
+        if ja_block:
+            return f"{base}\n\n{ja_block}"
+        return base
 
     async def resolve_capabilities(self) -> list[str]:
         # activity 触发**不强求**调用具体 capability。让 LLM 按上下文自由

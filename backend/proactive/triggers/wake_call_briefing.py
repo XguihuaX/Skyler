@@ -52,6 +52,10 @@ from typing import Optional
 from backend.config import config_yaml
 from backend.database.models import Character
 from backend.proactive.engine import ProactiveTrigger
+from backend.proactive.triggers._invite_base import (
+    _extract_tts_language,
+    make_ja_aware_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,8 +150,17 @@ class WakeCallBriefingTrigger(ProactiveTrigger):
 
         ChatAgent 已经把 persona 放在 system 头部，本方法只补"这次任务是
         什么"——8-15 字叫醒，不带日程内容。
+
+        INV-13 Option F:tts_language ja/en 时附 ja-aware 段(字数按中文部分
+        算 · 不含 ja 翻译意群)· 防 Layer A ja directive ≥10字 跟 stage 1
+        字数指引撞车导致 thinking debate(详 docs/INV-13-*.md §11.5)。
         """
-        return _STAGE1_SYSTEM_PROMPT
+        base = _STAGE1_SYSTEM_PROMPT
+        tts_lang = _extract_tts_language(character)
+        ja_block = make_ja_aware_block(tts_lang)
+        if ja_block:
+            return f"{base}\n\n{ja_block}"
+        return base
 
     async def resolve_capabilities(self) -> list[str]:
         """stage 1 不需要 LLM 调任何 capability —— 短问候是纯文本生成。
