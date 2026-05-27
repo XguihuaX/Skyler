@@ -4,7 +4,7 @@
 > 完整正文见 `~/.claude/projects/.../memory/inv11_lesson_N_*.md`(或对应 INV doc 沉淀段)。
 >
 > 更新时机:新 lesson 沉淀 → 同步加一行;不删旧 lesson。
-> 当前覆盖:INV-7/8/9/10/11/13/14/15 阶段 lessons(21 条)。
+> 当前覆盖:INV-7/8/9/10/11/13/14/15 阶段 lessons(22 条)。
 
 ---
 
@@ -41,6 +41,7 @@
 | 19 | "用户找不到旧入口" ≠ "入口缺失" · audit 前先 visibility verify | INV-14 误判:VAD UI 一直在 Capabilities → AI Providers → ASR tab(深 3 层路径)· audit 只 grep `import.*Section` 没看到 SettingsPanelV2 import AsrVadSection 就推"入口失踪"。P2 commit `3f24d6c` 加冗余 section 后 PM verify 实际 path 在 · 即 revert(`aed67cc`)。真教训:visibility 差(深 tab) vs 入口失踪 是不同问题 · 修法也不同(文档化 / quick-access vs 加回入口)· **audit "UI 失踪" 类问题前必须 mental walkthrough 实际 path** · 不仅 grep | INV-14 §7.8 + P2 revert |
 | 20 | chunk closed 时假设的稳定性必须 long-running verify | chunk 15(2026-05-16)closed 时假设 "TTS 单句合成时间稳定 · FIFO 顺序不影响体感" · 实测当时 short session 验收通过。INV-15 实测发现 cosyvoice cloud 偶发 9s outlier(vs avg 4s · 2x 慢)→ consumer FIFO HOL blocking 5s 沉默。close 时只跑短 session 没 sample outlier 分布。**audit closure 应带"假设破坏阈值"** + 定期 sample DB / log 验证 stability 假设 · 否则 close 后用户体感问题难溯回 closed 假设 | INV-15 §1.3 chunk 15 vs 现况 |
 | 21 | 新功能 enable gate 用语义需求 · 不用"那时唯一支持的语种" 绑死 | `merge_short_sentences` 设计为防 "短 audio TTS 合成质量崩"(Bugfix-segment2-3)· 当时 ja/en 是唯一支持的 ja TTS 路径 · gate 写 `if tts_language in ("ja","en")`。INV-11 切 ja 后此约束语义仍成立 · 但 INV-15 PM 切 cosyvoice zh 后 zh 短句同样 benefit。原 gate 凭"那时支持的语种白名单"绑死 · 长期 brittle。修法 INV-15 P1 直接删 gate · merge 对所有 tts_language 启用 · 内部已有 short_threshold / flush_threshold 自己控制(语义需求 gate 在 module 内部不在外层)。**功能 enable gate 用功能需求语义**(eg "short audio quality")· **不用"那时支持的语种白名单"** · 切换 / 扩支持时不会忘 review | INV-15 P1 ship |
+| 22 | 实时 input(VAD/mic/keyboard hook 等)必须有 3 件套:(a) 健康检查 (b) onended recovery (c) diagnostic UI | INV-15 PM 反馈 "VAD 时好时不好 · 后续才不好" · audit verify 真因 = `MediaStream` track 在系统切 mic / Tauri webview suspend / 权限 revoke 后变 stale · `useAudio.initStream` 原 `if (streamRef.current) return` stale-blind 复用 · 老的 stale stream 持续被用。修法三件套:(a) `isAudioGraphHealthy()` 验 `track.readyState === 'live'` + `AudioContext.state !== 'closed'` · 不健康 teardown 重建;(b) `MediaStreamTrack.onended` listener + 周期 frame check 兜底(onended 漏 fire) · 触发 `recoverStream()` 单飞行锁防 race · sleep 时不偷偷重申 mic;(c) `vadCurrentMax` 写 store · `VadBar` 实时显示 "now: X / threshold: Y" + threshold marker · PM 一眼诊断:数字不动 = stream stale · 数字动但 < threshold = 阈值问题。**三件套缺一不可**:只 (a) 没 onended 漏自动恢复;只 (b) 偶尔 onended 漏 fire 仍卡;只 (c) 用户看到数字不动但还得 reload。**触发条件**:任何实时浏览器 device API(getUserMedia / Bluetooth / Serial / WebHID)长期 hold reference · 必三件套 | INV-15 P2 ship |
 
 ---
 
@@ -66,6 +67,9 @@
 
 ### TTS pipeline + chunk closed 假设(INV-15)
 #20 chunk close 时稳定性假设要 long-running verify / #21 enable gate 用语义需求不用语种白名单
+
+### 实时 input device API(INV-15 P2)
+#22 VAD/mic 等实时 input 三件套:健康检查 + onended recovery + diagnostic UI · 缺一不可
 
 ---
 
