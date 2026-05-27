@@ -35,7 +35,7 @@
 | Status | Item | Goal | Notes |
 |---|---|---|---|
 | 📋 | **GSV server GPU 持久化** | reboot 后 tts_infer.yaml 回 cpu 已知 bug · 手动 SSH 改回 GPU + restart · 用 systemd unit + 配置 baseline 锁 | INV-11 Stage 1 衍生 |
-| 📋 | **ASR whisper preload HF_HUB_OFFLINE** | LocalEntryNotFoundError on cold start + offline mode · whisper 模型 pre-warm 触发不准 · 加 startup hook validate model cache 完整 | dogfood 期间偶发 |
+| ✅ | **ASR whisper preload HF_HUB_OFFLINE** ship 2026-05-27(INV-14) | 真因 = `backend/main.py:21-22` 硬编码 `HF_HUB_OFFLINE=1` + `~/.cache/huggingface/hub/` 无 whisper-small snapshot → preload 29/29 失败 / asr_result 0 次。修法 = 删硬编码 + .env `HF_HUB_OFFLINE=0` + 首次启动 HF download · cached 后稳定。配套 SettingsPanelV2 re-expose AsrVadSection(`Mic` 4 号 section · Capabilities ASR tab 入口保留)。详 docs/INV-14-vad-disappeared-audit.md / Lesson #19 | commits c2d8924 + 3f24d6c |
 | 📋 | **加新角色 yae_v1**(走完整 json config trained mode flow)| `docs/adding-new-tts-model.md` Example 1 落地验证 · 8 步流程(server weights + emotion bank rsync + 本地 lab cache + 编辑 tts_models.json + backend restart)· dogfood paradigm 完整性 | INV-11 Stage 1.5 followup 衍生 |
 | 📋 | **Migration v2 force upgrade** | phase out GSVTTS `_resolve_weights_field` `gpt_weights/gpt_path` 字段名 fallback(Lesson #11)· DB 批量 normalize voice_model JSON schema · 老字段名 drop | Lesson #11 立项 |
 | 📋 | **UI polish**(当前 voice 高亮 / TTS 语言 dropdown 上移 / search box)| VoicePicker 增量 UX · 当前 voice radio 视觉强化 + TTS 语言挪到 model dropdown 上方(语义对齐)+ system voice 列表加 search box(7 voice 不算多 · 但 dogfood 增 system voice 后受益)| backlog |
