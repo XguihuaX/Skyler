@@ -320,10 +320,11 @@ ROADMAP.md:38 当前是 P2 模糊描述 · 修完后改 ✅ shipped:
 
 ### §7.1 Commits
 
-| Commit | 主题 | 改动 |
-|---|---|---|
-| `c2d8924` | **P1** · backend HF_HUB_OFFLINE 硬编码移除 · whisper preload 解锁 | `backend/main.py:19-25`(-3 +7) · 删 `import os` + `os.environ["HF_HUB_OFFLINE"]="1"` + `os.environ["TRANSFORMERS_OFFLINE"]="1"` · 替换为说明性 comment 指向本 audit doc |
-| `3f24d6c` | **P2** · SettingsPanelV2 re-expose AsrVadSection | `frontend/src/components/settings/SettingsPanelV2.tsx`(+28 -8)· import `Mic` + `AsrVadSection` · 加 4 号 section "🎤 语音输入" 在 activity 和 clipboard 之间 · header comment "10 → 11 个 section" |
+| Commit | 主题 | 改动 | 状态 |
+|---|---|---|---|
+| `c2d8924` | **P1** · backend HF_HUB_OFFLINE 硬编码移除 · whisper preload 解锁 | `backend/main.py:19-25`(-3 +7) · 删 `import os` + `os.environ["HF_HUB_OFFLINE"]="1"` + `os.environ["TRANSFORMERS_OFFLINE"]="1"` · 替换为说明性 comment 指向本 audit doc | ✅ 保留 |
+| `3f24d6c` | **P2** · SettingsPanelV2 re-expose AsrVadSection | `frontend/src/components/settings/SettingsPanelV2.tsx`(+28 -8)· import `Mic` + `AsrVadSection` · 加 4 号 section "🎤 语音输入" | 🚫 reverted(`aed67cc`)— 见 §7.8 |
+| `aed67cc` | **P2 revert** · 撤销主设置加冗余入口 | revert `3f24d6c` · SettingsPanelV2 回到 10 section · VAD UI 单入口在 Capabilities → AI Providers → ASR tab 已可达 | ✅ |
 
 ### §7.2 配套 .env 改动(不入 git · `.gitignore:20`)
 
@@ -403,5 +404,47 @@ PM 真机用 1-2 天后回报:
 
 ---
 
-**§7 ship 闭环 · 2 commit ship · P1 backend ASR fix + P2 UI re-expose · 等 PM 真机
-restart 验收 · ROADMAP backlog `ASR whisper preload HF_HUB_OFFLINE` 标 ✅**。
+### §7.8 Reflection · P2 revert · audit 复盘(2026-05-27 ship 后即时)
+
+PM 真机看截图后 verify:**VAD UI 一直在 Capabilities → AI Providers → ASR tab**
+(自 bugfix-2.2 SettingsPanelV2 收口后未变)。主设置加 4 号 "🎤 语音输入" section
+是 **冗余** · revert 撤销。
+
+#### audit 误判轨迹
+
+§5.1 / §11.7 audit 推 P2 "UI 入口失踪" 时基于:
+- grep `AsrVadSection` import · 看到 SettingsPanelV2 没 import → 推"主设置无入口"
+- 没**实际打开 SettingsPanelV2 / CapabilitiesPanel UI 走一遍**确认 PM 找不到的是
+  哪条路径
+
+PM 真机后看:
+- 主设置 ⚙ 是不含 ASR/VAD section · audit 这一层没错
+- 但 **VAD UI 实际在 ⚙ Capabilities → AI Providers → ASR tab**(深 3 层)
+- PM 一直能从 Capabilities path 进 · "VAD 不见了"主要是 backend ASR broken 导致
+  "切到 VAD 没反应" · 不是 UI 入口完全失踪
+
+#### 教训(修正 Lesson #19)
+
+原 Lesson #19 写"大重构后必须 verify 旧 section 入口仍可达 + 多入口共存别为 DRY 删"
+是 over-correct。
+
+**真教训**:
+- "用户找不到旧入口" ≠ "入口缺失"
+- audit "UI 失踪" 类问题前必须先做 **visibility verify**:实际 mental walkthrough
+  每个 path · 而不是仅 grep import
+- visibility 差(Capabilities → AI Providers → ASR tab 深 3 层)与"入口失踪"是不
+  同问题 · 修法也不同:
+  - visibility 差 → 文档化 path / quick-access link / tooltip 提示 / **不要**冗
+    余加新入口
+  - 入口失踪 → 加回入口
+- 误判加冗余入口的成本:UI 复杂度增加 / 主设置 11 section 太多负担 / 维护成本翻
+  倍(两路径要同步)
+
+详见修正后 LESSONS.md #19 + INV-14 反思的 ROADMAP 同步。
+
+---
+
+**§7 ship 闭环 · P1 保留(c2d8924 backend ASR 真有 broken)· P2 reverted
+(`aed67cc` · UI 入口一直可达 · 主设置加是冗余)· 单入口 Capabilities → ASR tab
+已够用 · 等 PM 真机 restart 验收 backend whisper preload + VAD mic 录音端到端
+work**。
