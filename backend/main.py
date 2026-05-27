@@ -16,13 +16,23 @@ Routes
   /api/health      — model warm-up status (health_api.py)
   /ws              — WebSocket streaming conversation (ws.py)
 """
-# INV-14 (2026-05-27): 删除硬编码 HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE
+# INV-14 P1 (2026-05-27): 删除硬编码 HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE
 # = "1"。原因:硬编码 offline + ~/.cache/huggingface/hub/ 无 whisper-small
 # snapshot · 导致 faster-whisper preload 29/29 失败 / 0 次 successful asr_result
 # (整个 log file 期间 2026-05-25 - 2026-05-27)。
 # 现在走 .env 控制(默认 HF_HUB_OFFLINE=0)· faster-whisper 首次启动自动 download
 # Systran/faster-whisper-small (~80MB) 到 HF cache · 后续无需上网(cached snapshot
 # 即便 OFFLINE=1 也能 load)。详 docs/INV-14-vad-disappeared-audit.md §3 / §6。
+#
+# INV-14 §8 (2026-05-27): HF mirror + offline fallback 安全网。
+# PM 实测 _build_messages 49952ms · 因 sentence-transformers runtime HEAD check
+# huggingface.co · 5 retry 累积 50s · 国内 HF 直连不稳。
+# 修法 setdefault HF_ENDPOINT 走 hf-mirror.com(国内镜像)· .env 可 override。
+# 启动期再做一次 HEAD 探测(见 lifespan)· mirror 也挂时 fallback OFFLINE=1。
+# 详 docs/INV-14-vad-disappeared-audit.md §8 + Lesson #23。
+import os
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
 import asyncio
 import logging
 import logging.handlers  # INV-11 Lesson #2 · RotatingFileHandler
@@ -527,6 +537,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "(per-char limit=%d, ja/en tag stripped, conv-aware)",
             total_restored, len(char_ids), SHORT_TERM_MAX,
         )
+
+    # ── 3.5. HF mirror reachability probe (INV-14 §8) ────────────────────────
+    # 启动期 HEAD HF_ENDPOINT(default hf-mirror.com)3s 超时 · mirror 不通
+    # 自动 fallback `HF_HUB_OFFLINE=1` · cached 模型仍可 load · 首次缺失模型会
+    # 报错(正确行为 · 比静默 50s timeout 强)。
+    # urllib stdlib 同步调 · 不依赖 httpx/aiohttp · lifespan 阻塞 ≤ 3s。
+    # 用户 .env 显式 `HF_HUB_OFFLINE=1` 时尊重 · 不覆盖。
+    if os.environ.get("HF_HUB_OFFLINE") != "1":
+        _hf_endpoint = os.environ.get("HF_ENDPOINT") or "https://huggingface.co"
+        try:
+            from urllib.request import Request, urlopen
+            _req = Request(_hf_endpoint, method="HEAD")
+            with urlopen(_req, timeout=3.0) as _resp:
+                _status = getattr(_resp, "status", 200)
+            logger.info("[HF] mirror reachable: %s (status=%s)", _hf_endpoint, _status)
+        except Exception as exc:
+            # 任意网络 / DNS / SSL / timeout 异常 → fallback offline · cached 模型仍能
+            # load · 首次缺失模型才会报错(正确行为 · 比静默 50s timeout 强)。
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            logger.warning(
+                "[HF] mirror unreachable: %s (%s) · fallback HF_HUB_OFFLINE=1 · "
+                "cached 模型仍能 load · 首次缺失模型会报错(正确行为)。"
+                "若反复发生 · 检查网络 / 换镜像 / 预下载模型 cache。",
+                _hf_endpoint, exc,
+            )
 
     # ── 4. Preload local models (embedding + whisper) ────────────────────────
     async def _preload_embedding() -> None:
