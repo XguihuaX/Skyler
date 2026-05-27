@@ -854,13 +854,17 @@ async def _handle_message(
                     _tts_audio_consumer(audio_queue, _send_audio)
                 )
 
-                # Bugfix-segment2-3:ja/en 模式 wrap merge_short_sentences,
-                # 把 <10 字短意群 sentence 合并到下一句一起 yield。zh 模式 不
-                # 包,保留原逐句流式体验。
+                # Bugfix-segment2-3 + INV-15 (2026-05-27):merge_short_sentences
+                # 对所有 tts_language 启用(原仅 ja/en · 现含 zh)。
+                # 理由:INV-15 audit 实测 zh 多短句 + cosyvoice cloud 偶发 9s
+                # outlier 导致 TTS consumer FIFO HOL blocking · 用户体感
+                # audio chunk 间 5s 沉默(详 docs/INV-15-*.md §1.4)。
+                # merge 后:zh 多短句合并为更长 sentence · 更少 TTS call · HOL
+                # 概率显著降。字幕推送延 < 200ms(merge buffer flush 阈值 15 chars)·
+                # 用户感知 negligible。
                 _agent_stream = _chat_agent.stream(chat_msg)
-                if tts_language in ("ja", "en"):
-                    from backend.agents.sentence_merge import merge_short_sentences
-                    _agent_stream = merge_short_sentences(_agent_stream)
+                from backend.agents.sentence_merge import merge_short_sentences
+                _agent_stream = merge_short_sentences(_agent_stream)
                 async for sentence in _agent_stream:
                     # UX-004: chat.py 现在 yield Union[str, dict] —— dict 是 typed
                     # WS event(tool_use_start / tool_use_done),直接透传不经文本

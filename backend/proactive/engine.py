@@ -447,12 +447,12 @@ async def run_trigger(
     audio_total_bytes = 0
 
     try:
-        # Bugfix-segment2-3:ja/en 模式 wrap short-sentence merge,与 ws.py
-        # 主路径同语义。zh 模式 pass-through 保留原逐句流式。
+        # Bugfix-segment2-3 + INV-15 (2026-05-27):merge_short_sentences 对所有
+        # tts_language 启用(原仅 ja/en · 现含 zh)· 与 ws.py 主路径同语义。
+        # 理由 + 副作用见 ws.py:857-865 同段注释 + docs/INV-15-*.md §1.6 Option A。
         _agent_stream = chat_agent.stream(chat_msg)
-        if tts_language in ("ja", "en"):
-            from backend.agents.sentence_merge import merge_short_sentences
-            _agent_stream = merge_short_sentences(_agent_stream)
+        from backend.agents.sentence_merge import merge_short_sentences
+        _agent_stream = merge_short_sentences(_agent_stream)
         async for sentence in _agent_stream:
             # 第一句锁 emotion + 推送 emotion 事件（与 ws.py 主路径同结构）
             if not emotion_resolved:
