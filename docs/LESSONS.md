@@ -4,7 +4,7 @@
 > 完整正文见 `~/.claude/projects/.../memory/inv11_lesson_N_*.md`(或对应 INV doc 沉淀段)。
 >
 > 更新时机:新 lesson 沉淀 → 同步加一行;不删旧 lesson。
-> 当前覆盖:INV-7/8/9/10/11/13/14 阶段 lessons(19 条)。
+> 当前覆盖:INV-7/8/9/10/11/13/14/15 阶段 lessons(21 条)。
 
 ---
 
@@ -39,6 +39,8 @@
 | 17 | audit 必须 DB 定量 + counter-example · 防 narrative 先行 | INV-13 §11 audit 漏做 DB 定量统计就 jump 到 root cause · 推 Option D 误诊。§12 用 conv=62 20-turn JA streak counter-example + per-source compliance ratio(proactive 100% / normal 91%)直接否定 §11 假设。先 numbers 后 narrative · 假设有矛盾时 search 现成 fix(`grep skip_short_term`)防 reinvent | INV-13 §11.8 / §12 method |
 | 18 | 旧 zh-only 字数约束在 ja 切换后会跟 directive 撞车 | trigger prompts `_invite_base.py` "8-15 字硬约束"(2026-05-08 chunk4-C 写)+ Layer A ja directive "中文意群 ≥ 10 字"(INV-11 加)= LLM 陷 thinking debug · token 耗尽。修法 = trigger prompt 加 ja-aware 段(字数按中文部分算)+ 软化硬约束。设老约束时复查"未来语种切换会破吗?" | INV-13 §11.5 + Option F+G ship |
 | 19 | "用户找不到旧入口" ≠ "入口缺失" · audit 前先 visibility verify | INV-14 误判:VAD UI 一直在 Capabilities → AI Providers → ASR tab(深 3 层路径)· audit 只 grep `import.*Section` 没看到 SettingsPanelV2 import AsrVadSection 就推"入口失踪"。P2 commit `3f24d6c` 加冗余 section 后 PM verify 实际 path 在 · 即 revert(`aed67cc`)。真教训:visibility 差(深 tab) vs 入口失踪 是不同问题 · 修法也不同(文档化 / quick-access vs 加回入口)· **audit "UI 失踪" 类问题前必须 mental walkthrough 实际 path** · 不仅 grep | INV-14 §7.8 + P2 revert |
+| 20 | chunk closed 时假设的稳定性必须 long-running verify | chunk 15(2026-05-16)closed 时假设 "TTS 单句合成时间稳定 · FIFO 顺序不影响体感" · 实测当时 short session 验收通过。INV-15 实测发现 cosyvoice cloud 偶发 9s outlier(vs avg 4s · 2x 慢)→ consumer FIFO HOL blocking 5s 沉默。close 时只跑短 session 没 sample outlier 分布。**audit closure 应带"假设破坏阈值"** + 定期 sample DB / log 验证 stability 假设 · 否则 close 后用户体感问题难溯回 closed 假设 | INV-15 §1.3 chunk 15 vs 现况 |
+| 21 | 新功能 enable gate 用语义需求 · 不用"那时唯一支持的语种" 绑死 | `merge_short_sentences` 设计为防 "短 audio TTS 合成质量崩"(Bugfix-segment2-3)· 当时 ja/en 是唯一支持的 ja TTS 路径 · gate 写 `if tts_language in ("ja","en")`。INV-11 切 ja 后此约束语义仍成立 · 但 INV-15 PM 切 cosyvoice zh 后 zh 短句同样 benefit。原 gate 凭"那时支持的语种白名单"绑死 · 长期 brittle。修法 INV-15 P1 直接删 gate · merge 对所有 tts_language 启用 · 内部已有 short_threshold / flush_threshold 自己控制(语义需求 gate 在 module 内部不在外层)。**功能 enable gate 用功能需求语义**(eg "short audio quality")· **不用"那时支持的语种白名单"** · 切换 / 扩支持时不会忘 review | INV-15 P1 ship |
 
 ---
 
@@ -61,6 +63,9 @@
 
 ### UI 重构 + 入口可达性 (INV-14)
 #19 大重构后必须 verify 旧 section 入口仍可达
+
+### TTS pipeline + chunk closed 假设(INV-15)
+#20 chunk close 时稳定性假设要 long-running verify / #21 enable gate 用语义需求不用语种白名单
 
 ---
 

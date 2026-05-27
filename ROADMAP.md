@@ -27,7 +27,7 @@
 |---|---|---|---|
 | 📋 | **Conversation-vs-Character paradigm 决策** | 现状:conversation 1:1 绑 character(§5.9 锚定语义);PM 提出 "一 character 多 conversation" vs "一 character 一永久 stream + RAG 远期" 选型未定 · 影响记忆架构 v2 / F8 归属分级路径 | 待 PM 拍板 |
 | 📋 | **Proactive 污染 short_term 长期 fix** | proactive 推送 turn 写入 short_term · 跟用户主动 turn 混 · 长期影响"对话连贯感";现状靠 proactive 文本压缩 mitigate · 长期解 = 分桶 + 注入分层 | 立项 |
-| 📋 | **句子并发 TTS pipeline(chunk 15 复活)** | sentence-level 并发合成 + 顺序播放 · 改善 ja TTS 长句首字延迟(现 GSV ja 7-15s 单句串行)· chunk 15 实施过但未 ship 留 backlog | INV-8 §1.1 Step 6 instrumentation 复用 |
+| 📋 | **句子并发 TTS pipeline(chunk 15 复活)** | sentence-level 并发合成 + 顺序播放 · 改善 ja TTS 长句首字延迟(现 GSV ja 7-15s 单句串行)· chunk 15 实施过但未 ship 留 backlog。**2026-05-27 INV-15 P1 Option A 部分 mitigation**(commit 534a6ca · `merge_short_sentences` 扩 zh · HOL blocking 概率降)· 完整 out-of-order / 整 turn buffer **不推荐**(UX 破) · P3 candidate:TTS_CONCURRENCY 3→5 / push_latency observability(ROADMAP:206)/ threshold tune | INV-8 §1.1 Step 6 + INV-15 §6/§8 |
 | 📋 | **Persona 蒸馏 Mai 三层** | 现 persona 把防御层(讥讽/调侃/话少)当人格本体写成常量 · 缺底色层与切换规则。重构方向:①补内核底色(被审视的孤独 + 对真实连接的隐秘渴望)②防御层标注为试探机制非本性 ③讥讽/话少由常量改为随对方真诚度变化的变量。蒸馏纪律:素材驱动、写约束非形容词、少而硬、给正反例 | 内容方向 · 立项 |
 
 ## P2 (~2 周)
