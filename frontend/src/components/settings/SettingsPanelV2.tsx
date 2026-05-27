@@ -6,7 +6,6 @@ import {
   Database,
   Eye,
   Info,
-  Mic,
   Palette,
   Rocket,
   UserCog,
@@ -22,7 +21,6 @@ import CharacterPanel from '../CharacterPanel';
 import MemoryManagerDrawer from '../MemoryManagerDrawer';
 import {
   ActivityTimelineSection,
-  AsrVadSection,
   CharacterStateSection,
   ClipboardSection,
   MemorySection,
@@ -38,20 +36,17 @@ import TwoPaneShell, { type PaneSection } from '../TwoPaneShell';
 /**
  * bugfix-2.2: ⚙ 设置 V2 (Settings V2) — "Skyler 自身行为偏好"
  *
- * 11 个 section(INV-14 加 4. 语音输入 ASR/VAD · 原 10 section 顺序不变):
+ * 10 个 section(对照 bugfix-2.2 spec 顺序):
  *   1. 👥 角色管理     —— CharacterPanel
  *   2. ✨ 主动陪伴     —— ProactiveSection
  *   3. 👁 活动感知     —— ActivityAwarenessSection + ActivityTimelineSection
- *   4. 🎤 语音输入     —— AsrVadSection(录音模式 manual/VAD · 阈值 · 静音超时
- *                          · 静音麦克风)— INV-14 (2026-05-27) re-expose · 原入口
- *                          在 Capabilities → AI Providers → ASR tab · 主设置一并保留
- *   5. 📋 剪贴板       —— ClipboardSection
- *   6. 🎭 角色状态     —— CharacterStateSection
- *   7. 🧠 记忆         —— MemorySection + MemoryTogglesSection(长期/画像/搜索)
- *   8. 👤 用户档案     —— ProfileSection(称呼/语言) + UserProfileSection(profile_data)
- *   9. 🚀 启动         —— SplashSection
- *  10. 🎨 外观         —— ThemeSection
- *  11. ℹ 关于         —— app + LLM model + GitHub
+ *   4. 📋 剪贴板       —— ClipboardSection
+ *   5. 🎭 角色状态     —— CharacterStateSection
+ *   6. 🧠 记忆         —— MemorySection + MemoryTogglesSection(长期/画像/搜索)
+ *   7. 👤 用户档案     —— ProfileSection(称呼/语言) + UserProfileSection(profile_data)
+ *   8. 🚀 启动         —— SplashSection
+ *   9. 🎨 外观         —— ThemeSection
+ *  10. ℹ 关于         —— app + LLM model + GitHub
  *
  * 老 SettingsPanel 完全废弃,sidebar 没有入口。本面板共享 toast(Panel.tsx
  * 顶层提供)、内含 MemoryManagerDrawer / ActivityTimelineDrawer mount。
@@ -104,21 +99,6 @@ export default function SettingsPanelV2({ showToast }: SettingsPanelV2Props) {
           <ActivityTimelineSection
             onOpenTimeline={() => setTimelineDrawerOpen(true)}
           />
-        </div>
-      ),
-    },
-    {
-      // INV-14 (2026-05-27) re-expose · 主设置 ASR/VAD 入口。原老 SettingsPanel
-      // 有此 section · bugfix-2.2 SettingsPanelV2 收口时漏 include(挪到了
-      // Capabilities → AI Providers → ASR tab · 主设置找不到 → PM 误以为
-      // "VAD 不见了")。本 commit 在主设置 re-expose · Capabilities path 保留
-      // (两路径共存)。详 docs/INV-14-vad-disappeared-audit.md §5 / §6 / §7。
-      id: 'voice_input',
-      label: '语音输入',
-      Icon: Mic,
-      render: () => (
-        <div className="p-6">
-          <AsrVadSection />
         </div>
       ),
     },
