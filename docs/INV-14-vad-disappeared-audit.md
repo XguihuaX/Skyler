@@ -448,3 +448,115 @@ PM 真机后看:
 (`aed67cc` · UI 入口一直可达 · 主设置加是冗余)· 单入口 Capabilities → ASR tab
 已够用 · 等 PM 真机 restart 验收 backend whisper preload + VAD mic 录音端到端
 work**。
+
+---
+
+## §8 Ship 记录 · HF mirror + offline fallback 双保险(2026-05-27)
+
+> §7.7 backlog 实施 · PM 拍板 ship。INV-14 P1(`c2d8924`)修了模型 download 路径
+> 但留了 runtime HEAD check 阻塞坑 · 本 commit 闭环。
+
+### §8.1 触发症状
+
+PM 实测 `_build_messages` **49952ms**(50 秒)· 阻塞每轮 LLM 请求 ~50s · 几乎不可用。
+
+真因 trace:
+- `sentence-transformers` / `transformers` 库 runtime 调 `huggingface_hub` HEAD
+  check 模型元数据 / revision(即便模型 cached 也会 check tag/revision 一致性)
+- 国内访问 `huggingface.co` 极不稳 · HEAD request 单次超时 ~10s · `huggingface_hub`
+  默认 5 retry · 累积 ~50s 阻塞 main thread
+- 阻塞 `_build_messages` 因 long_term_memory.search 调 embedding model 触发的
+  HEAD check(memory recall 路径)
+
+### §8.2 Commit
+
+| Commit | 主题 | 文件 | LoC |
+|---|---|---|---|
+| `2680921` | HF mirror + offline fallback 双保险 | `backend/main.py` | +37 / -1 |
+
+### §8.3 三层安全网设计
+
+**L1 · mirror 默认走 hf-mirror.com**
+- `.env` 加 `HF_ENDPOINT=https://hf-mirror.com`(显式 · 用户可改)
+- `backend/main.py` 顶部 `os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")`
+  兜底(防 .env 不被加载 · pydantic_settings 只读声明字段)
+- 国内访问 hf-mirror.com ~10x 快 · 99% 场景直接 work
+
+**L2 · 启动期 HEAD probe + 自动 offline fallback**
+- lifespan 加 "3.5. HF mirror reachability probe" 段
+- 如 `HF_HUB_OFFLINE != "1"`(用户没显式离线)· urllib HEAD `HF_ENDPOINT` 3s
+  timeout
+- 通 → log info · 继续正常路径
+- 不通(任意 Exception:URLError / DNSError / SSL / timeout 等)→ 自动设
+  `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1` · log warning
+- 设计选择:同步 urllib stdlib(不引 httpx/aiohttp dep)· lifespan 阻塞 ≤ 3s · 用户
+  startup 体验几乎不变
+
+**L3 · offline cache hit**
+- L2 切 offline 后 · `huggingface_hub` 读 `~/.cache/huggingface/hub/` 已有 snapshot
+- `faster-whisper` / `sentence-transformers` 都支持 OFFLINE=1 cache hit
+- 仅"完全没 cached 过的模型" + "首次启动" 才会失败 · 用户能看到清晰报错(比
+  silent 50s timeout 强)
+
+### §8.4 实测
+
+**HEAD probe live test**(non-prod CC dev box):
+```
+hf-mirror.com:    OK status=200
+huggingface.co:   OK status=200 (网络好时 · 但 PM 国内现场不稳)
+bad-host.invalid: FAIL URLError ← 走 fallback 路径 · 自动 OFFLINE=1
+```
+
+**main.py import smoke**:
+```
+HF_ENDPOINT after main:  https://hf-mirror.com  (setdefault 生效)
+HF_HUB_OFFLINE after main: 0                    (.env 读出)
+```
+
+预期真机(PM restart):
+- backend log 见 `[HF] mirror reachable: https://hf-mirror.com (status=200)`
+- 后续 `_build_messages` 回到 < 500ms 正常水平
+- 网络抽风 mirror 也挂时 · 见 `[HF] mirror unreachable: ... · fallback OFFLINE=1`
+  · cached snapshot 仍工作
+
+### §8.5 .env 改动(不入 git)
+
+`.env` 在 `.gitignore:20` · 不入 git · PM 机器同步:
+```
++ HF_ENDPOINT=https://hf-mirror.com
+```
+
+setdefault 兜底机制 · `.env` 即便不被加载(pydantic_settings 不读非声明字段)·
+module-level setdefault 仍生效。两路径冗余 · 防一处失效。
+
+### §8.6 与 INV-14 P1(`c2d8924`)的关系
+
+```
+P1(c2d8924):删硬编码 HF_HUB_OFFLINE=1
+   → 让 whisper / embedding 模型首次 download 成功
+   → cached snapshot 后续 load 不依赖网络
+
+§8(2680921):mirror + probe + offline fallback
+   → 修 runtime HEAD check 阻塞(每次 _build_messages / embed 都触发)
+   → 即便 mirror 全挂 · cached 模型仍 work
+```
+
+两 commit 不互相依赖 · 但叠加才形成完整安全网。**两个一起 ship 才让 PM 国内
+环境真正可用**。
+
+### §8.7 与 ROADMAP 关系
+
+`ROADMAP.md:38` "ASR whisper preload HF_HUB_OFFLINE" P2 backlog 已 ✅(c2d8924)·
+本 commit 是 § 7.7 backlog 实施(`§7.7 后续 dogfood 监控` 提及 "若国内 HF 下载
+慢得不能忍 · 下次刀可加 HF_ENDPOINT 镜像 · §7.7 backlog 记录")· 已完整闭环。
+
+### §8.8 Lesson #23
+
+`docs/LESSONS.md` 加 Lesson #23:**国内部署任何 transformers/sentence-transformers
+应用 · 必须 mirror + offline fallback 双保险 · 单 mirror 仍可能挂 · 单 offline
+首次 cache 缺失会失败**。
+
+---
+
+**§8 ship 闭环 · 单 commit `2680921` · 三层安全网(mirror / probe / cache hit)·
+等 PM 真机 restart 验收 _build_messages < 500ms · 若稳定 INV-14 整段 closed**。
