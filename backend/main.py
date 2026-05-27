@@ -16,10 +16,13 @@ Routes
   /api/health      — model warm-up status (health_api.py)
   /ws              — WebSocket streaming conversation (ws.py)
 """
-import os
-
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
+# INV-14 (2026-05-27): 删除硬编码 HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE
+# = "1"。原因:硬编码 offline + ~/.cache/huggingface/hub/ 无 whisper-small
+# snapshot · 导致 faster-whisper preload 29/29 失败 / 0 次 successful asr_result
+# (整个 log file 期间 2026-05-25 - 2026-05-27)。
+# 现在走 .env 控制(默认 HF_HUB_OFFLINE=0)· faster-whisper 首次启动自动 download
+# Systran/faster-whisper-small (~80MB) 到 HF cache · 后续无需上网(cached snapshot
+# 即便 OFFLINE=1 也能 load)。详 docs/INV-14-vad-disappeared-audit.md §3 / §6。
 import asyncio
 import logging
 import logging.handlers  # INV-11 Lesson #2 · RotatingFileHandler
