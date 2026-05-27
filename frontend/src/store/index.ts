@@ -294,6 +294,13 @@ interface AppState {
   vadState: VadState;
   setVadState: (s: VadState) => void;
 
+  // INV-15 P2 Option G(2026-05-27): VAD 实时 max amplitude(0-255)给 VadBar
+  // 显示 "now: X / threshold: Y" · 让用户 self-diagnose:数字不动 = stream stale
+  // (需 reload / 切窗口 trigger recovery)· 数字动但 < threshold = 阈值太高。
+  // vadLoop ~60fps 写本字段 · sleep 时清零(toggleVad 清).
+  vadCurrentMax: number;
+  setVadCurrentMax: (n: number) => void;
+
   // 麦克风全局静音（Momo 说话时）
   micMuted: boolean;
   setMicMuted: (v: boolean) => void;
@@ -514,6 +521,10 @@ export const useAppStore = create<AppState>((set) => ({
 
   vadState: 'sleep',
   setVadState: (vadState) => set({ vadState }),
+
+  // INV-15 P2 Option G — VAD diagnostic max amplitude (0-255)
+  vadCurrentMax: 0,
+  setVadCurrentMax: (vadCurrentMax) => set({ vadCurrentMax }),
 
   micMuted: false,
   setMicMuted: (micMuted) => set({ micMuted }),

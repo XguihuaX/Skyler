@@ -12,6 +12,11 @@ interface UseAudioParams {
 const INTERRUPT_FRAMES = 6;
 const INTERRUPT_COOLDOWN_MS = 1500;
 
+// INV-15 Option H (2026-05-27): 周期 stream 健康检查 frame 间隔。
+// vadLoop ~60fps · 每 60 frame ≈ 1s 检查一次 track.readyState · 避免 onended
+// 漏 fire(权限快速 revoke / Tauri webview suspend 等场景某些浏览器不 fire)。
+const STREAM_HEALTH_CHECK_FRAMES = 60;
+
 interface UseAudioReturn {
   startManual: () => Promise<void>;
   stopManualAndSend: () => Promise<void>;
@@ -41,6 +46,9 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
   const silenceStartRef = useRef<number | null>(null);
   const lastRecordingEndRef = useRef<number>(Date.now());
   const recordedChunksRef = useRef<Blob[]>([]);
+  // INV-15 Option H/I: 周期健康检查 frame 计数 + recovery-in-progress 锁
+  const healthCheckFramesRef = useRef<number>(0);
+  const recoveryInFlightRef = useRef<boolean>(false);
 
   const store = useAppStore;
 
@@ -54,11 +62,70 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
   const interruptFramesAboveRef = useRef(0);
   const lastInterruptAtRef = useRef(0);
 
-  /** 申请麦克风权限并初始化 AudioContext + Analyser */
-  const initStream = useCallback(async (): Promise<MediaStream> => {
-    if (streamRef.current) return streamRef.current;
+  // ── INV-15 P2 (2026-05-27) · stream stale recovery 三件套 ─────────────
+  // Option H · initStream 加 track.readyState + AudioContext.state 健康检查
+  // Option I · MediaStreamTrack.onended listener 自动 recovery
+  // Option G · vadLoop 写 vadCurrentMax 给 VadBar 实时显示
+  //
+  // 真因(audit INV-15 §2):原 initStream 只判 `if (streamRef.current) return`,
+  // 不 verify track 是否仍 'live' / AudioContext 是否 suspended · 系统切 mic 源 /
+  // 应用后台 / Tauri webview suspend 后无 recovery · 用户感知 "VAD 卡空闲"。
+  //
+  // 修法:
+  //   - initStream 复用前先 health-check · 不健康 teardown 重建
+  //   - 拿到 stream 立刻挂 .onended · track 死时自动 recover(若 VAD 非 sleep)
+  //   - vadLoop 每 STREAM_HEALTH_CHECK_FRAMES 帧再 verify 一次 readyState ·
+  //     onended 漏 fire 兜底
+  //   - 每帧把 max amplitude 写 store · VadBar 实时显示 "now: X / threshold: Y"
+  //     给 PM 自助诊断(数字不动 = stream stale · 数字动但 < threshold = 阈值高)
+
+  /** 拆掉旧 audio 图(关 tracks · 关 AudioContext · 清 refs)· idempotent。*/
+  const teardownAudioGraph = useCallback((): void => {
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+    } catch (e) {
+      console.warn('[Audio] mediaRecorder stop failed during teardown:', e);
+    }
+    mediaRecorderRef.current = null;
+
+    const stream = streamRef.current;
+    if (stream) {
+      try {
+        stream.getTracks().forEach((t) => t.stop());
+      } catch (e) {
+        console.warn('[Audio] stream tracks stop failed during teardown:', e);
+      }
+    }
+    streamRef.current = null;
+
+    const ctx = audioContextRef.current;
+    if (ctx && ctx.state !== 'closed') {
+      ctx.close().catch((e) => console.warn('[Audio] AudioContext close failed:', e));
+    }
+    audioContextRef.current = null;
+    analyserRef.current = null;
+    dataArrayRef.current = null;
+  }, []);
+
+  /** 创建新 audio 图(getUserMedia + AudioContext + Analyser + onended hook)。*/
+  const createAudioGraph = useCallback(async (): Promise<MediaStream> => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     streamRef.current = stream;
+
+    // Option I · onended listener · track 死时(系统切源 / 权限 revoke / 浏览器
+    // suspend mic)自动 mark stale + 尝试 recover。
+    stream.getTracks().forEach((track) => {
+      track.addEventListener('ended', () => {
+        console.warn(
+          '[Audio] mic track ended unexpectedly (kind=%s label=%s)',
+          track.kind, track.label,
+        );
+        void recoverStream('track-ended');
+      });
+    });
+
     const ctx = new AudioContext();
     audioContextRef.current = ctx;
     const source = ctx.createMediaStreamSource(stream);
@@ -68,7 +135,89 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
     analyserRef.current = analyser;
     dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
     return stream;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** 健康检查:tracks 全 'live' + AudioContext !closed · 返 true 表示可复用。*/
+  const isAudioGraphHealthy = useCallback((): boolean => {
+    const stream = streamRef.current;
+    const ctx = audioContextRef.current;
+    if (!stream || !ctx) return false;
+    const tracks = stream.getTracks();
+    if (tracks.length === 0) return false;
+    if (!tracks.every((t) => t.readyState === 'live')) return false;
+    if (ctx.state === 'closed') return false;
+    return true;
+  }, []);
+
+  /** 申请麦克风权限并初始化 AudioContext + Analyser(健康检查 + 复用兼容)。*/
+  const initStream = useCallback(async (): Promise<MediaStream> => {
+    // 复用 path · audio 图健康直接返
+    if (isAudioGraphHealthy()) {
+      const ctx = audioContextRef.current!;
+      // 尝试 resume suspended(浏览器 autoplay policy / app 后台后切回)
+      if (ctx.state === 'suspended') {
+        try {
+          await ctx.resume();
+        } catch (e) {
+          console.warn('[Audio] AudioContext.resume failed · 走重建路径:', e);
+          teardownAudioGraph();
+          return await createAudioGraph();
+        }
+      }
+      return streamRef.current!;
+    }
+    // 不健康 · teardown 重建
+    if (streamRef.current || audioContextRef.current) {
+      const tracks = streamRef.current?.getTracks() || [];
+      console.warn(
+        '[Audio] audio graph stale (tracks=%o · ctx=%s) · re-initializing',
+        tracks.map((t) => t.readyState),
+        audioContextRef.current?.state ?? '<null>',
+      );
+      teardownAudioGraph();
+    }
+    return await createAudioGraph();
+  }, [createAudioGraph, isAudioGraphHealthy, teardownAudioGraph]);
+
+  /** Option I · track ended / 周期检查发现 stale 时自动恢复。
+   *  Only re-init if VAD 非 sleep(用户主动切 sleep 时尊重 · 不偷偷重申 mic)。
+   */
+  const recoverStream = useCallback(async (reason: string): Promise<void> => {
+    if (recoveryInFlightRef.current) {
+      // 多事件源(onended + 周期 check)可能同时触发 · 单飞行锁防 race
+      return;
+    }
+    const vadState = store.getState().vadState;
+    if (vadState === 'sleep') {
+      // 用户已 sleep · teardown 不 recover · 等下次 toggleVad 再 init
+      teardownAudioGraph();
+      console.log('[Audio] stream recover (%s) skipped · VAD sleep state', reason);
+      return;
+    }
+    recoveryInFlightRef.current = true;
+    try {
+      // 停 RAF 防 race 期间 vadLoop 用 stale analyser
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      teardownAudioGraph();
+      await createAudioGraph();
+      // 重启 RAF
+      if (rafIdRef.current === null) {
+        rafIdRef.current = requestAnimationFrame(vadLoop);
+      }
+      console.log('[Audio] stream recovered (%s) · vadLoop resumed', reason);
+    } catch (e) {
+      console.error('[Audio] stream recovery failed (%s):', reason, e);
+      // recover 失败(eg permission denied)· 强制 sleep + 给前端展示 status
+      store.getState().setVadState('sleep');
+    } finally {
+      recoveryInFlightRef.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createAudioGraph, teardownAudioGraph, store]);
 
   /** 启动 MediaRecorder */
   const startRecorder = useCallback((stream: MediaStream): void => {
@@ -132,11 +281,34 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
     const dataArray = dataArrayRef.current;
     if (!analyser || !dataArray) return;
 
+    // Option H · 周期 stream 健康检查 · 每 STREAM_HEALTH_CHECK_FRAMES 帧 verify
+    // 一次 track.readyState · onended 漏 fire 兜底。
+    healthCheckFramesRef.current += 1;
+    if (healthCheckFramesRef.current >= STREAM_HEALTH_CHECK_FRAMES) {
+      healthCheckFramesRef.current = 0;
+      const stream = streamRef.current;
+      if (stream) {
+        const tracks = stream.getTracks();
+        if (tracks.length === 0 || !tracks.every((t) => t.readyState === 'live')) {
+          console.warn(
+            '[Audio] periodic health check found stale stream (tracks=%o)',
+            tracks.map((t) => t.readyState),
+          );
+          void recoverStream('periodic-check');
+          return;  // skip 本帧 vadLoop · recoverStream 会重启 RAF
+        }
+      }
+    }
+
     analyser.getByteFrequencyData(dataArray);
     let max = 0;
     for (let i = 0; i < dataArray.length; i++) {
       if (dataArray[i] > max) max = dataArray[i];
     }
+    // Option G · 写 store 给 VadBar 实时显示 · 每帧写无防抖(Zustand set 轻量 ·
+    // VadBar 一个 div text 渲染开销可忽略 · 用户看 60fps 平滑数字)。
+    store.getState().setVadCurrentMax(max);
+
     // store.vadThreshold 是 0–100，映射到 0–255
     const threshold = (store.getState().vadThreshold / 100) * 255;
     const vadState = store.getState().vadState;
@@ -199,7 +371,7 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
     }
 
     rafIdRef.current = requestAnimationFrame(vadLoop);
-  }, [startRecorder, stopAndSend, store]);
+  }, [recoverStream, startRecorder, stopAndSend, store]);
 
   const toggleVad = useCallback(async (): Promise<void> => {
     const current = store.getState().vadState;
@@ -216,6 +388,8 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
         await stopAndSend();
       }
       store.getState().setVadState('sleep');
+      // Option G · sleep 时把 currentMax 清零 · VadBar 不显示陈旧数字
+      store.getState().setVadCurrentMax(0);
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
@@ -227,17 +401,9 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
   useEffect(() => {
     return () => {
       if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-      }
+      teardownAudioGraph();
     };
-  }, []);
+  }, [teardownAudioGraph]);
 
   return { startManual, stopManualAndSend, toggleVad };
 }
