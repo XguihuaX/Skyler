@@ -84,6 +84,11 @@ async def _handle_play_song(song_id: int = 0, **_kwargs: Any) -> dict:
             "title": f"NCM {song_id}",
             "artist": "网易云音乐",
         })
+    except _nem.NeteaseAPIError as exc:
+        # 2026-05-30 Patch C: 防御性 · 此处 NeteaseAPIError 理论上不到达
+        # (get_song_url 在上面已被独立 try 接), 但若未来 player.play 内部
+        # 加 NCM call (eg song info refresh) 仍能正确归类。
+        return {"error": "netease_api_error", "detail": str(exc)[:200]}
     except Exception as exc:
         return {"error": "mpv_play_failed", "detail": str(exc)[:200]}
     return {
@@ -138,6 +143,12 @@ async def _handle_play_playlist(
                 a.get("name", "") for a in (first_song.get("ar") or [])
             ) or "网易云音乐",
         })
+    except _nem.NeteaseAPIError as exc:
+        # 2026-05-30 Patch C: 区分 weapi 错(get_song_url 400) vs 真 mpv 子进程错。
+        # 旧逻辑统一返 mpv_play_failed · 让 LLM 看字面 "mpv" 就推荐用户装 mpv
+        # (Mai 截图错误建议来源)。改后 NeteaseAPIError 单独归类 · LLM 知道是
+        # NCM API 问题不是 mpv 问题。
+        return {"error": "netease_api_error", "detail": str(exc)[:200]}
     except Exception as exc:
         return {"error": "mpv_play_failed", "detail": str(exc)[:200]}
 
@@ -203,6 +214,35 @@ async def _handle_next_in_queue(**_kwargs: Any) -> dict:
         return {"error": "mpv_command_failed", "detail": str(exc)[:200]}
 
 
+async def _handle_now_playing(**_kwargs: Any) -> dict:
+    """2026-05-30 Patch D · mpv 自维护当前播放 state(`MpvPlayer._current` ·
+    play() / play_next() 时写入 · stop() 时清空)。给 LLM 一条独立查询路径 ·
+    不依赖 macOS MediaRemote(后者在新版 macOS 看不到 mpv 进程 · `media.now_playing`
+    长期返 null)。
+
+    返:
+      - {"playing": True, "title", "artist", "url", "queue_len"} · 有 _current
+      - {"playing": False, "reason": "no_mpv_session" | "stopped"} · _current 空
+    """
+    try:
+        player = _mpv.get_player()
+        cur = player.current()
+    except Exception as exc:
+        return {"error": "mpv_command_failed", "detail": str(exc)[:200]}
+    if not cur:
+        return {
+            "playing": False,
+            "reason": "stopped" if player.is_running() else "no_mpv_session",
+        }
+    return {
+        "playing": True,
+        "title": cur.get("title"),
+        "artist": cur.get("artist"),
+        "url": cur.get("url"),
+        "queue_len": len(player.queue()),
+    }
+
+
 # ---------------------------------------------------------------------------
 # netease_local dispatcher (INV-7 §2 P1.netease template reuse #3 · local path)
 # ---------------------------------------------------------------------------
@@ -214,6 +254,7 @@ _NETEASE_LOCAL_ACTION_HANDLERS = {
     "resume":        _handle_resume,
     "stop":          _handle_stop,
     "next_in_queue": _handle_next_in_queue,
+    "now_playing":   _handle_now_playing,  # Patch D 2026-05-30
 }
 
 
@@ -230,7 +271,10 @@ _NETEASE_LOCAL_ACTION_HANDLERS = {
         "- pause:暂停 mpv(保留进度,可 resume)\n"
         "- resume:恢复暂停的 mpv 播放\n"
         "- stop:停止 mpv 播放 + 清队列(不可 resume)\n"
-        "- next_in_queue:切到 play_playlist 入队的下一首\n\n"
+        "- next_in_queue:切到 play_playlist 入队的下一首\n"
+        "- now_playing:查 mpv 当前在放(title/artist/url/queue_len)·"
+        "用户问『现在在放什么』时 media.now_playing 返 null(macOS MediaRemote"
+        "看不到 mpv)·改用本 action 拿真值\n\n"
         "VIP/付费下架返试听片段 ~30s(is_trial=True),如实告诉用户。"
     ),
     category="music",
