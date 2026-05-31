@@ -397,6 +397,105 @@ characters table(DB)
 
 详 `docs/adding-new-tts-model.md`(3 例:GSV trained / GSV zeroshot placeholder / Fish 新 model + schema 字段表 + 排错)。Trained model 8 步:server rsync weights + 16 emotion ref · 本地 rsync .lab · 编辑 tts_models.json · backend restart(pydantic validate)· 前端 dropdown 自动显示 · PATCH character voice_model · chat 验证。
 
+### 5.8.6 网易云 audio source 双路径 + mpv subprocess(INV-16/17/18,2026-05-29~31)
+
+> 接管必读:加新音乐 capability / 改 mpv spawn args / 升 mpv 版本 / 改 weapi payload 前必读。详 `docs/SESSIONS/2026-05-30-to-31.md` + `docs/netease-music-setup.md`。
+
+#### 三 dispatcher 矩阵
+
+```
+netease_web              netease_local              media
+────────────             ─────────────              ─────
+weapi + mpv-first        mpv 直接 IPC               MediaRemote framework
+(发起播放)               (控 mpv 自身)              (跨 source 系统级 fallback)
+─────────────────        ─────────────────          ─────────────────
+daily_recommend          play_song(song_id)         next_track
+personal_fm              play_playlist(id)          previous_track
+play_song(keyword)       pause                      play_pause
+play_playlist            resume                     now_playing  ← 看不见 mpv
+play_playlist_by_id      stop                       set_volume
+like_current             next_in_queue
+search                   now_playing                7 + 7 + 5 = 19 total actions
+                         (Patch D 2026-05-30)
+```
+
+#### tool_addendum audio source 优先级(INV-18,3 条规则)
+
+```
+1. 本会话调用过 netease_web 或 netease_local(走 mpv-first 路径)
+   → 后续所有播放控制(暂停/继续/下一首/查在播)首选 netease_local.*
+   (同 source 闭环 · backend 内嵌 mpv 内部 state 一致)
+
+2. netease_local 返 not_running / 本会话从未走过 mpv-first
+   → fallback media.*(MediaRemote 跨 source · 控 NCM 客户端 / Spotify / etc)
+
+3. 用户明确说"系统播放控制 / NCM 客户端那个 / 浏览器那个"
+   → 直接走 media.* 不要 netease_local
+```
+
+now_playing 默认顺序反转(2026-05-31):旧"先 media → null fallback netease_local" → 新"首选 netease_local → False 再 media"(media 看不见 mpv 是常态非错误)。
+
+#### mpv subprocess lifecycle(INV-17)
+
+```python
+# backend/integrations/mpv_player.py · 关键 invariant
+spawn_args = [
+    binary,
+    "--idle=yes",
+    "--no-terminal", "--no-video", "--audio-display=no",
+    f"--input-ipc-server={SOCKET_PATH}",
+    # 注: 无 --media-keys=yes · mpv 0.41+ 该 flag rename 为 --input-media-keys
+    # 且默认就 yes · 无需显式传(显式传老名字 fatal · 详 Lesson #36)
+    "--force-window=no",
+]
+# stderr 启动那段必 capture(防黑盒 · 详 Lesson #37)
+stderr=subprocess.PIPE  # 不是 DEVNULL
+# loadfile 后立即 set pause False(防 sticky pause 跨 loadfile · 详 Pit 1)
+await self._send_command(["loadfile", url, "replace"])
+await self._send_command(["set_property", "pause", False])  # idempotent
+```
+
+**socket path**:`Path(tempfile.gettempdir()) / "skyler_mpv.sock"` · macOS 上是 `/var/folders/.../T/skyler_mpv.sock`(系统 per-user temp)· 非 `/tmp/`(`/tmp` 在 macOS 有权限限制 · 普通用户写不进)。
+
+**stderr capture pattern**:启动失败时(socket 2s 没出现)`_read_stderr_tail()` read 200ms tail · 塞进 `RuntimeError` detail · 下次 incident 不靠 manual repro。helper 实现在 `backend/integrations/mpv_player.py` module-level。
+
+#### weapi 调用 + NCM rotation 防御(INV-16)
+
+**payload schema 演进**:
+```python
+# 旧(<2024)· 全 400 在 NCM 2024 API rotation 后:
+payload = {"ids": json.dumps([sid]), "br": 320000}
+
+# 新(2026-05-31 Patch A · 真通):
+_BR_TO_LEVEL = {320000: "exhigh", 192000: "higher", 128000: "standard", 999000: "lossless"}
+payload = {"ids": json.dumps([sid]), "level": _BR_TO_LEVEL[br], "encodeType": "flac"}
+```
+
+**`_weapi_post` 返类型契约**:总返 dict · 否则上层 raise `NeteaseAPIError`。client 错误路径 diagnostics 留全文(BOM / raw bytes / 非 JSON detail 200 char)。
+
+**5 端点 isinstance 防御矩阵**(NCM 风控 frequent_visit 防御):
+
+| 端点 | 风控返 | type contract bug 现象 |
+|---|---|---|
+| `playlist_detail` | `data["playlist"]` 非 dict | 下游 `pl.get("tracks")` AttributeError |
+| `search`(× 4 type:song/album/artist/playlist) | `data["result"]` 是 str `"frequent_visit"`/`"need_login"` 不是 dict | 下游 `result.get("songs")` AttributeError |
+
+修法 = 每端点入口加 `isinstance(x, dict)` check · 非 dict log warn + 返空 list/dict · 不抛。
+
+#### 错误归类语义(Patch C · INV-16)
+
+```python
+# 旧统一 mpv_play_failed → LLM 看字面 "mpv" 推断"装 mpv"(实际可能跟 mpv 无关)
+# 新 3 档区分:
+"netease_api_error"      # weapi call 失败(get_song_url 400 / 风控 / 网络)
+"mpv_error"              # mpv subprocess 死了(--media-keys fatal / spawn 失败 / IPC closed)
+"mpv_play_failed"        # mpv 在跑但 play() 抛(loadfile 失败 / IPC timeout)
+"mpv_command_failed"     # pause/resume/stop/next_in_queue IPC 抛
+"mpv_not_installed"      # health_check 找不到 binary(brew install mpv 引导)
+```
+
+**LLM advice 引导**(tool_addendum · 防再编 "装 mpv / 改 PATH"):返 `mpv_error` / `mpv_play_failed` / `mpv_command_failed` 时**不要**瞎编原因(不建议重装 / 改 PATH / 改环境变量 — 那是开发者层 spawn / IPC 问题)· 如实说 "mpv 内部出错 · detail 已记日志" + 把 detail 字段读给用户。
+
 ### 5.9 conversation 锚定绑定语义(v4-beta 收口,接管必读)
 
 **模型**:切角色 = 切到该角色**最新 conversation**(无则新建);一个 conversation 1:1 绑一个角色,角色身份**由 conversation 推导**(不是由"UI 当前选中")。

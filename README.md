@@ -121,8 +121,14 @@ cp .env.example .env
 # Edit .env — at minimum:
 #   DASHSCOPE_API_KEY=sk-xxx
 #   DATABASE_URL=sqlite+aiosqlite:///./skyler.db
+# Optional (for netease music mpv-first 真闭环 · 2026-05-31 已通):
+#   NETEASE_MUSIC_U=<browser cookie · 见 docs/netease-music-setup.md §二>
 uvicorn backend.main:app --reload
 # Backend at http://127.0.0.1:8000
+
+# ── Optional 系统依赖 (媒体/音乐能力) ──────────────────
+# brew install mpv             # netease 后台真闭环播 · 0.41+ 验过 (mpv-first)
+# brew install nowplaying-cli  # media.* 跨 source 控制 (NCM 客户端/Spotify/etc · 看不见 mpv 是常态)
 
 # ── Frontend (in another terminal) ────────────────────
 cd frontend
@@ -233,7 +239,7 @@ All components use `var(--color-*)` from `styles/themes.css` (no hardcoded Tailw
 
 ### 🛠 Tool ecosystem
 - **Calendar** — Apple EventKit (default, zero-network) + Google Calendar (optional)
-- **Music** — netease (built-in via mpv self-decoder; also URL Scheme fallback) + macOS media control (next/prev/play_pause/now_playing/volume — works with Apple Music / Spotify / YouTube)
+- **Music** — netease (2 dispatcher × 14 actions: `netease_web` 7 [daily_recommend / personal_fm / play_song / play_playlist / play_playlist_by_id / like_current / search] + `netease_local` 7 [play_song / play_playlist / pause / resume / stop / next_in_queue / now_playing] · mpv-first 真闭环 / URL Scheme fallback) + macOS media control 5 actions (next_track / previous_track / play_pause / now_playing / set_volume — works with Apple Music / Spotify / YouTube / NCM 客户端). **Audio source priority** (2026-05-31 INV-18): session 用过 mpv-first → 后续控制首选 `netease_local.*` · 否则 fallback `media.*` · 用户明确"系统级"直接 `media.*`
 - **Bilibili** — 11 capabilities (search / video info / subtitles for AI summary / etc.)
 - **Xiaohongshu** — passive URL parser only (red line locked in code: no scraping / search / feed)
 - **Docx** — read / write / append, sandboxed under `~/Documents/Skyler/docs/`
@@ -448,13 +454,18 @@ See [ROADMAP.md](ROADMAP.md) for the full picture (P1 / P2 / P3 / 5070ti-trigger
 
 ### 低
 
-3. **网易云 mpv 真播降级 url_scheme**（2026-05-11 chunk 6b hotfix-3 验收发现）
-   - 现象：NCM 客户端弹出 + 显示歌名，用户手动点播放（理想是 mpv 后台真播）
-   - 根因：chunk 6b hotfix-2 自实现的 `NeteaseClient.get_song_url` weapi 签名错，所有歌返回 `{"msg":"参数错误","code":400}`
-   - 影响：用户体验降一档；功能可用（Momo 引导用户手动点）
-   - 修法：用 `pyncm` 库重写 `get_song_url`
-   - 阻塞：`pyncm` 在用户环境安装失败（PyPI / 镜像在 Python ssl 路径被截断，疑代理 TUN 劫持）—— 长期 backlog
-   - 工程量：2–3 小时（若 `pyncm` 解决）
+3. ~~**网易云 mpv 真播降级 url_scheme**~~ ✅ 2026-05-31 INV-16/17 闭环
+   - 旧现象:NCM 客户端弹出但不自动播,用户手动点(理想是 mpv 后台真播)
+   - 旧根因 1(weapi 400):自实现 `NeteaseClient.get_song_url` payload `br=320000` 在 NCM 2024 API rotation 后全 400 — **Patch A** (commit `06436d8`) 改 `level=exhigh`/`encodeType=flac` 真通 (轮 1 trial)
+   - 旧根因 2(pyncm 切换):**永久判死** — `pyncm` PyPI 下架 + GitHub repo 404,自维护 weapi sign 为唯一路径(详 `docs/netease-music-setup.md` §七)
+   - 旧根因 3(mpv subprocess):**INV-17** 三 fix (commit `0a23866`) — `--media-keys=yes` mpv 0.41 rename fatal · stderr DEVNULL → PIPE 防黑盒 · sticky pause 跨 loadfile 防御
+   - 实证:PM 真机 2026-05-31 `daily_recommend → mpv 后台播 Reaching Light` ✅ autoplay=true / backend=mpv
+   - 详 `docs/SESSIONS/2026-05-30-to-31.md`
+
+3.5. **Audio source trade-offs**(2026-05-31 INV-18 凌晨现场)
+   - **Mode B(NCM 客户端 autoplay)死路**:macOS NCM 客户端最新版 `orpheus://` URL Scheme 仅跳转不自动播,`nowplaying-cli play` 兜底不稳定。`netease_web` 在 mpv 缺时仍走此 fallback 但 autoplay=false
+   - **Mode C(MediaRemote 看不见 mpv)系统限制**:macOS MediaRemote framework 长期不识别 backend spawn 的 mpv 进程,`media.now_playing` 返 null 是常态(非 bug)。**Patch D** (commit `06436d8`) 解 = `netease_local.now_playing` 自维护 `_current` state,LLM 走 fallback 路径仍能拿到当前在播
+   - **expectation gap**:mpv 后台播无 UI(无歌词/动画) vs PM 习惯的 NCM 客户端完整 UI。4 选项 A/B/C/D 待 PM 拍板,详 `docs/netease-music-setup.md` §八
 
 4. **MCP 凭证 V1 plaintext 存 SQLite**（v3.5 chunk 7 衍生 backlog）
    - 现状：`mcp_credentials` 表明文存 API key；与 `.env` 风险等价（SQLite 文件在 `~/.skyler/` 已具系统级权限隔离）
