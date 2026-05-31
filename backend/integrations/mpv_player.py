@@ -11,9 +11,15 @@
 
 # macOS MediaRemote 兜底（spec degrade 路径已用上）
 
-mpv 0.34+ 在 macOS 自动注册 MPNowPlayingInfoCenter：``--media-keys=yes``
-开启后媒体键 / 通知中心 / nowplaying-cli 都看得见。``--force-media-title``
-/ IPC ``set_property`` ``title`` 喂当前歌曲名给 NowPlaying。
+mpv 0.34+ 在 macOS 自动注册 MPNowPlayingInfoCenter（``--input-media-keys``
+默认 ``yes`` · 无需显式传），媒体键 / 通知中心 / nowplaying-cli 都看得见。
+``--force-media-title`` / IPC ``set_property`` ``title`` 喂当前歌曲名给 NowPlaying。
+
+(2026-05-31 mpv 0.41.0 incident: 历史 spawn args 含 ``--media-keys=yes`` ·
+mpv 0.41 把该 flag rename 为 ``--input-media-keys`` · 老 flag 触发 fatal
+``Setting commandline option --media-keys=yes failed`` · subprocess 启动即死 ·
+IPC socket 不出现 · 调用方拿到 ``mpv IPC socket never appeared`` RuntimeError。
+修法:删 ``--media-keys=yes`` 行 · 反正新名字默认就 yes · 老版本也走默认。)
 
 **spec 原计划自写 PyObjC 桥接被 obviated**——mpv 原生支持，不写
 backend/integrations/media_remote.py。这是更好的"degrade"路径（不需要
@@ -74,6 +80,31 @@ def find_mpv_binary() -> Optional[str]:
         if which:
             return which
     return None
+
+
+# ---------------------------------------------------------------------------
+# stderr tail (启动失败 diagnostic · 2026-05-31)
+# ---------------------------------------------------------------------------
+
+
+async def _read_stderr_tail(
+    proc: asyncio.subprocess.Process,
+    *,
+    max_bytes: int = 400,
+    timeout: float = 0.2,
+) -> str:
+    """Best-effort 读 mpv stderr · 启动失败时塞进 RuntimeError detail。
+
+    spawn 失败场景 mpv 已快速 exit · stderr 短 + 已 EOF · ``read()`` 立返。
+    若 stderr 无 (DEVNULL 等) 或 timeout 直接返空串 · 不抛。
+    """
+    if proc.stderr is None:
+        return ""
+    try:
+        raw = await asyncio.wait_for(proc.stderr.read(max_bytes), timeout=timeout)
+    except (asyncio.TimeoutError, Exception):
+        return ""
+    return raw.decode("utf-8", errors="replace").strip().replace("\n", " | ")[:max_bytes]
 
 
 # ---------------------------------------------------------------------------
@@ -166,14 +197,18 @@ class MpvPlayer:
             "--no-video",                  # 纯音频
             "--audio-display=no",          # 不弹封面窗口
             f"--input-ipc-server={_SOCKET_PATH}",
-            "--media-keys=yes",            # macOS NowPlaying + 媒体键注册（不需 PyObjC）
+            # (2026-05-31) `--media-keys=yes` 在 mpv 0.41 被 rename 为
+            # `--input-media-keys` · 老 flag fatal · 新 flag 默认就 yes ·
+            # 故直接不传。详见模块 docstring incident note。
             "--force-window=no",
         ]
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 *args,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                # (2026-05-31) 启动失败时 stderr 是唯一线索 · 改 PIPE 后
+                # socket 未出现时 read 进 RuntimeError detail · 避免黑盒。
+                stderr=asyncio.subprocess.PIPE,
             )
         except FileNotFoundError as exc:
             raise RuntimeError(f"mpv binary missing: {exc}") from exc
@@ -184,8 +219,12 @@ class MpvPlayer:
                 break
             await asyncio.sleep(0.05)
         else:
+            stderr_tail = await _read_stderr_tail(self._proc)
             await self._kill()
-            raise RuntimeError("mpv IPC socket never appeared (timeout 2s)")
+            raise RuntimeError(
+                "mpv IPC socket never appeared (timeout 2s)"
+                + (f"; stderr={stderr_tail}" if stderr_tail else "")
+            )
 
         # 连 socket
         self._reader, self._writer = await asyncio.open_unix_connection(
@@ -264,6 +303,12 @@ class MpvPlayer:
         await self._spawn()
         # loadfile 替换当前 + 立即播
         await self._send_command(["loadfile", url, "replace"])
+        # (2026-05-31) sticky pause 防御:singleton 此前若被 `pause()` 调过 ·
+        # mpv 0.41 loadfile-replace 不重置 pause 属性 · 新文件加载完也卡 0
+        # (PM 凌晨现场:playback-time 一直 0.000000 / 手动 set pause=false 立即出声)。
+        # 显式置 False 是 idempotent(已 False 也无害)。empirical repro:
+        # repro4 已证 pause=True 跨 loadfile 后会 sticky · 不 advance。
+        await self._send_command(["set_property", "pause", False])
         if meta:
             title = meta.get("title")
             artist = meta.get("artist")
