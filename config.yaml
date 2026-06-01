@@ -213,3 +213,5 @@ activity_timeline:
   min_session_seconds: 30
   cleanup_days: 30
   cleanup_cron: 59 23 * * *
+asr:
+  whisper_model_size: small
