@@ -19,12 +19,18 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from faster_whisper import WhisperModel
+from opencc import OpenCC
 
 from backend.config import get_whisper_model_size, settings
 
 logger = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+
+# 2026-05-28: faster-whisper 中文输出默认带繁体(模型训练数据偏好)· 我们要简体。
+# OpenCC t2s 转换器 module-level 一次性建 · convert 是 native C++ 调用 (~µs/句) ·
+# 对非繁体输入 no-op (实测英文 / 简体 / 混合输入仅替换繁体字)。
+_OPENCC_T2S = OpenCC("t2s")
 
 
 def _compute_type(device: str) -> str:
@@ -122,7 +128,9 @@ class WhisperASR:
                 beam_size=5,
                 vad_filter=True,      # strip silence
             )
-            return "".join(seg.text for seg in segments).strip()
+            text = "".join(seg.text for seg in segments).strip()
+            # 繁→简 · 非中文字符不动 (英文 / 数字 / 标点 no-op)
+            return _OPENCC_T2S.convert(text)
 
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(_executor, _run)

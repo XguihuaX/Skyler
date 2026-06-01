@@ -39,3 +39,5 @@ readability-lxml>=0.8
 # v4 persona engineering segment 1 — 5-layer prompt templates (Jinja2)
 jinja2>=3.0
 mutagen>=1.47.0
+# 2026-05-28: faster-whisper 中文输出繁体 · OpenCC t2s 转简体 (asr/whisper.py)
+opencc>=1.1
