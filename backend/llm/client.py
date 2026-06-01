@@ -199,11 +199,22 @@ async def call_llm(
             )
 
     if enable_search:
+        # 2026-05-29 X1: enable_search 只对 qwen / DashScope 已验证生效 ·
+        # 透传 native param。其他 provider(deepseek / openai compat 等)·
+        # provider 端到底支不支持 web-search 未 verify · 不静悄悄塞错
+        # tool 让 LLM 装作能联网 · 而是 warn log + skip · 等 PM 真接通时
+        # 显式按 provider 加分支。原 audit §2.2 / §5 X1 / §8 #4 记录 ·
+        # web_search_preview 是 OpenAI Responses tool · 非 DeepSeek 原生。
         model_lower = resolved_model.lower()
         if "qwen" in model_lower:
             merged["enable_search"] = True
-        elif "deepseek" in model_lower:
-            merged["tools"] = [{"type": "web_search_preview"}]
+        else:
+            logger.warning(
+                "[llm.dispatcher] enable_search=True requested but provider "
+                "not in supported list · model=%s · skipping search injection "
+                "(LLM 将回退到训练知识 · 可能幻觉 / 硬控实时信息问题)",
+                resolved_model,
+            )
 
     # bugfix-3.2.7: defensive guard — LiteLLM 要求 'provider/model' 格式。
     # 裸 model 名(无 '/')会直接 BadRequestError('LLM Provider NOT provided')。

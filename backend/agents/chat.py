@@ -43,6 +43,7 @@ from sqlalchemy import or_, select
 from backend.agents.base import IAgent
 from backend.config import (
     get_base_instruction,
+    get_enable_search,
     get_long_term_enabled,
     get_profile_enabled,
     get_tts_emotions,
@@ -1637,7 +1638,12 @@ class ChatAgent(IAgent):
         context = payload.get("context") or {}
         tool_result: str | None = context.get("tool_result")
         extra_system: str | None = context.get("extra_system")
-        enable_search: bool = bool(context.get("enable_search", False))
+        # 2026-05-29 X1: 接通 config.yaml:search.enable_search 死开关 ·
+        # context 显式传 enable_search 优先(proactive trigger / 显式指令路径);
+        # context 缺 key → 走 get_enable_search() 读 config.yaml(默认 true ·
+        # UI 可关)。原 X1 audit §1.6 + §8 #1 死代码消费方接通 ·
+        # user-turn 从此默认 True(若 config 未关)。
+        enable_search: bool = bool(context.get("enable_search", get_enable_search()))
         skip_short_term: bool = bool(context.get("skip_short_term", False))
         # v4 segment 1: 见 handle() 注释,deterministic mode 依 turn_origin
         turn_origin: str = str(context.get("turn_origin") or "user")
