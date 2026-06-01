@@ -56,12 +56,17 @@ async def _handle_create_event(
     duration_minutes: int = 30,
     description: str | None = None,
     calendar_name: str | None = None,
+    alarm_minutes_before: int = 0,
     **_kwargs,
 ) -> dict:
     """返回 ``{"event_id": "...", "title": ..., "start": ..., "calendar": ...}``。
 
     LLM 不能自己生成 event_id —— 创建后 Apple 系统给一个稳定标识符,
     调 delete_event 时会用。
+
+    2026-05-28: alarm_minutes_before(默 0 = 事件发生时提醒)· 用户说"提前 X 分钟
+    提醒" → LLM 传 X。内部转 alarm_offset_seconds = -alarm_minutes_before * 60
+    (EKAlarm 用 relative offset 秒 · 负值 = 事件 start 前)。
     """
     try:
         start_dt = datetime.fromisoformat(start_iso)
@@ -72,6 +77,7 @@ async def _handle_create_event(
     if start_dt.tzinfo is None:
         # 没带时区 → 按配置时区解释（避免 UTC 漂移）
         start_dt = start_dt.replace(tzinfo=_get_timezone())
+    alarm_offset_seconds = -int(alarm_minutes_before) * 60
     eid = await ac.create_event(
         title=title,
         start=start_dt,
@@ -79,6 +85,7 @@ async def _handle_create_event(
         description=description,
         calendar_name=calendar_name,
         tz=start_dt.tzinfo,
+        alarm_offset_seconds=alarm_offset_seconds,
     )
     return {
         "event_id": eid,
@@ -86,6 +93,7 @@ async def _handle_create_event(
         "start": start_dt.isoformat(),
         "duration_minutes": int(duration_minutes),
         "calendar": calendar_name or "默认日历",
+        "alarm_minutes_before": int(alarm_minutes_before),
     }
 
 

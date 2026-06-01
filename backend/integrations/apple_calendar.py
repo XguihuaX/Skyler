@@ -200,6 +200,7 @@ def _create_event_sync(
     description: Optional[str],
     calendar_name: Optional[str],
     tz: timezone,
+    alarm_offset_seconds: int = 0,
 ) -> str:
     if not _is_authorized_sync():
         if not _request_access_blocking():
@@ -226,6 +227,15 @@ def _create_event_sync(
     if chosen is None:
         raise RuntimeError("找不到可用日历（系统默认日历未设置？）")
     event.setCalendar_(chosen)
+
+    # 2026-05-28: 加 EKAlarm 让事件到点弹系统通知。
+    # EKAlarm.alarmWithRelativeOffset_(seconds) · 负数 = start 前 N 秒提醒 ·
+    # 0 = start 时提醒 · 正数理论上 start 后(罕见用例)。
+    # 不加 alarm 的话 EKEvent 落盘后 macOS 默认不弹 notification ·
+    # 跟系统日历 Calendar.app 行为对齐(用户在 Calendar.app 建事件也会自动带
+    # 默认 alarm · EventKit 程序化建不会自动带 · 必须显式 addAlarm_)。
+    alarm = EventKit.EKAlarm.alarmWithRelativeOffset_(float(alarm_offset_seconds))
+    event.addAlarm_(alarm)
 
     # span = ThisEvent (0)；commit=True 立即落盘
     success, err = store.saveEvent_span_commit_error_(event, 0, True, None)
@@ -274,12 +284,13 @@ async def create_event(
     description: Optional[str] = None,
     calendar_name: Optional[str] = None,
     tz: Optional[timezone] = None,
+    alarm_offset_seconds: int = 0,
 ) -> str:
     if tz is None:
         tz = timezone.utc
     return await asyncio.to_thread(
         _create_event_sync, title, start, duration_minutes,
-        description, calendar_name, tz,
+        description, calendar_name, tz, alarm_offset_seconds,
     )
 
 
