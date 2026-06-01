@@ -294,12 +294,15 @@ interface AppState {
   vadState: VadState;
   setVadState: (s: VadState) => void;
 
-  // INV-15 P2 Option G(2026-05-27): VAD 实时 max amplitude(0-255)给 VadBar
-  // 显示 "now: X / threshold: Y" · 让用户 self-diagnose:数字不动 = stream stale
-  // (需 reload / 切窗口 trigger recovery)· 数字动但 < threshold = 阈值太高。
-  // vadLoop ~60fps 写本字段 · sleep 时清零(toggleVad 清).
-  vadCurrentMax: number;
-  setVadCurrentMax: (n: number) => void;
+  // INV-17 v3 (2026-05-28): silero web 接管 VAD · vadCurrentMax (max amplitude)
+  // 语义已废 · 改为 vadConfidence (silero isSpeech probability 0-1) · 给
+  // VadBar 实时显示 confidence + hysteresis markers。silero onFrameProcessed
+  // 每 ~32ms 写一次 · pause/sleep 时清零。
+  vadConfidence: number;
+  setVadConfidence: (n: number) => void;
+  // silero 是否 init 成功 · 失败时 fallback 到 manual mode + 给 UI hint。
+  vadReady: boolean;
+  setVadReady: (v: boolean) => void;
 
   // 麦克风全局静音（Momo 说话时）
   micMuted: boolean;
@@ -315,13 +318,16 @@ interface AppState {
   activityPermissionHint: string | null;
   setActivityPermissionHint: (v: string | null) => void;
 
-  // VAD 参数（v2 模块 9 设置面板才能改，本模块用默认值）
-  vadThreshold: number;       // 默认 65（0–100 区间）
-  setVadThreshold: (v: number) => void;
-  silenceTimeoutMs: number;   // 默认 1500
-  setSilenceTimeoutMs: (v: number) => void;
-  vadIdleTimeoutMs: number;   // 默认 60000，VAD active 状态 60s 无录音回 sleep
-  muteWhileSpeaking: boolean; // 默认 true，Momo 说话时静音麦克风
+  // INV-17 v3 (2026-05-28): silero web 接管 · vadThreshold/silenceTimeoutMs 语义
+  // 改为 silero MicVAD 参数(positiveSpeechThreshold / redemptionMs)。
+  // negativeSpeechThreshold / minSpeechMs / preSpeechPadMs 用 silero default ·
+  // 不暴露 UI(per decision #5)。
+  vadPositiveThreshold: number; // 默认 0.3 · silero 进 speech 阈值 · range 0.1-0.9
+  setVadPositiveThreshold: (v: number) => void;
+  vadRedemptionMs: number;      // 默认 1400 · silero 离开 speech 等待 ms · range 500-3000
+  setVadRedemptionMs: (v: number) => void;
+  vadIdleTimeoutMs: number;     // 默认 60000 · VAD active 状态 60s 无录音回 sleep
+  muteWhileSpeaking: boolean;   // 默认 true · Momo 说话时静音麦克风
   setMuteWhileSpeaking: (v: boolean) => void;
 
   // TTS 开关
@@ -522,9 +528,11 @@ export const useAppStore = create<AppState>((set) => ({
   vadState: 'sleep',
   setVadState: (vadState) => set({ vadState }),
 
-  // INV-15 P2 Option G — VAD diagnostic max amplitude (0-255)
-  vadCurrentMax: 0,
-  setVadCurrentMax: (vadCurrentMax) => set({ vadCurrentMax }),
+  // INV-17 v3 — silero VAD diagnostic + ready flag
+  vadConfidence: 0,
+  setVadConfidence: (vadConfidence) => set({ vadConfidence }),
+  vadReady: false,
+  setVadReady: (vadReady) => set({ vadReady }),
 
   micMuted: false,
   setMicMuted: (micMuted) => set({ micMuted }),
@@ -541,10 +549,14 @@ export const useAppStore = create<AppState>((set) => ({
   activityPermissionHint: null,
   setActivityPermissionHint: (activityPermissionHint) => set({ activityPermissionHint }),
 
-  vadThreshold: 65,
-  setVadThreshold: (vadThreshold) => set({ vadThreshold }),
-  silenceTimeoutMs: 1500,
-  setSilenceTimeoutMs: (silenceTimeoutMs) => set({ silenceTimeoutMs }),
+  // INV-17 v3 · silero MicVAD 参数 default(只暴露这 2 个 · 其他用 silero default)
+  // INV-17 v3.4 (2026-05-28): 0.3 → 0.6 · 真机实测安静环境麦克底噪 confidence
+  // 0.3-0.5 误触发录音 · 0.6 解决。silero 库 default 0.3 同款问题。AsrVadSection
+  // hydrate localStorage missing/错值时保持 store default · 故只改这里即可。
+  vadPositiveThreshold: 0.6,
+  setVadPositiveThreshold: (vadPositiveThreshold) => set({ vadPositiveThreshold }),
+  vadRedemptionMs: 1400,
+  setVadRedemptionMs: (vadRedemptionMs) => set({ vadRedemptionMs }),
   vadIdleTimeoutMs: 60000,
   muteWhileSpeaking: true,
   setMuteWhileSpeaking: (muteWhileSpeaking) => set({ muteWhileSpeaking }),

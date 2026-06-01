@@ -67,6 +67,12 @@ frontend/public/splash/*
 api_key.txt
 scripts/fish_probe_outputs/
 
+# INV-17 v3 (2026-05-28): silero VAD + onnxruntime-web runtime assets
+# 由 frontend/scripts/copy-silero-assets.mjs 在 npm run predev / prebuild 时从
+# node_modules 复制 · 体积 ~38MB · 不入 git。新 clone repo 跑 npm install 后
+# `npm run copy-silero`(或自动 predev / prebuild trigger)生成。
+frontend/public/silero/
+
 # v4.0 voice greeting · 用户上传 audio 存盘(不进 git,per Live2D / splash-art
 # 同款 IP 隔离 + 体积考虑;迁机器靠 backup script)
 backend/static/voice_lines/

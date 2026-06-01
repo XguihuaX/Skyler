@@ -10,9 +10,11 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@ricky0123/vad-web": "^0.0.30",
     "@tauri-apps/api": "^2.11.0",
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.14.0",
+    "onnxruntime-web": "1.26.0",
     "pixi-live2d-display": "^0.5.0-beta",
     "pixi.js": "^7.4.0",
     "react": "^18.3.1",
@@ -28,6 +30,7 @@
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.6.2",
-    "vite": "^6.3.4"
+    "vite": "^6.3.4",
+    "vite-plugin-static-copy": "^4.1.0"
   }
 }

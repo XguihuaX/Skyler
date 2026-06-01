@@ -19,10 +19,12 @@ import UserProfileSection from './UserProfileSection';
 
 const BACKEND_BASE = 'http://127.0.0.1:8000';
 
-const LS_RECORDING_MODE   = 'momoos.recordingMode';
-const LS_VAD_THRESHOLD    = 'momoos.vadThreshold';
-const LS_SILENCE_TIMEOUT  = 'momoos.silenceTimeoutMs';   // stored in seconds
-const LS_MUTE_SPEAKING    = 'momoos.muteWhileSpeaking';
+const LS_RECORDING_MODE       = 'momoos.recordingMode';
+// INV-17 v3 (2026-05-28): silero MicVAD 参数 · 旧 LS_VAD_THRESHOLD / LS_SILENCE_TIMEOUT 语义改 ·
+// 老 key 弃用 · 新 key 独立避免读到旧值用错语义(旧 vadThreshold 65 对 silero 是 0.65 太高)
+const LS_VAD_POSITIVE         = 'momoos.vadPositiveThreshold';  // 0.1-0.9
+const LS_VAD_REDEMPTION_MS    = 'momoos.vadRedemptionMs';       // 500-3000 ms
+const LS_MUTE_SPEAKING        = 'momoos.muteWhileSpeaking';
 // v3.5 chunk 5b：启动入场视频开关。default ON；false → SplashOverlay
 // mount 时立即 onFinished()，主视图无感。
 const LS_SPLASH_ENABLED   = 'momoos.splashEnabled';
@@ -1508,33 +1510,46 @@ export function MemoryTogglesSection({ showToast }: ShowToastProps) {
   );
 }
 
-/** ASR / VAD section —— 录音模式 / 阈值 / 静音超时 / 静音麦克风。
- * localStorage 持久化(沿用原 SettingsPanel hydrate 逻辑)。 */
+/** ASR / VAD section · INV-17 v3 (2026-05-28) silero MicVAD 接管。
+ *
+ * 改动:
+ *   - "语音检测阈值"(0-100)→ "VAD 进入阈值"(silero positiveSpeechThreshold 0.1-0.9)
+ *   - "静音超时"(0.5-3.0s)→ "静音退出等待"(silero redemptionMs 500-3000ms · 同语义)
+ *   - 其他 silero 参数(negative / minSpeech / preSpeechPad)默 default · 不暴露
+ *   - 录音模式 / 静音麦克风 toggle 不动
+ *
+ * ⚠️ 注:silero 阈值改动需 destroy+new MicVAD 实例 · 本期 ship 不支持热更 ·
+ *    用户调完 slider 后需重启 frontend 才生效(slider 仅写 store + localStorage)。
+ */
 export function AsrVadSection() {
   const recordingMode      = useAppStore((s) => s.recordingMode);
   const setRecordingMode   = useAppStore((s) => s.setRecordingMode);
-  const vadThreshold       = useAppStore((s) => s.vadThreshold);
-  const setVadThreshold    = useAppStore((s) => s.setVadThreshold);
-  const silenceTimeoutMs   = useAppStore((s) => s.silenceTimeoutMs);
-  const setSilenceTimeoutMs = useAppStore((s) => s.setSilenceTimeoutMs);
+  const vadPositive        = useAppStore((s) => s.vadPositiveThreshold);
+  const setVadPositive     = useAppStore((s) => s.setVadPositiveThreshold);
+  const vadRedemption      = useAppStore((s) => s.vadRedemptionMs);
+  const setVadRedemption   = useAppStore((s) => s.setVadRedemptionMs);
   const muteWhileSpeaking  = useAppStore((s) => s.muteWhileSpeaking);
   const setMuteWhileSpeaking = useAppStore((s) => s.setMuteWhileSpeaking);
+  const vadReady           = useAppStore((s) => s.vadReady);
 
-  // Hydrate from localStorage(与原 SettingsPanel 同样的 try/parse 逻辑)
+  // Hydrate from localStorage · INV-17 v3 新 key · 旧 LS_VAD_THRESHOLD /
+  // LS_SILENCE_TIMEOUT 弃用不读(旧 0-100 / 秒值对 silero 语义错位 · 直接默认)。
   useEffect(() => {
     try {
       const rm = localStorage.getItem(LS_RECORDING_MODE);
       if (rm === 'manual' || rm === 'vad') useAppStore.getState().setRecordingMode(rm);
-      const vt = localStorage.getItem(LS_VAD_THRESHOLD);
-      if (vt !== null) {
-        const n = parseFloat(vt);
-        if (!isNaN(n) && n >= 1 && n <= 100) useAppStore.getState().setVadThreshold(n);
+      const vp = localStorage.getItem(LS_VAD_POSITIVE);
+      if (vp !== null) {
+        const n = parseFloat(vp);
+        if (!isNaN(n) && n >= 0.1 && n <= 0.9) {
+          useAppStore.getState().setVadPositiveThreshold(n);
+        }
       }
-      const st = localStorage.getItem(LS_SILENCE_TIMEOUT);
-      if (st !== null) {
-        const sec = parseFloat(st);
-        if (!isNaN(sec) && sec >= 0.5 && sec <= 3.0) {
-          useAppStore.getState().setSilenceTimeoutMs(Math.round(sec * 1000));
+      const rd = localStorage.getItem(LS_VAD_REDEMPTION_MS);
+      if (rd !== null) {
+        const ms = parseFloat(rd);
+        if (!isNaN(ms) && ms >= 500 && ms <= 3000) {
+          useAppStore.getState().setVadRedemptionMs(Math.round(ms));
         }
       }
       const ms = localStorage.getItem(LS_MUTE_SPEAKING);
@@ -1550,15 +1565,16 @@ export function AsrVadSection() {
     setRecordingMode(v);
     try { localStorage.setItem(LS_RECORDING_MODE, v); } catch {/* ignore */}
   };
-  const onVadThreshold = (v: number) => {
-    const n = Math.round(v);
-    setVadThreshold(n);
-    try { localStorage.setItem(LS_VAD_THRESHOLD, String(n)); } catch {/* ignore */}
+  const onVadPositive = (v: number) => {
+    // step 0.05 · 数值类型 float · 不 round 到 int
+    const n = Math.round(v * 100) / 100;
+    setVadPositive(n);
+    try { localStorage.setItem(LS_VAD_POSITIVE, String(n)); } catch {/* ignore */}
   };
-  const onSilenceSeconds = (sec: number) => {
-    const ms = Math.round(sec * 1000);
-    setSilenceTimeoutMs(ms);
-    try { localStorage.setItem(LS_SILENCE_TIMEOUT, sec.toFixed(1)); } catch {/* ignore */}
+  const onVadRedemptionMs = (v: number) => {
+    const n = Math.round(v);
+    setVadRedemption(n);
+    try { localStorage.setItem(LS_VAD_REDEMPTION_MS, String(n)); } catch {/* ignore */}
   };
   const onMuteWhileSpeaking = (v: boolean) => {
     setMuteWhileSpeaking(v);
@@ -1572,24 +1588,30 @@ export function AsrVadSection() {
         value={recordingMode}
         options={[
           { value: 'manual', label: '手动' },
-          { value: 'vad', label: 'VAD' },
+          { value: 'vad', label: 'VAD' + (vadReady ? '' : ' (未就绪)') },
         ]}
         onChange={onRecordingMode}
       />
       <Slider
-        label="语音检测阈值"
-        value={vadThreshold}
-        min={1} max={100} step={1}
-        display={String(vadThreshold)}
-        onChange={onVadThreshold}
+        label="VAD 进入阈值 (positive)"
+        value={vadPositive}
+        min={0.1} max={0.9} step={0.05}
+        display={vadPositive.toFixed(2)}
+        onChange={onVadPositive}
       />
       <Slider
-        label="静音超时"
-        value={silenceTimeoutMs / 1000}
-        min={0.5} max={3.0} step={0.1}
-        display={`${(silenceTimeoutMs / 1000).toFixed(1)} s`}
-        onChange={onSilenceSeconds}
+        label="静音退出等待 (redemption)"
+        value={vadRedemption}
+        min={500} max={3000} step={100}
+        display={`${(vadRedemption / 1000).toFixed(1)} s`}
+        onChange={onVadRedemptionMs}
       />
+      <div
+        className="text-[10px] -mt-1 mb-1"
+        style={{ color: 'var(--color-text-secondary)', opacity: 0.7 }}
+      >
+        阈值改动需重启前端生效 · silero MicVAD 实例需 destroy+new 重建
+      </div>
       <Toggle
         label="Momo 说话时静音麦克风"
         value={muteWhileSpeaking}
@@ -1672,12 +1694,15 @@ export default function SettingsPanel() {
   // 动生效。当前会话不需要 reactivate，所以本组件只持有 setter。
   const [splashEnabled, setSplashEnabled] = useState<boolean>(true);
 
+  // INV-17 v3 (2026-05-28): silero MicVAD 接管 · 旧 vadThreshold / silenceTimeoutMs
+  // 字段已删 · 改用 vadPositiveThreshold / vadRedemptionMs。本 deprecated
+  // SettingsPanel 入口已无侧栏链接 · 但仍需 compile · 同步换字段。
   const recordingMode      = useAppStore((s) => s.recordingMode);
   const setRecordingMode   = useAppStore((s) => s.setRecordingMode);
-  const vadThreshold       = useAppStore((s) => s.vadThreshold);
-  const setVadThreshold    = useAppStore((s) => s.setVadThreshold);
-  const silenceTimeoutMs   = useAppStore((s) => s.silenceTimeoutMs);
-  const setSilenceTimeoutMs = useAppStore((s) => s.setSilenceTimeoutMs);
+  const vadPositive        = useAppStore((s) => s.vadPositiveThreshold);
+  const setVadPositive     = useAppStore((s) => s.setVadPositiveThreshold);
+  const vadRedemption      = useAppStore((s) => s.vadRedemptionMs);
+  const setVadRedemption   = useAppStore((s) => s.setVadRedemptionMs);
   const muteWhileSpeaking  = useAppStore((s) => s.muteWhileSpeaking);
   const setMuteWhileSpeaking = useAppStore((s) => s.setMuteWhileSpeaking);
 
@@ -1699,17 +1724,17 @@ export default function SettingsPanel() {
       const rm = localStorage.getItem(LS_RECORDING_MODE);
       if (rm === 'manual' || rm === 'vad') useAppStore.getState().setRecordingMode(rm);
 
-      const vt = localStorage.getItem(LS_VAD_THRESHOLD);
-      if (vt !== null) {
-        const n = parseFloat(vt);
-        if (!isNaN(n) && n >= 1 && n <= 100) useAppStore.getState().setVadThreshold(n);
+      const vp = localStorage.getItem(LS_VAD_POSITIVE);
+      if (vp !== null) {
+        const n = parseFloat(vp);
+        if (!isNaN(n) && n >= 0.1 && n <= 0.9) useAppStore.getState().setVadPositiveThreshold(n);
       }
 
-      const st = localStorage.getItem(LS_SILENCE_TIMEOUT);
-      if (st !== null) {
-        const sec = parseFloat(st);
-        if (!isNaN(sec) && sec >= 0.5 && sec <= 3.0) {
-          useAppStore.getState().setSilenceTimeoutMs(Math.round(sec * 1000));
+      const rd = localStorage.getItem(LS_VAD_REDEMPTION_MS);
+      if (rd !== null) {
+        const ms = parseFloat(rd);
+        if (!isNaN(ms) && ms >= 500 && ms <= 3000) {
+          useAppStore.getState().setVadRedemptionMs(Math.round(ms));
         }
       }
 
@@ -1766,16 +1791,16 @@ export default function SettingsPanel() {
     }
   };
 
-  const onVadThreshold = (v: number) => {
-    const n = Math.round(v);
-    setVadThreshold(n);
-    try { localStorage.setItem(LS_VAD_THRESHOLD, String(n)); } catch {/* ignore */}
+  const onVadPositive = (v: number) => {
+    const n = Math.round(v * 100) / 100;
+    setVadPositive(n);
+    try { localStorage.setItem(LS_VAD_POSITIVE, String(n)); } catch {/* ignore */}
   };
 
-  const onSilenceSeconds = (sec: number) => {
-    const ms = Math.round(sec * 1000);
-    setSilenceTimeoutMs(ms);
-    try { localStorage.setItem(LS_SILENCE_TIMEOUT, sec.toFixed(1)); } catch {/* ignore */}
+  const onVadRedemptionMs = (v: number) => {
+    const n = Math.round(v);
+    setVadRedemption(n);
+    try { localStorage.setItem(LS_VAD_REDEMPTION_MS, String(n)); } catch {/* ignore */}
   };
 
   const onMuteWhileSpeaking = (v: boolean) => {
@@ -1852,22 +1877,22 @@ export default function SettingsPanel() {
           onChange={onRecordingMode}
         />
         <Slider
-          label="语音检测阈值"
-          value={vadThreshold}
-          min={1}
-          max={100}
-          step={1}
-          display={String(vadThreshold)}
-          onChange={onVadThreshold}
+          label="VAD 进入阈值 (positive)"
+          value={vadPositive}
+          min={0.1}
+          max={0.9}
+          step={0.05}
+          display={vadPositive.toFixed(2)}
+          onChange={onVadPositive}
         />
         <Slider
-          label="静音超时"
-          value={silenceTimeoutMs / 1000}
-          min={0.5}
-          max={3.0}
-          step={0.1}
-          display={`${(silenceTimeoutMs / 1000).toFixed(1)} s`}
-          onChange={onSilenceSeconds}
+          label="静音退出等待 (redemption)"
+          value={vadRedemption}
+          min={500}
+          max={3000}
+          step={100}
+          display={`${(vadRedemption / 1000).toFixed(1)} s`}
+          onChange={onVadRedemptionMs}
         />
         <Toggle
           label="Momo 说话时静音麦克风"
