@@ -189,6 +189,17 @@ TTS_CONCURRENCY = 3
 TTS_TIMEOUT_S = 30.0  # INV-11 Stage 1 (2026-05-25): 10s → 30s · GSV CPU 模式 ~50s 会 timeout 早 fallback stub(比 user 静默等 90s 强);GPU 模式 ~5s 6x buffer 充足。per-voice_provider 细分 timeout 留 v4.1。
 _tts_semaphore = asyncio.Semaphore(TTS_CONCURRENCY)
 
+# v3-E1 step 3 (2026-05-19 c1d65ff 误删 · 2026-05-28 patch 恢复):
+# 用户点 Live2D canvas 触发 "touch" 主动对话 ·
+#   - chat_history 里 user content 用占位符 TOUCH_USER_CONTENT 入库(避免空串)
+#   - 系统提示 TOUCH_INSTRUCTION 通过 context.extra_system 注入(由 _build_messages
+#     第 5 段拼到 system prompt)· 让 LLM 自然回应一句符合人设的反应
+TOUCH_USER_CONTENT = "[touch]"
+TOUCH_INSTRUCTION = (
+    "用户刚刚轻轻碰了一下你。请用一两句话自然反应一下，"
+    "符合你当前的人设和情绪。"
+)
+
 
 from typing import Awaitable, Callable
 
