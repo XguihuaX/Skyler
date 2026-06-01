@@ -33,11 +33,11 @@ v4-beta is a **wrap-up phase** — the goal is one character done solidly before
 Fixed and verified on-device this cycle:
 
 - **Mai ja voice restored via GSV mai_v4** (INV-11 Stage 1, 2026-05-26) — the earlier "reverted to Chinese-only" status is superseded. Mai (`cid=1`) now runs on a self-hosted GPT-SoVITS server (`106.75.224.167:9880`) with the `mai_v4` model + 16-emotion bank (LLM emits emotion → server routes to matching ref wav); CosyVoice/Fish remain available per-character. The earlier "LLM alternates `<ja>` tags in real time" path stayed dormant; INV-11 sidestepped that uncertainty by routing the entire Japanese path through GSV server-side (`tts_language=ja` in voice_model JSON), and the F0 post-processing-translation backlog item is now obsolete. See `docs/INV-11-*.md` + Lesson #11 in `docs/LESSONS.md`.
-- **Per-character TTS paradigm shipped** (INV-11 Stage 1.5, 2026-05-26) — 9 characters can each pick provider × model × voice via an inline `VoicePicker` (paradigm B; the original modal was removed). The static registry lives in `backend/config/tts_models.json` (pydantic-validated, fail-fast on schema error, hardcoded fallback when missing). GSV models declare a `mode` field (`trained` shipping for `mai_v4`; `zeroshot` placeholder reserved for future ref-upload). Playbook for adding new models: `docs/adding-new-tts-model.md`.
+- **Per-character TTS paradigm shipped** (INV-11 Stage 1.5, 2026-05-26) — 9 characters can each pick provider × model × voice via an inline `VoicePicker` (paradigm B; the original modal was removed). The static registry lives in `backend/config/tts_models.json` (pydantic-validated, fail-fast on schema error, hardcoded fallback when missing). GSV models declare a `mode` field (`trained` shipping for `mai_v4`; `zeroshot` placeholder reserved for future ref-upload). Playbook for adding new models: `docs/adding-new-tts-model.md`. Text language and speech language are decoupled — subtitles stay Chinese while ja/en speech is routed via `<ja>…</ja>` / `<en>…</en>` tags; see DESIGN_LITE §6.6.5 _语音语言机制_ for the four-layer mechanism.
 - **Memory/conversation cross-talk fixed** — short-term memory upgraded from user-only slicing to **(user, character, conversation)** three-level isolation + conversation-filtered restore on restart. "Switch to Yae but it says it's Mai" and "deleted the conversation, restarted, still remembers old context" are both resolved.
 - **Conversation-anchored binding** — switching character = switch to that character's latest conversation (or create one). **Rule A**: a user-initiated turn locks its conversation at send time; the response is delivered back to the originating conversation unconditionally (not dropped even if you switch away mid-flight). **Rule B**: a system-initiated proactive message snapshots its conversation at trigger time and is validated before delivery; stale ones are dropped. `character_switch` no longer kills the in-flight turn.
 - **Unified chat UI** — the separate top-right "history" entry and the old fading dialogue bubble are both removed; conversation content is served by a single **left-side push/pull chat panel**; left conversation-list + right chat-panel both push/pull, both collapsed = pure-avatar Galgame immersion; window <1280px auto-degrades layout.
-- **Token cost control** — short-term memory hard-capped at the last 30 turns; tool-result injection truncated to 4000 chars. Multi-round tool calls no longer push a single request to tens of thousands of tokens.
+- **Token cost control** — short-term memory hard-capped at the last 25 turns (= 50 messages, `SHORT_TERM_MAX_TURNS=25`); tool-result injection truncated to 4000 chars. Multi-round tool calls no longer push a single request to tens of thousands of tokens.
 
 **Known limitations (listed honestly — this is the roadmap):**
 
@@ -141,7 +141,7 @@ Default LLM is Qwen via DashScope (works in mainland China without VPN). To swit
 
 ## Live2D Asset Management
 
-Skyler ships with Live2D's official sample model **Hiyori** (in `frontend/public/live2d/hiyori/`) so the app works out of the box. To swap in your own character:
+Skyler ships with Live2D's official sample model **Hiyori** (in `frontend/public/live2d/hiyori/`) plus a **Yae demo skin** (in `frontend/public/live2d/yae/`), so the app works out of the box. To swap in your own character:
 
 ```bash
 # Place your model under:
@@ -163,7 +163,7 @@ yarn live2d:probe my-char
 # Expected: [OK] version=3 (Cubism SDK 4.0)
 ```
 
-Cubism 3 and 4 models are both supported. See [docs/live2d-setup.md](docs/live2d-setup.md) for motion map config and emotion binding.
+Only **Cubism 4** is supported in the current pixi-cubism4 runtime (`frontend/src/lib/live2d/runtimes/pixiCubism4.ts`); moc3 version ≥ 5 logs a console.warn and falls back. See [docs/live2d-setup.md](docs/live2d-setup.md) for motion map config and emotion binding.
 
 ---
 
@@ -185,8 +185,8 @@ Here's what Skyler currently does. None of these are locked — every layer is b
 
 > **v4.0.0 update (supersedes the earlier "0 rows / may not be active" audit note)**: the audit is complete. Root cause: fact-only extraction prompt + sparse/casual chat → LLM legitimately returns `[]`; sub-bug: purge didn't reset the extractor pointer. The remediation chain (bounded rolling-summary layer + extractor-pointer self-heal/reconcile + extraction-prompt rebalance + tombstone) is shipped and code-verified against real diffs. Functional/companionship quality is pending real-device regression + friend-test (acceptance gate). The prose below describes the design; see DESIGN §五·补 + §十五之 Z.5.1 for the v4.0.0 closure record.
 
-- **Layer 1 — short-term** — in-process short-term buffer, isolated by **(user, character, conversation)** three levels, last N turns per turn (hard-capped at the last 30 turns for token cost control); on restart, restored from the `chat_history` table **filtered by conversation** (no longer cross-conversation / cross-character bleed)
-- **Layer 2 — long-term facts** — `memory` table, designed main write path is a server-side worker (`MemoryExtractor`, runs every 5 min, 10-stage quality filter, 4-category `entry_type`, 4-state `extraction_source` provenance tag); the `save_memory` tool is the "user explicitly asked to remember" entry; retrieval uses a forgetting-curve score `score = relevance * (1+log(1+ac)) / (1+age*decay)` with threshold gate. **✅ v4.0.0: audit concluded, remediation shipped & code-verified (rolling-summary layer + pointer self-heal + prompt rebalance + tombstone); pending real-device regression — see note above.**
+- **Layer 1 — short-term** — in-process short-term buffer, isolated by **(user, character, conversation)** three levels, last N turns per turn (hard-capped at the last 25 turns = 50 messages, `SHORT_TERM_MAX_TURNS=25` for token cost control); when a conversation exceeds 60 messages (`SHORT_TERM_MAX`) the rolling-summary fold worker engages; on restart, restored from the `chat_history` table **filtered by conversation** (no longer cross-conversation / cross-character bleed)
+- **Layer 2 — long-term facts** — `memory` table, designed main write path is a server-side worker (`MemoryExtractor`, runs every 5 min, 5-stage quality filter [length / `SUSPICIOUS_TAG` / confidence ≥ 0.5 / tombstone / cosine dup], 4-category `entry_type`, 4-state `extraction_source` provenance tag); the `save_memory` tool is the "user explicitly asked to remember" entry; retrieval uses a forgetting-curve score `score = relevance * (1+log(1+ac)) / (1+age*decay)` with threshold gate. **✅ v4.0.0: audit concluded, remediation shipped & code-verified (rolling-summary layer + pointer self-heal + prompt rebalance + tombstone); pending real-device regression — see note above.**
 - **Layer 3 — user profile** — `users.profile_data` JSON schema (`profession` / `current_projects` / `interests` / `recurring_topics` / `communication_style` / `active_hours` / `language_preferences`). A strict validator hard-rejects projection language; daily cron regenerates. The legacy `profile_summary` fallback was retired in commit `c1d65ff` (2026-05-19) — `profile_data` is now the sole source; `users.profile_summary` column remains as an empty placeholder (`[RETIRED]` annotated, not yet DROP COLUMN). **User profile is shared across characters (one impression of you); per-character isolation of event/relationship-type long-term memory (the F8 ownership tiering) is a v4.1 multi-character item.**
 - **Activity timeline** — parallel to `chat_history`: every app/URL session you have (with idle-filtered duration) gets persisted. The character can reference today's activity in conversation ("looks like you spent 3h in VS Code — same project as yesterday?"). 30-day retention by default.
 - **Memory / conversation viewer** — unified into the **left-side push/pull chat panel** (v4-beta UI unification, see below); `entry_type` tab (fact / preference / event / commitment) + `extraction_source` badge + confidence display
@@ -232,7 +232,7 @@ All components use `var(--color-*)` from `styles/themes.css` (no hardcoded Tailw
 `lucide-react` icons across all components.
 
 ### 🔔 Proactive Engagement
-- **Trigger pack** — wake_call / lunch_call / dinner_call / bedtime_chat / long_idle / morning_briefing — Momo reaches out when it matters, not on every poll
+- **Trigger pack** — `lunch_call` / `dinner_call` / `bedtime_chat` / `long_idle` always on; `wake_call` ⇄ `morning_briefing` are mutually exclusive (choose one via `config.proactive.mode`). Momo reaches out when it matters, not on every poll.
 - **Activity-based triggers** — `ide_open` / `music_playing` / `long_focus` / `url_tech_doc` / `late_night_ide` — fast-path classification on context, with a slow-path LLM judge for ambiguous cases (5+ min dwell, multi-gate throttle, daily cap, idle gate so it stops when you walk away)
 - **Invite-conversation pattern** — proactive isn't just push; the trigger can open a short greeting and wait for your response, then route into a regular conversation
 - **Binding guarantee (v4-beta)** — proactive messages follow Rule B: validated against the current conversation before delivery; once you switch away, stale messages are silently dropped and never surface in the wrong character's conversation
@@ -263,7 +263,7 @@ User input (voice / text)
 
   → ASR        faster-whisper (backend) → asr_result pushed to frontend
   → ChatAgent  context assembly + LiteLLM tool calling
-                ├─ short_term: (user, character, conversation) 3-level isolation, cap 30 turns
+                ├─ short_term: (user, character, conversation) 3-level isolation, cap 25 turns (= 50 messages)
                 ├─ memory tools: save / delete / list / compress (LLM-driven)
                 ├─ built-in tools: ToolRegistry (MCP-extensible)
                 ├─ capabilities: @register_capability auto-injects into ToolRegistry
@@ -321,7 +321,7 @@ Activity timeline:
 ## Tech Stack
 
 - **Backend**: Python 3.10 / FastAPI / SQLAlchemy (async) / APScheduler / LiteLLM / faster-whisper / sentence-transformers / pyobjc (macOS-only bits)
-- **Frontend**: Tauri 2 / React 18 / TypeScript / Vite / Tailwind / Zustand / lucide-react / pixi-live2d-display (Cubism 3 + 4)
+- **Frontend**: Tauri 2 / React 18 / TypeScript / Vite / Tailwind / Zustand / lucide-react / pixi-live2d-display (Cubism 4; moc3 ver ≥ 5 falls back with console.warn)
 - **TTS**: 3-provider paradigm (CosyVoice / Fish Audio / GPT-SoVITS self-hosted) per-character, registry in `backend/config/tts_models.json` (pydantic-validated). Edge-TTS legacy fallback. Mai (`cid=1`) currently runs GSV `mai_v4` with 16-emotion bank (ja). Inline VoicePicker UI (paradigm B, auto-save). See `docs/adding-new-tts-model.md`.
 - **ASR**: faster-whisper (local)
 - **LLM**: LiteLLM (Qwen / DeepSeek / OpenAI / Claude / local Ollama — config switchable)
@@ -418,7 +418,7 @@ We list these honestly because the gaps matter. They're also the roadmap.
 
 See [ROADMAP.md](ROADMAP.md) for the full picture (P1 / P2 / P3 / 5070ti-triggered tracks below are the current week's view; INV-11 全段 闭环段 lists shipped stages 0 / -1 / 1 / 1.5).
 
-- **v4.0.0 wrap-up (in progress)**: long-term memory chain audit ✅ (remediation shipped, code-verified; pending real-device regression) → TTS per-user daily char cap + main-chat throttle → Stage3 Tauri packaging / dmg / dogfood / tag
+- **v4.0.0 wrap-up (in progress)**: long-term memory chain audit ✅ (remediation shipped, code-verified; pending real-device regression) → Stage3 Tauri packaging / dmg / dogfood / tag. _TTS per-user daily char cap + main-chat throttle moved out of v4.0 scope, **deferred** until multi-user testing — `tts_call_log` observability is already in place; no enforcement gate yet._
 - **P1 (本周候选)**: Conversation-vs-Character paradigm decision / Proactive 污染 short_term long-term fix / 句子并发 TTS pipeline (chunk 15 复活) / Persona 蒸馏 Mai 三层
 - **P2 (~2 周)**: GSV server GPU 持久化 / ASR whisper preload offline fix / 加新角色 yae_v1 (走完整 json config trained mode flow) / Migration v2 force upgrade (Lesson #11) / UI polish (当前 voice 高亮 / TTS 语言 dropdown 上移 / search box)
 - **P3 (长线)**: INV-12 Stage 3 frontend universal TTS config (Stage 1.5 已 cover 大部分) / Memory v4.1 (20k buffer / RAG fallback / character cognition · 友测后触发) / Phase 3 streaming + H3 fix
@@ -479,6 +479,7 @@ See [ROADMAP.md](ROADMAP.md) for the full picture (P1 / P2 / P3 / 5070ti-trigger
 
 6. **`characters.yaml` vs DB 双源真相**（v3-E1 留 v4 Scheme C 修）
    - 当前 Scheme B（DB 主 + YAML fallback）—— `_build_messages` 优先 DB persona，YAML fallback
+   - **2026-06-01 更新**：yaml 仅含 **5 个内建角色**（八重神子 / 默认 / 荧 / 凝光 / 神里绫华），非 DB 全集；`cid=99/100/101` 等仅 DB seed，不在 yaml
    - 计划 Scheme C（v3-G 末或 v4）：删 yaml、DB 单源、迁移脚本、`prompt_manager` 改 DB-backed
    - **2026-05-19 更新**：原条目含的 `switch_character 改 DB query` 已不再适用 —— `switch_character` LLM tool 在 commit `71b6e99` 已整体下线（schema 不暴露给 LLM；前端切角色走 WS `character_switch` 帧）；该 backlog 性质已从"接线修复"变为"yaml 退役 + prompt_manager 单源化"
 
@@ -614,7 +615,7 @@ Currently **All rights reserved** (no LICENSE file). Will switch to a permissive
 
 ### Live2D model license
 
-During development Skyler ships with the official Live2D sample model **Hiyori** (under `frontend/public/live2d/hiyori/`), illustrated by Kani Biimu. The model is distributed under the **Live2D Free Material License Agreement** — development, learning and small-scale commercial use are permitted; medium-to-large enterprise commercial use requires a separate written license from Live2D Inc.
+During development Skyler ships with the official Live2D sample model **Hiyori** (under `frontend/public/live2d/hiyori/`), illustrated by Kani Biimu, plus a **Yae demo skin** (under `frontend/public/live2d/yae/`) for testing per-character `motion_map_json` rebinding. The Hiyori model is distributed under the **Live2D Free Material License Agreement** — development, learning and small-scale commercial use are permitted; medium-to-large enterprise commercial use requires a separate written license from Live2D Inc. The Yae demo skin carries its own upstream license terms.
 
 A later release will swap Hiyori out for an owned/commissioned model. At that point the bundled model is governed by its own original license, *not* Skyler's eventual project license.
 

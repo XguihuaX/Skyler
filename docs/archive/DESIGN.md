@@ -1,5 +1,8 @@
 # Skyler 技术设计文档 v4-alpha(2026-05)
 
+> ⚠️ 本文档内容定格于 v4-beta 收口(约 2026-05-19)、之后未维护;
+> 2026-06-01 归档,当前状态以 DESIGN_LITE 为准,已知偏离见 docs/reconciliation-4.0.md。
+
 > 本文档是给 Claude Code 使用的开发蓝图。每次开启新会话时,将本文档粘贴进去作为上下文。
 >
 > **改名提示**:项目原名 MomoOS,2026-05 重命名为 **Skyler**。代码内 localStorage key(`momoos.mode` / `momoos.theme` / `momoos.convListCollapsed`)暂未跟改,保留为代码现实;后续做 v4 收尾 commit 时统一重命名 + 加 fallback 读取(旧 key → 新 key),不破坏用户既有状态。

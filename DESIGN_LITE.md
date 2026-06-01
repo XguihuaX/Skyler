@@ -10,7 +10,7 @@
 > - **Bugfix 1-4 系列** shipped 2026-05-13/14(sanitize 加固 / Settings 拆分 / AI Providers 重构 / observability + 小窗修复)
 > - **Persona Engineering Segment 1/2** shipped 2026-05-15(5 层 prompt 框架 + multi-variant + ja tag pipeline)
 > - **v4-beta 收口批次** shipped 并真机验证 2026-05-16(回退纯中文 / short_term 三级隔离 / conversation 锚定绑定语义 / character_switch 不杀 in-flight turn / 对话 UI 统一 / token 成本治理)
-> - 下一站:文档纠真 ✅ → 长期记忆链路 audit ✅(修复链 ship,代码核验,待真机回归)→ TTS cap/throttle → Stage 3 v4.0.0 MVP 封装
+> - 下一站:文档纠真 ✅ → 长期记忆链路 audit ✅(修复链 ship,代码核验,待真机回归)→ Stage 3 v4.0.0 MVP 封装(TTS cap/throttle **移出 v4.0 范围,deferred** 至多人测试再议;当前仅 `tts_call_log` 监控,无强制闸)
 
 > ⚠️ **接管必读(4 个 red flag,新 Claude 先看这个)**:
 > 1. **Mai ja TTS 已活路径 via GSV mai_v4**(2026-05-26 INV-11 Stage 1 ship,**取代** v4-beta "回退纯中文" 旧状态)—— `cid=1` voice_model 切到 `provider=gsv` `model=mai_v4` `tts_language=ja` 完整 schema · GPT-SoVITS 自托管 server(`106.75.224.167:9880`)+ 16 emotion bank LLM 路由 · 人格不动 · 旧 ja 中日交替链(§6.5)仍 deprecated · F0 后处理翻译路径也已 deprecated(因 GSV 直接日语原声达成同目标)。新加 model 走 `backend/config/tts_models.json` + `docs/adding-new-tts-model.md` playbook。
@@ -73,7 +73,7 @@
 
 定位"角色化主动性"但有边界 — 不该每个 poll 都说话(那叫 spam)。
 
-- **Trigger pack**(时间驱动):wake_call / lunch_call / dinner_call / bedtime_chat / long_idle / morning_briefing — 时间窗 + cooldown + daily cap
+- **Trigger pack**(时间驱动):`lunch_call` / `dinner_call` / `bedtime_chat` / `long_idle` 常驻;`wake_call` ⇄ `morning_briefing` 互斥(由 `config.proactive.mode` 选其一) — 时间窗 + cooldown + daily cap
 - **Activity-based**(上下文驱动):ide_open / music_playing / long_focus / late_night_ide — 快路径分类 + LLM 慢路径判官 + idle 闸(人离开电脑闭嘴)
 
 共用 throttle / cooldown / 静默时段闸,daily cap 跨 source 全局有效。
@@ -110,7 +110,7 @@ v3 时代 persona 9 段自由拼装 → 字段语义混乱、跨字段冲突、p
 
   → ASR        faster-whisper(本地)→ asr_result 推送前端
   → ChatAgent  PromptRenderer + LiteLLM tool calling
-                ├─ short_term:(user, character, conversation) 三级隔离,cap 30 turn
+                ├─ short_term:(user, character, conversation) 三级隔离,cap 25 turn (=50 messages,SHORT_TERM_MAX_TURNS=25);conv >60 messages 触发 fold
                 ├─ memory 工具:save / delete / list / compress
                 ├─ 内置工具:ToolRegistry(MCP 可扩)
                 ├─ capabilities:@register_capability auto-injects
@@ -197,7 +197,7 @@ embedding_vector(blob), access_count, last_accessed,
 id, conversation_id, character_id, role, content,
 kind('normal'/'touch'/'proactive'), proactive_trigger, created_at
 ```
-> **v4-beta**:chat_history 是对话存档 + restore 源,**不是记忆本身**。运行时短期记忆 = 进程内 short_term buffer,按 **(user, character, conversation)** 三级隔离,cap 最近 30 turn(token 治理);进程重启从此表**按 conversation 过滤**恢复(`get(conv_id=X)` 严格匹配,不跨对话/跨角色串)。删对话 = 硬删 chat_history + conversations,不动 memory/profile/进程内 short_term。
+> **v4-beta**:chat_history 是对话存档 + restore 源,**不是记忆本身**。运行时短期记忆 = 进程内 short_term buffer,按 **(user, character, conversation)** 三级隔离,cap 最近 25 turn (=50 messages,`SHORT_TERM_MAX_TURNS=25`,代码真值;token 治理);进程重启从此表**按 conversation 过滤**恢复(`get(conv_id=X)` 严格匹配,不跨对话/跨角色串)。删对话 = 硬删 chat_history + conversations,不动 memory/profile/进程内 short_term。
 
 ### conversation_summary(v4.0.0 b91505a 有界滚动摘要层)
 ```
@@ -205,7 +205,7 @@ id, user_id, character_id, conversation_id,
 summary_text, last_folded_chat_history_id, token_budget, updated_at
 UNIQUE(user_id, character_id, conversation_id)
 ```
-> 给每个 (user, character, conversation) 三元组维护一份滚动摘要,worker(`backend/memory/summary.py`)按 `last_folded_chat_history_id` 增量折叠超出 short_term cap 的旧 turn 进 `summary_text`;ChatAgent 注入 prompt 时取最新一行。补 short_term 硬性 cap 30 turn 之外的"中期记忆"层。
+> 给每个 (user, character, conversation) 三元组维护一份滚动摘要,worker(`backend/memory/summary.py`)按 `last_folded_chat_history_id` 增量折叠超出 short_term cap 的旧 turn 进 `summary_text`;ChatAgent 注入 prompt 时取最新一行。补 short_term 硬性 cap 25 turn (=50 messages) 之外的"中期记忆"层。fold 触发门 = 会话 messages > 60(`SHORT_TERM_MAX`,见 `summary.py:333-345`),未达阈值的 conv 会有 placeholder 空行(`summary_text=''`)属预期。
 
 ### activity_sessions(v3.5 chunk 14)
 ```
@@ -265,7 +265,7 @@ async def my_skill(...): ...
 见 §6
 
 ### 5.4 Proactive Engine
-- 5 trigger pack:wake_call / lunch_call / dinner_call / bedtime_chat / long_idle / morning_briefing
+- Trigger pack(确切清单):`lunch_call` / `dinner_call` / `bedtime_chat` / `long_idle` 常驻;`wake_call` ⇄ `morning_briefing` 互斥(由 `config.proactive.mode` 选其一)
 - Activity-based 4 trigger:ide_open / music_playing / long_focus / late_night_ide
 - Slow path:qwen-turbo judge(stay 5+ min,模糊场景)
 - 4 道闸:min_stay + judge_throttle + fire_throttle + daily_cap
@@ -506,7 +506,7 @@ payload = {"ids": json.dumps([sid]), "level": _BR_TO_LEVEL[br], "encodeType": "f
 - **short_term 三级隔离**:per-(user, character, conversation),`get(conv_id=X)` 严格匹配;桶仍按 (user,char) 不破 path-7;5 处调用透传 conv_id(ws / chat / proactive / main restore)。
 - **前端守卫**:chunks 附 conv_id snapshot;`useWebSocket` stale-conv 守卫(`msg.conversation_id !== currentConversationId` → drop);emotion/motion/state_update **不**附 conv_id(角色级跨 conv 适用)。
 
-关键路径:`backend/memory/short_term.py`(三级过滤+cap30 trim,勿退)/ `backend/routes/ws.py`(:1320 character_switch 分支 + 绑定快照)/ `backend/proactive/engine.py` + `activity_smart.py`(规则 B late-gate 读 get_current)/ `backend/main.py`(restore character+conv filter)/ `backend/agents/chat.py`(_build_messages 透传 conv_id)。
+关键路径:`backend/memory/short_term.py`(三级过滤+cap25 trim,代码真值 `SHORT_TERM_MAX_TURNS=25`,勿退)/ `backend/routes/ws.py`(:1320 character_switch 分支 + 绑定快照)/ `backend/proactive/engine.py` + `activity_smart.py`(规则 B late-gate 读 get_current)/ `backend/main.py`(restore character+conv filter)/ `backend/agents/chat.py`(_build_messages 透传 conv_id)。
 
 ### 5.10 对话 UI 统一(v4-beta 收口)
 
@@ -588,6 +588,24 @@ character_personas (character_id=1, variant='default'):
 
 > **v4-beta known limitation**:`cid=1`=Mai 是**唯一**完整 persona。其他角色(`cid` 2/3/4/5/99/100,八重等)是**空骨架**(只名字 + Live2D 绑定),切过去人格空洞。v4.1 F1 仿本 spec(`docs/mai_prompt.md`)逐个灌真 persona。v4.0.0/v4-beta 主推 Mai 单角色。
 
+### 6.6.5 语音语言机制(文本恒中文 / 语音可切)
+
+文本语言与语音语言**解耦**,三层 + 字幕层:
+
+1. **存储层**:`characters.voice_model` 的 `tts_language` ∈ `{zh, ja, en}`,唯一真源。
+2. **Prompt 层**(`backend/agents/prompt/templates/layer_a.j2`):按 `tts_language` 切模板 —— ja 要求 LLM 把每个意群包进 `<ja>「…」</ja>` 独立 tag(一 tag = 一次 TTS);en 用 `<en>"…"</en>`;zh 不写双语指令。
+3. **TTS 提取层**(`backend/utils/text_filters.extract_tts_text`):ja/en 抽对应 tag 内文本送合成(无 tag 走 fallback `「」` / 假名 regex,半截未闭合则 skip 该句);zh 反向 —— 剥掉所有 `<ja>/<en>` tag,只把中文送中文 TTS。
+4. **字幕 / 历史层**(`strip_ja_en_tags_for_subtitle` + 写库 strip):始终剥成纯中文入库与显示。
+
+→ **ja 模式下用户看到中文字幕、听到日语语音**,即为此机制。
+
+**当前角色语音**:
+- `cid=1`(Mai/Momo):`gsv` / `mai_v4` / `ja`(自训 GPT-SoVITS,2026-05-26 INV-11 Stage 1 ship)
+- `cid=101`(樱岛麻衣):`fish` / `s2-pro` / `ja`(Fish 零样本参考音频)
+- 二者为同一角色 Mai 在两套引擎上的并行验证(GSV 自训 vs Fish 零样本)。
+
+> 历史 `v4_0_0_mai_revert_zh` migration 的 hotfix scope(`provider IN (NULL,'cosyvoice')`)只在 cid=1 仍是 cosyvoice 体系时把 voice/tts_language nudge 回 zh + longyumi_v3;切到 gsv/fish/edge/sovits 后短路不动,故现 cid=1 稳定为 gsv/ja。详 §技术债 mai_revert_zh 条目。
+
 ### 6.7 Mode 走 deterministic(v1)
 ```python
 PROACTIVE_ORIGINS = {'cron', 'activity_smart', 'wake_call', 
@@ -642,8 +660,8 @@ GET /api/observability/system/resources         — psutil RAM/CPU/Whisper/netwo
 - ⚙ 设置 / 系统状态 section(3s 自动刷新)
 
 ### 7.5 v4.1 加固
-- TTS daily char cap per-user enforcement(ship 前必加,防 100+ 用户烧爆)
-- main chat per-minute throttle
+- TTS daily char cap per-user enforcement(**deferred · 移出 v4.0 范围,多人测试再议**;当前仅 `tts_call_log` 埋点监控,无强制闸 — 单人 dogfood 烧量可控)
+- main chat per-minute throttle(同上 deferred)
 - UI token 用量 daily display
 - 推送延迟 metric(audio_consumer perf_counter)
 
@@ -654,8 +672,8 @@ GET /api/observability/system/resources         — psutil RAM/CPU/Whisper/netwo
 ### 🔴 v4.0.0 critical(ship 前必处理,按序)
 1. ✅ **文档纠真**(本批次完成;DESIGN.md 大整合立项留待表层重构 pass)
 2. ✅ **长期记忆链路 audit + 修复链** —— audit 完结(根因=fact-only prompt + 闲聊→合法 [];子 bug=purge 不重置指针),修复链已 ship 且代码核验;**陪伴质量待真机回归(验收门)**。详 §4 更新 + DESIGN §十五之 Z.5.1
-3. TTS daily char cap per-user enforcement(防 dogfood 烧爆)
-4. main chat per-minute throttle
+3. ~~TTS daily char cap per-user enforcement~~ → **deferred 出 v4.0,多人测试再议**;当前 `tts_call_log` 监控,无强制闸
+4. ~~main chat per-minute throttle~~ → **deferred** 同上
 
 ### 中(v4.1)
 5. F0 ja 后处理翻译重做(LLM出中文→qwen-turbo翻日→cosyvoice;含 proactive ja 路径 e2e)
@@ -671,7 +689,7 @@ GET /api/observability/system/resources         — psutil RAM/CPU/Whisper/netwo
 12. _TOOL_PROMPT_ADDENDUM 重构
 13. character_states 12 孤儿 cleanup + FK
 14. id=101 樱岛麻衣冗余 row cleanup
-15. characters.yaml vs DB:当前 Plan B(DB 主源 + YAML fallback);Plan C(删 yaml DB 单源)deferred
+15. characters.yaml vs DB:当前 Plan B(DB 主源 + YAML fallback);yaml 仅含 5 个内建角色(八重神子 / 默认 / 荧 / 凝光 / 神里绫华),非 DB 全集 — `cid=99/100/101` 等不在 yaml,仅 DB seed;Plan C(删 yaml DB 单源)deferred
 16. config.yaml 双写源拆分
 17. MCP 凭证升级 OS keyring
 18. LLM 慢(qwen3.6-plus + 网络;绑定锁死后纯性能问题,独立优化不混功能修复)
@@ -687,7 +705,7 @@ GET /api/observability/system/resources         — psutil RAM/CPU/Whisper/netwo
 |---|---|---|
 | Stage 0 | **文档纠真**(DESIGN / DESIGN_LITE / ROADMAP / README ×2 对齐 v4.0.0 + §5.8 入册)→ 落地 repo | ✅ 完成 |
 | Stage 1 | **长期记忆链路 audit + 修复链** —— audit 完结 + 修复链 ship(代码核验)| ✅ ship,待真机回归 |
-| Stage 2 | TTS daily char cap per-user + main chat throttle(防烧) | 0.5d |
+| ~~Stage 2~~ | ~~TTS daily char cap per-user + main chat throttle(防烧)~~ → **deferred 出 v4.0,多人测试再议;当前仅 `tts_call_log` 监控,无强制闸** | — |
 | Stage 3a | Tauri build 验证 | 0.5-1d |
 | Stage 3b | .dmg + tauri-updater + onboarding | 2-3d |
 | Stage 3c | 5+ scenario 真机走查 | 1d |
@@ -726,7 +744,7 @@ AI Providers:
   backend/routes/ai_providers_api.py
 
 v4-beta 收口核心(绑定/记忆,改前必读 §5.9):
-  backend/memory/short_term.py            — per-(user,char,conv) 过滤 + cap30 trim(勿退)
+  backend/memory/short_term.py            — per-(user,char,conv) 过滤 + cap25 trim(代码真值 `SHORT_TERM_MAX_TURNS=25` / `SHORT_TERM_MAX=50` messages,勿退)
   backend/routes/ws.py                    — :1320 character_switch 分支 + 绑定快照(:582 NameError 已修)
   backend/proactive/engine.py
   backend/proactive/activity_smart.py     — 规则 B late-gate 读 get_current
