@@ -170,6 +170,33 @@ mcp_clients:
     args:
     - '@modelcontextprotocol/server-filesystem'
     - /Users/liujunhong/Desktop/MomoOS-v2
+  everything:
+    description: MCP 官方 demo server · 覆盖全部 MCP 特性(prompt/resource/tool/sampling)· 冒烟测试首选
+    transport: stdio
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-everything'
+    enabled: true
+    expose_via_skyler_server: false
+  filesystem-test:
+    description: 沙箱文件读写测试 · 路径 ~/Desktop/skyler-mcp-test(需 PM 先 mkdir)· 跟 filesystem-skyler(MomoOS-v2 repo 只读)区分作用域
+    transport: stdio
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-filesystem'
+    - ${HOME}/Desktop/skyler-mcp-test
+    enabled: true
+    expose_via_skyler_server: false
+  fetch:
+    description: 抓网页转 markdown · Python 实现 · uvx 自动拉 mcp-server-fetch
+    transport: stdio
+    command: uvx
+    args:
+    - mcp-server-fetch
+    enabled: true
+    expose_via_skyler_server: false
 activity_watcher:
   enabled: true
   poll_interval_seconds: 30

@@ -10,6 +10,9 @@ export interface MCPToolStatus {
   name: string;
   description: string;
   enabled: boolean;
+  // 2026-06-02 · MCP server 自带的 JSON Schema · 给试调框派生骨架预填用。
+  // 缺失 / server 不暴露 → null;前端 skeletonFromSchema 退化成 {}。
+  input_schema: Record<string, unknown> | null;
 }
 
 export interface MCPClientStatus {
@@ -240,6 +243,87 @@ export async function deleteMCPServer(
     throw err;
   }
   return (await res.json()) as MCPClientDeleteResponse;
+}
+
+// ---------------------------------------------------------------------------
+// 2026-06-02 · A. Reconnect + B. Invoke (UI 试调)
+// 与 backend/routes/mcp_api.py 的 ReconnectResponse / InvokeToolBody /
+// InvokeToolResponse 一一对应 · schema drift 时 tsc build 立即失败。
+// ---------------------------------------------------------------------------
+
+export interface MCPReconnectResponse {
+  status: string;
+  detail: string | null;
+}
+
+/** POST /api/mcp/clients/{name}/reconnect — 手动重连(先 disconnect 再 connect)。
+ *
+ * 后端响应不带新 status field —— 调用方拿到 ok 后应再走一次 fetchMCPClients()
+ * 刷新该卡的 connected / tool_count / last_error。
+ *
+ * Errors:
+ *  - 404 name 不存在
+ *  - 500 连接失败(handle.last_error 已在服务端写入 · refresh 后红字会显示)
+ */
+export async function reconnectMCPClient(
+  name: string,
+): Promise<MCPReconnectResponse> {
+  const res = await fetch(
+    `${BACKEND_BASE}/api/mcp/clients/${encodeURIComponent(name)}/reconnect`,
+    { method: 'POST' },
+  );
+  if (!res.ok) {
+    let msg = `reconnect failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) msg = String(j.detail);
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return (await res.json()) as MCPReconnectResponse;
+}
+
+export interface MCPInvokeToolResponse {
+  isError: boolean;
+  text: string | null;
+  content: unknown[] | null;
+  error_message: string | null;
+}
+
+/** POST /api/mcp/clients/{name}/tools/{tool_name}/invoke — UI 试调。
+ *
+ * **真实执行** · 有副作用的 tool 会真发生 · 调用方必须先在 UI 显示警告。
+ *
+ * 后端契约:
+ *  - 404 = capability 没注册(server 断了 / tool 被关 / 拼写错) —— throw new Error
+ *  - 200 + isError=false + text 或 content —— tool 调通,正常结果
+ *  - 200 + isError=true + (text/content 自报错 或 error_message handler 异常)
+ *    —— 不 throw,让前端展示报错而非走 catch 路径
+ */
+export async function invokeMCPTool(
+  serverName: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<MCPInvokeToolResponse> {
+  const res = await fetch(
+    `${BACKEND_BASE}/api/mcp/clients/${encodeURIComponent(serverName)}` +
+      `/tools/${encodeURIComponent(toolName)}/invoke`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ arguments: args }),
+    },
+  );
+  if (!res.ok) {
+    // 404 / 422 / 5xx 走 throw · 调用方在 catch 里显示 toast
+    let msg = `invoke failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) msg = String(j.detail);
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return (await res.json()) as MCPInvokeToolResponse;
 }
 
 /** 提取 env 字符串值里 ``${VAR_NAME}`` 占位符的变量名列表(去重 + 顺序保留)。

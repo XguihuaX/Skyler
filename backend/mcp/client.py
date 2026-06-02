@@ -183,6 +183,9 @@ async def _connect_one(handle: _ClientHandle) -> None:
                 "name": tool.name,
                 "description": getattr(tool, "description", "") or "",
                 "enabled": t_enabled,
+                # 2026-06-02 · UI 试调骨架预填用 · 原样透传 MCP server 给的
+                # JSON Schema(同 _capability_from_external_tool:277)· 缺失 → None
+                "input_schema": getattr(tool, "inputSchema", None) or None,
             })
             if not t_enabled:
                 # 用户在 UI 把这条单独关了 —— 不注册到 CapabilityRegistry，

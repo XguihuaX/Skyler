@@ -16,6 +16,8 @@ import {
   ChevronDown,
   ChevronRight,
   RefreshCw,
+  RotateCw,
+  Play,
   XCircle,
   AlertCircle,
   Key,
@@ -26,12 +28,15 @@ import {
   deleteMCPServer,
   fetchMCPClients,
   fetchMCPCredentials,
+  invokeMCPTool,
+  reconnectMCPClient,
   setMCPClientEnabled,
   setMCPCredentials,
   setMCPToolEnabled,
   type MCPClientCreatePayload,
   type MCPClientCreateResponse,
   type MCPClientStatus,
+  type MCPInvokeToolResponse,
   type MCPToolStatus,
 } from '../lib/mcp_clients';
 import AddMCPServerForm from './extensions/AddMCPServerForm';
@@ -53,6 +58,8 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
   const [showAddForm, setShowAddForm] = useState(false);
   const [deleteConfirmFor, setDeleteConfirmFor] = useState<MCPClientStatus | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  // 2026-06-02 · A. reconnect 进行中 server name (防重复点)
+  const [reconnecting, setReconnecting] = useState<string | null>(null);
 
   const toggleExpand = (name: string) => {
     setExpanded((prev) => {
@@ -121,6 +128,21 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
       await refresh();
     } finally {
       setToolToggling(null);
+    }
+  };
+
+  // 2026-06-02 · A. 手动重连。失败也 refresh —— 让 server-side last_error 红字显示。
+  const onReconnect = async (c: MCPClientStatus) => {
+    setReconnecting(c.name);
+    try {
+      await reconnectMCPClient(c.name);
+      showToast(`${c.name} 已重连`);
+      await refresh();
+    } catch (e) {
+      showToast(`${c.name} 重连失败：${(e as Error).message}`);
+      await refresh();
+    } finally {
+      setReconnecting(null);
     }
   };
 
@@ -226,6 +248,8 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
             toolToggling={toolToggling}
             onDelete={() => setDeleteConfirmFor(c)}
             deleteDisabled={deleting === c.name}
+            onReconnect={() => void onReconnect(c)}
+            reconnecting={reconnecting === c.name}
           />
         ))}
         <div className="flex justify-between items-center pt-1">
@@ -328,6 +352,9 @@ interface ClientRowProps {
   // Stage 2.1.2:
   onDelete: () => void;
   deleteDisabled: boolean;
+  // 2026-06-02 · A. reconnect
+  onReconnect: () => void;
+  reconnecting: boolean;
 }
 
 function ClientRow({
@@ -341,6 +368,8 @@ function ClientRow({
   toolToggling,
   onDelete,
   deleteDisabled,
+  onReconnect,
+  reconnecting,
 }: ClientRowProps) {
   const missing = client.missing_credentials.length > 0;
   const status = badgeFor(client);
@@ -440,6 +469,26 @@ function ClientRow({
             >
               <Key size={10} />
               配置凭证
+            </button>
+          )}
+          {/* 2026-06-02 · A. reconnect 按钮:enabled 时显示(disabled 状态走 enable
+              toggle 自动 connect,这里没意义)。健康 server 上点也无害——就 bounce
+              一下;失败时 last_error 红字会出。 */}
+          {client.enabled && (
+            <button
+              type="button"
+              onClick={onReconnect}
+              disabled={reconnecting}
+              className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+              style={{
+                background: 'var(--color-bg-elevated)',
+                color: 'var(--color-text-primary)',
+                border: '1px solid var(--color-border)',
+              }}
+              title="先 disconnect 再 connect · 用于改了 config / server 挂了 / last_error 复位"
+            >
+              <RotateCw size={10} className={reconnecting ? 'animate-spin' : ''} />
+              重连
             </button>
           )}
           {/* Stage 2.1.2: 删除按钮(in-flight tool call 由 backend disable 路径
@@ -546,37 +595,374 @@ function ToolRow({
 }) {
   // UX-001：server 关时 tool 行展示但 toggle 禁用 + "随 server 关" 提示
   const dimmed = !server.enabled;
+  // 2026-06-02 · B. 试调 UI 内嵌折叠,默认 closed
+  const [showInvoker, setShowInvoker] = useState(false);
+  // 2026-06-02 · 用 inputSchema 派生骨架预填(简化版:不渲染参数表,只填 JSON)
+  // useState 工厂只 mount 时跑一次;后续用户改了 jsonInput 不会被覆盖
+  const [jsonInput, setJsonInput] = useState(() => {
+    const skel = skeletonFromSchema(tool.input_schema);
+    try {
+      return JSON.stringify(skel, null, 2);
+    } catch {
+      return '{}';
+    }
+  });
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  // 参数提示一行(``a* (number), b (number)`` · ``*`` 必填)· 无参数返 "无参数"
+  const paramHint = formatParameterHint(tool.input_schema);
+  const [invoking, setInvoking] = useState(false);
+  const [result, setResult] = useState<MCPInvokeToolResponse | null>(null);
+  const [invokeError, setInvokeError] = useState<string | null>(null);
+
+  // 试调按钮仅 server.enabled && tool.enabled 显示 · disabled tool 不应可调
+  const canInvoke = server.enabled && tool.enabled;
+
+  const runInvoke = async () => {
+    let parsed: Record<string, unknown>;
+    try {
+      const raw = jsonInput.trim() || '{}';
+      const obj = JSON.parse(raw) as unknown;
+      if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+        setJsonError('arguments 必须是 JSON object · 不能是 array / 标量');
+        return;
+      }
+      parsed = obj as Record<string, unknown>;
+    } catch (e) {
+      setJsonError(`JSON 解析失败:${(e as Error).message}`);
+      return;
+    }
+    setJsonError(null);
+    setInvoking(true);
+    setResult(null);
+    setInvokeError(null);
+    try {
+      const r = await invokeMCPTool(server.name, tool.name, parsed);
+      setResult(r);
+    } catch (e) {
+      // 404 / 422 / 5xx · tool 自报错的 200+isError 不进这里
+      setInvokeError((e as Error).message);
+    } finally {
+      setInvoking(false);
+    }
+  };
+
   return (
-    <div
-      className="flex items-center justify-between py-1"
-    >
-      <div className="min-w-0 pr-2">
+    <div className="py-1">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0 pr-2 flex-1">
+          <div
+            className="text-xs font-mono truncate"
+            style={{
+              color: dimmed
+                ? 'var(--color-text-secondary)'
+                : 'var(--color-text-primary)',
+            }}
+          >
+            {tool.name}
+          </div>
+          {tool.description && (
+            <div
+              className="text-[10px] truncate"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
+              {tool.description}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {canInvoke && (
+            <button
+              type="button"
+              onClick={() => setShowInvoker((s) => !s)}
+              className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80"
+              style={{
+                background: 'var(--color-bg-elevated)',
+                color: 'var(--color-text-primary)',
+                border: '1px solid var(--color-border)',
+              }}
+              title="试调 — 真实执行该 tool · 有副作用会真发生"
+            >
+              <Play size={9} />
+              试调
+            </button>
+          )}
+          <ToggleSmall
+            value={tool.enabled && server.enabled}
+            disabled={disabled}
+            onChange={onChange}
+          />
+        </div>
+      </div>
+      {showInvoker && canInvoke && (
         <div
-          className="text-xs font-mono truncate"
+          className="mt-1.5 ml-1 p-2 rounded"
           style={{
-            color: dimmed
-              ? 'var(--color-text-secondary)'
-              : 'var(--color-text-primary)',
+            background: 'color-mix(in srgb, var(--color-bg-elevated) 60%, transparent)',
+            border: '1px solid var(--color-border)',
           }}
         >
-          {tool.name}
-        </div>
-        {tool.description && (
+          {/* 工具描述 · 一句话灰字 · description 缺失则不渲染 */}
+          {tool.description && (
+            <div
+              className="text-[10px] mb-1"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
+              {tool.description}
+            </div>
+          )}
+          {/* 参数提示一行 · ``name* (type)`` · ``*`` 必填 · 无参数显示"无参数" */}
           <div
-            className="text-[10px] truncate"
+            className="text-[10px] font-mono mb-1 break-all"
             style={{ color: 'var(--color-text-secondary)' }}
           >
-            {tool.description}
+            参数:{paramHint}
           </div>
-        )}
-      </div>
-      <ToggleSmall
-        value={tool.enabled && server.enabled}
-        disabled={disabled}
-        onChange={onChange}
-      />
+          <div
+            className="text-[10px] mb-0.5"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            arguments (JSON object):
+          </div>
+          <textarea
+            value={jsonInput}
+            onChange={(e) => {
+              setJsonInput(e.target.value);
+              setJsonError(null);
+            }}
+            disabled={invoking}
+            rows={3}
+            spellCheck={false}
+            className="w-full text-[11px] font-mono p-1.5 rounded outline-none focus:ring-1 disabled:opacity-50"
+            style={{
+              background: 'var(--color-bg-input)',
+              color: 'var(--color-text-primary)',
+              border: '1px solid var(--color-border)',
+            }}
+            placeholder='{"a": 17, "b": 25}'
+          />
+          {jsonError && (
+            <div
+              className="text-[10px] mt-1"
+              style={{ color: 'rgb(244, 63, 94)' }}
+            >
+              {jsonError}
+            </div>
+          )}
+          <div className="flex justify-end mt-1.5">
+            <button
+              type="button"
+              onClick={() => void runInvoke()}
+              disabled={invoking}
+              className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+              style={{
+                background: 'var(--color-accent)',
+                color: 'var(--color-bubble-user-text)',
+              }}
+            >
+              {invoking ? '调用中…' : '调用'}
+            </button>
+          </div>
+          {(result || invokeError) && (
+            <div
+              className="mt-2 pt-2"
+              style={{ borderTop: '1px dashed var(--color-border)' }}
+            >
+              {invokeError && (
+                <div
+                  className="text-[10px]"
+                  style={{ color: 'rgb(244, 63, 94)' }}
+                >
+                  HTTP 错误:{invokeError}
+                </div>
+              )}
+              {result && (
+                <InvokeResultDisplay result={result} />
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+
+// 试调结果展示 · 防御性 stringify 非文本块 (image/audio/resource) · v1 丑无所谓不崩。
+function InvokeResultDisplay({ result }: { result: MCPInvokeToolResponse }) {
+  const hasAnyContent =
+    result.text !== null ||
+    result.content !== null ||
+    result.error_message !== null;
+  return (
+    <div className="space-y-1">
+      <div
+        className="text-[10px] font-mono"
+        style={{
+          color: result.isError
+            ? 'rgb(244, 63, 94)'
+            : 'var(--color-text-accent)',
+        }}
+      >
+        {result.isError ? '❌ isError: true' : '✅ isError: false'}
+      </div>
+      {result.error_message && (
+        <pre
+          className="text-[10px] font-mono p-1.5 rounded overflow-x-auto whitespace-pre-wrap"
+          style={{
+            background: 'var(--color-bg-input)',
+            color: 'rgb(244, 63, 94)',
+            border: '1px solid var(--color-border)',
+          }}
+        >
+          handler 异常:{result.error_message}
+        </pre>
+      )}
+      {result.text !== null && (
+        <pre
+          className="text-[11px] font-mono p-1.5 rounded overflow-x-auto whitespace-pre-wrap"
+          style={{
+            background: 'var(--color-bg-input)',
+            color: 'var(--color-text-primary)',
+            border: '1px solid var(--color-border)',
+          }}
+        >
+          {result.text}
+        </pre>
+      )}
+      {result.content !== null && (
+        <pre
+          className="text-[11px] font-mono p-1.5 rounded overflow-x-auto whitespace-pre-wrap"
+          style={{
+            background: 'var(--color-bg-input)',
+            color: 'var(--color-text-primary)',
+            border: '1px solid var(--color-border)',
+          }}
+        >
+          {safeStringify(result.content)}
+        </pre>
+      )}
+      {!hasAnyContent && (
+        <div
+          className="text-[10px]"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          (空返回)
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 防御性 stringify · 非文本块 (image/audio/resource) JSON 序列化失败也不能崩。
+function safeStringify(content: unknown): string {
+  try {
+    return JSON.stringify(content, null, 2);
+  } catch (e) {
+    return `[unstringifiable ${(e as Error).message}] ${String(content)}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2026-06-02 · 由 MCP inputSchema 派生 JSON 骨架预填(简化版)
+//
+// 派生规则(逐属性):
+//   1. property 带 ``default`` → 用 default
+//   2. property 带 ``examples`` 数组非空 → 用 examples[0]
+//   3. property 带 ``enum`` 数组非空 → 用 enum[0]
+//   4. 按 ``type`` 占位:
+//      - number / integer → 0
+//      - boolean → false
+//      - string → ""
+//      - array → []
+//      - object → 递归 skeletonFromSchema
+//      - 未知 / 缺 type → null
+//
+// 防御:
+//   - schema 不是 dict / properties 缺失 / 任何异常 → 退化 {}
+//   - $ref / allOf / oneOf 等不解,递归遇到这种属性也按 default/examples/enum
+//     的优先级走;type 缺失则 null,**不崩**
+//   - 结果必须是合法 JSON(JSON.stringify 不抛)
+// ---------------------------------------------------------------------------
+
+function skeletonFromSchema(schema: unknown): Record<string, unknown> {
+  try {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+      return {};
+    }
+    const s = schema as Record<string, unknown>;
+    const props = s.properties;
+    if (!props || typeof props !== 'object' || Array.isArray(props)) {
+      return {};
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, propSchema] of Object.entries(props as Record<string, unknown>)) {
+      out[key] = placeholderForProperty(propSchema);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function placeholderForProperty(propSchema: unknown): unknown {
+  if (!propSchema || typeof propSchema !== 'object' || Array.isArray(propSchema)) {
+    return null;
+  }
+  const p = propSchema as Record<string, unknown>;
+  // 优先级 1:default
+  if ('default' in p) return p.default;
+  // 优先级 2:examples[0]
+  if (Array.isArray(p.examples) && p.examples.length > 0) return p.examples[0];
+  // 优先级 3:enum[0]
+  if (Array.isArray(p.enum) && p.enum.length > 0) return p.enum[0];
+  // 优先级 4:按 type 占位
+  const type = typeof p.type === 'string' ? p.type : null;
+  switch (type) {
+    case 'number':
+    case 'integer':
+      return 0;
+    case 'boolean':
+      return false;
+    case 'array':
+      return [];
+    case 'object':
+      return skeletonFromSchema(p);
+    case 'string':
+      return '';
+    default:
+      return null;
+  }
+}
+
+// 参数提示一行 · 永远显示(没参数返 "无参数"),太长 CSS truncate / wrap。
+// 格式:``a* (number), b (number)`` —— 星号 ``*`` 标必填(由 schema.required 决定)。
+// schema 异常 / properties 不是 object → 返 "无参数"(等价于"无可派生参数"),
+// 与 skeletonFromSchema 退化 ``{}`` 语义对齐。
+function formatParameterHint(schema: unknown): string {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return '无参数';
+  const s = schema as Record<string, unknown>;
+  const props = s.properties;
+  if (!props || typeof props !== 'object' || Array.isArray(props)) return '无参数';
+  const entries = Object.entries(props as Record<string, unknown>);
+  if (entries.length === 0) return '无参数';
+  // required 是顶层 array of property names(JSON Schema 标准)。
+  const requiredRaw = s.required;
+  const requiredSet = new Set<string>(
+    Array.isArray(requiredRaw)
+      ? requiredRaw.filter((x): x is string => typeof x === 'string')
+      : [],
+  );
+  const parts: string[] = [];
+  for (const [key, propSchema] of entries) {
+    let type = 'any';
+    if (propSchema && typeof propSchema === 'object' && !Array.isArray(propSchema)) {
+      const t = (propSchema as Record<string, unknown>).type;
+      if (typeof t === 'string') type = t;
+    }
+    const mark = requiredSet.has(key) ? '*' : '';
+    parts.push(`${key}${mark} (${type})`);
+  }
+  return parts.join(', ');
 }
 
 

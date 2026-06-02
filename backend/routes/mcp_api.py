@@ -11,7 +11,7 @@ from __future__ import annotations
 import hmac
 import logging
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -56,6 +56,10 @@ class MCPToolItem(BaseModel):
     name: str
     description: str = ""
     enabled: bool
+    # 2026-06-02 · 原样透传 MCP server 的 inputSchema(JSON Schema dict)·
+    # 前端试调框用其派生 JSON 骨架预填(default > examples[0] > enum[0] > type)。
+    # 缺失 / server 不暴露 → null;前端骨架退化为 {}。
+    input_schema: Optional[dict[str, Any]] = None
 
 
 class MCPClientStatusItem(BaseModel):
@@ -503,6 +507,92 @@ async def set_tool_enabled(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return ToolEnabledResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-02 · UI tool 试调入口
+#
+# 复用 ChatAgent 同一条调用路径:`ext.<server>.<tool>` capability 的 handler
+# (定义在 backend/mcp/client.py:_make_handler · 内部走 ClientSession.call_tool)。
+# 不重写调用逻辑,不直接拿 _clients[name].session,避免与 ChatAgent 路径偏离。
+#
+# 错误码语义(与 enable/credentials/tool toggle 不同):
+#   - 404 = capability 没在 CapabilityRegistry 里(server 断了 / tool 被关了 /
+#          name 拼写错)。这是结构性问题,值得 HTTP 错误。
+#   - 200 + isError=true = tool 自己报错(MCP 协议 layer)。
+#   - 200 + error_message = capability handler 抛 Python 异常(serializable
+#          错误 + 服务端 logger.exception 全栈留底,UI 友好 ≠ 日志静默)。
+#   - **不**返 500:试调语义是"让用户看到 tool 报了啥",HTTP 500 会把 detail
+#          吞进 .ok=false 让 UI 解析更绕。
+# ---------------------------------------------------------------------------
+
+
+class InvokeToolBody(BaseModel):
+    # MCP tool 参数 schema 任意 · 用裸 dict 保持类型 (query string 会丢类型)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class InvokeToolResponse(BaseModel):
+    isError: bool
+    # _make_handler 简化结果:单 text 块 → text;多块 / 非 text → content list。
+    # 两者互斥 · null 表示该形态没命中。
+    text: Optional[str] = None
+    content: Optional[list[Any]] = None
+    # capability handler 抛 Python 异常时填(isError 也会 True)
+    error_message: Optional[str] = None
+
+
+@router.post(
+    "/mcp/clients/{name}/tools/{tool_name}/invoke",
+    response_model=InvokeToolResponse,
+)
+async def invoke_tool(
+    name: str, tool_name: str, body: InvokeToolBody,
+) -> InvokeToolResponse:
+    """UI 试调单个 MCP tool · 真实执行 · 有副作用的 tool(写文件 / 发消息)会
+    真发生 · 前端 UI 必须显示警告。
+
+    Errors:
+      * 404 — ext.<server>.<tool> capability 未注册
+        (server 未连接 / tool 被 toggle off / 拼写错)
+      * 200 + isError=true + (text|content) — tool 自报错(MCP 协议层)
+      * 200 + isError=true + error_message — capability handler 抛 Python 异常
+        (服务端 logger.exception 记全栈)
+    """
+    from backend.capabilities import CapabilityRegistry
+
+    cap_name = f"ext.{name}.{tool_name}"
+    cap = CapabilityRegistry().get(cap_name)
+    if cap is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"capability {cap_name!r} not registered "
+                "(server disconnected or tool disabled?)"
+            ),
+        )
+
+    try:
+        result = await cap.handler(**body.arguments)
+    except Exception as exc:
+        # UI 友好返 200 + error_message · 但服务端日志必须留全栈
+        # (不让真正的 Python crash 在日志里也消失)
+        logger.exception(
+            "[mcp.invoke] capability %s raised: %s", cap_name, exc,
+        )
+        return InvokeToolResponse(
+            isError=True, error_message=f"{type(exc).__name__}: {exc}",
+        )
+
+    # _make_handler 返 dict {isError, text} 或 {isError, content}。
+    # 防御:未来 capability handler 形态变化 → 强制 stringify。
+    if isinstance(result, dict):
+        return InvokeToolResponse(
+            isError=bool(result.get("isError", False)),
+            text=result.get("text"),
+            content=result.get("content"),
+        )
+    return InvokeToolResponse(isError=False, text=str(result))
 
 
 @router.get("/mcp/server/status", response_model=MCPServerStatus)
