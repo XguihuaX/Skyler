@@ -227,6 +227,46 @@ function _writeShowStatePanelToStorage(v: boolean): void {
   }
 }
 
+// 2026-06-02 · UI redesign step 1: 全局场景背景层(壁纸,跨角色共享)。
+// 跟 character.background_path 的关系:character bg 是 per-character、挂在
+// CharacterView 内 z-0;globalScene 是 app 级、挂在 Panel 容器 z-0,更底层。
+// character bg 设了就盖住该区域的 globalScene;没设就透出来。
+// 主题(8 套色)只换 --color-* token,不动 globalScene,所以换皮跟换壁纸独立。
+export type GlobalSceneType = 'image' | 'video';
+export interface GlobalScene {
+  type: GlobalSceneType;
+  path: string; // 本地路径 / URL / asset path,前端按后缀分发到 <img> / <video>
+}
+const GLOBAL_SCENE_KEY = 'momoos.globalScene';
+
+function _readGlobalSceneFromStorage(): GlobalScene | null {
+  try {
+    const raw = localStorage.getItem(GLOBAL_SCENE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<GlobalScene>;
+    if (parsed && (parsed.type === 'image' || parsed.type === 'video')
+        && typeof parsed.path === 'string' && parsed.path.trim() !== '') {
+      return { type: parsed.type, path: parsed.path };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function _writeGlobalSceneToStorage(v: GlobalScene | null): void {
+  try {
+    if (v === null) localStorage.removeItem(GLOBAL_SCENE_KEY);
+    else localStorage.setItem(GLOBAL_SCENE_KEY, JSON.stringify(v));
+  } catch {
+    // localStorage unavailable — silently ignore
+  }
+}
+
+// 2026-06-02 · UI redesign step 2: 浮层路由(磨砂浮层取代整页 settings/capabilities)。
+// session-only · 不持久化(打开浮层 = UI 临时态,关 app 后默认回主聊天)。
+export type ActiveOverlay = 'capabilities' | 'settings' | null;
+
 interface AppState {
   // 窗口模式
   mode: AppMode;
@@ -235,6 +275,14 @@ interface AppState {
   // v3-A — UI 主题（8 套，见 styles/themes.css）
   theme: ThemeKey;
   setTheme: (theme: ThemeKey) => void;
+
+  // 2026-06-02 · 全局场景背景层(壁纸,跨角色共享 · localStorage 持久化)
+  globalScene: GlobalScene | null;
+  setGlobalScene: (scene: GlobalScene | null) => void;
+
+  // 2026-06-02 · 浮层路由 · session-only,不持久化
+  activeOverlay: ActiveOverlay;
+  setActiveOverlay: (overlay: ActiveOverlay) => void;
 
   // AI 状态
   status: AiStatus;
@@ -474,6 +522,15 @@ export const useAppStore = create<AppState>((set) => ({
     applyThemeToDom(theme);
     set({ theme });
   },
+
+  // 2026-06-02 · UI redesign step 1
+  globalScene: _readGlobalSceneFromStorage(),
+  setGlobalScene: (scene) => {
+    _writeGlobalSceneToStorage(scene);
+    set({ globalScene: scene });
+  },
+  activeOverlay: null,
+  setActiveOverlay: (overlay) => set({ activeOverlay: overlay }),
 
   status: 'idle',
   setStatus: (status) => set({ status }),

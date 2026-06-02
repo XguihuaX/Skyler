@@ -10,21 +10,21 @@ import ConnectionDot from './ConnectionDot';
 
 type PanelView = 'chat' | 'characters' | 'capabilities' | 'settings_v2';
 
-// bugfix-2.6: sidebar 严格 4 项, Gallery 入口从 TopBar 挪过来。
-//   💬 聊天 / 🎴 角色图鉴(overlay 触发) / 📂 能力 / ⚙ 设置
-// 'characters' panelView 不再走 sidebar(CharacterSwitcher 的"管理角色…"
-// 仍可用; CharacterPanel 也通过 ⚙ 设置 → 角色管理 section 访问)。
-// Gallery 是 overlay 不是 panel — 点 sidebar 仅 setGalleryOpen(true), 关闭
-// 后回原 panelView, 不"占用"主 panel。
+// 2026-06-02 · UI redesign · 能力 / 设置改走 activeOverlay 磨砂浮层 ·
+// 不再 setPanelView。聊天仍是 panelView 切换;角色图鉴 / 能力 / 设置三个
+// 都是 overlay-style 入口(打开 = 浮层 · 关闭 = 回原主界面)。
+//   💬 聊天(panelView) / 🎴 角色图鉴(overlay) / 📂 能力(overlay) / ⚙ 设置(overlay)
 type NavItem =
   | { kind: 'view'; view: PanelView; Icon: LucideIcon; label: string }
   | { kind: 'action'; id: string; onClick: () => void; isActive: boolean; Icon: LucideIcon; label: string };
 
 export default function Sidebar() {
-  const panelView      = useAppStore((s) => s.panelView);
-  const setPanelView   = useAppStore((s) => s.setPanelView);
-  const galleryOpen    = useAppStore((s) => s.galleryOpen);
-  const setGalleryOpen = useAppStore((s) => s.setGalleryOpen);
+  const panelView         = useAppStore((s) => s.panelView);
+  const setPanelView      = useAppStore((s) => s.setPanelView);
+  const galleryOpen       = useAppStore((s) => s.galleryOpen);
+  const setGalleryOpen    = useAppStore((s) => s.setGalleryOpen);
+  const activeOverlay     = useAppStore((s) => s.activeOverlay);
+  const setActiveOverlay  = useAppStore((s) => s.setActiveOverlay);
 
   const navItems: NavItem[] = [
     { kind: 'view',   view: 'chat',         Icon: MessageCircle,     label: '聊天' },
@@ -36,15 +36,32 @@ export default function Sidebar() {
       isActive: galleryOpen,
       onClick: () => setGalleryOpen(true),
     },
-    { kind: 'view',   view: 'capabilities', Icon: Boxes,             label: '能力' },
-    { kind: 'view',   view: 'settings_v2',  Icon: Settings,          label: '设置' },
+    {
+      kind: 'action',
+      id: 'capabilities',
+      Icon: Boxes,
+      label: '能力',
+      isActive: activeOverlay === 'capabilities',
+      onClick: () => setActiveOverlay('capabilities'),
+    },
+    {
+      kind: 'action',
+      id: 'settings',
+      Icon: Settings,
+      label: '设置',
+      isActive: activeOverlay === 'settings',
+      onClick: () => setActiveOverlay('settings'),
+    },
   ];
 
   return (
     <div
       className="w-16 flex flex-col items-center py-4 gap-2 shrink-0"
       style={{
+        // 2026-06-02 · 玻璃化 · 加 backdrop-blur 让 SceneBackground 透出
         background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
         borderRight: '1px solid var(--color-border-subtle)',
       }}
     >

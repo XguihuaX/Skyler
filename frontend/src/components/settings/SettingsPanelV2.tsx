@@ -167,8 +167,11 @@ export default function SettingsPanelV2({ showToast }: SettingsPanelV2Props) {
       label: '外观',
       Icon: Palette,
       render: () => (
-        <div className="p-6">
+        <div className="p-6 space-y-8">
           <ThemeSection />
+          {/* 2026-06-02 · UI redesign step 1 · 全局场景背景层(壁纸)选择 ·
+              主题(8 套色)只换 --color-* token,场景独立于色之上。 */}
+          <SceneSection />
         </div>
       ),
     },
@@ -203,6 +206,130 @@ export default function SettingsPanelV2({ showToast }: SettingsPanelV2Props) {
         showToast={showToast}
       />
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 2026-06-02 · UI redesign step 1 · 场景背景层(壁纸)section
+// 主题(8 套色)只换 --color-* token,场景独立于色之上 · 全局共享、跨角色。
+// 最简控件:type radio (image / video) + 路径 input + 应用 / 清除。
+// ---------------------------------------------------------------------------
+
+function SceneSection() {
+  const globalScene    = useAppStore((s) => s.globalScene);
+  const setGlobalScene = useAppStore((s) => s.setGlobalScene);
+  const [draftType, setDraftType] = useState<'image' | 'video'>(globalScene?.type ?? 'image');
+  const [draftPath, setDraftPath] = useState<string>(globalScene?.path ?? '');
+
+  const apply = () => {
+    const trimmed = draftPath.trim();
+    if (trimmed === '') {
+      setGlobalScene(null);
+      return;
+    }
+    setGlobalScene({ type: draftType, path: trimmed });
+  };
+
+  const clear = () => {
+    setDraftPath('');
+    setGlobalScene(null);
+  };
+
+  return (
+    <section>
+      <h3
+        className="text-base font-medium mb-1"
+        style={{ color: 'var(--color-text-primary)' }}
+      >
+        🖼 场景背景
+      </h3>
+      <p
+        className="text-xs mb-3"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        全局壁纸 · 跨角色共享 · 独立于 8 套配色主题。支持图片(jpg/png/webp)或视频(mp4/webm)。
+        填本地路径或 URL,改完点"应用"。
+      </p>
+      <div
+        className="rounded-lg p-4 space-y-3"
+        style={{
+          background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
+          border: '1px solid var(--color-border-subtle)',
+        }}
+      >
+        {/* type radio */}
+        <div className="flex items-center gap-4 text-sm">
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input
+              type="radio"
+              checked={draftType === 'image'}
+              onChange={() => setDraftType('image')}
+            />
+            <span style={{ color: 'var(--color-text-primary)' }}>图片</span>
+          </label>
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input
+              type="radio"
+              checked={draftType === 'video'}
+              onChange={() => setDraftType('video')}
+            />
+            <span style={{ color: 'var(--color-text-primary)' }}>视频</span>
+          </label>
+        </div>
+        {/* path input */}
+        <input
+          type="text"
+          value={draftPath}
+          onChange={(e) => setDraftPath(e.target.value)}
+          placeholder={
+            draftType === 'image'
+              ? '/path/to/wallpaper.jpg 或 https://… '
+              : '/path/to/scene.mp4 或 https://…'
+          }
+          className="w-full rounded px-2 py-1.5 text-sm font-mono outline-none focus:ring-1"
+          style={{
+            background: 'var(--color-bg-input)',
+            color: 'var(--color-text-primary)',
+            border: '1px solid var(--color-border)',
+          }}
+          autoComplete="off"
+        />
+        {/* 当前生效 */}
+        <div
+          className="text-[11px]"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {globalScene
+            ? <>当前生效:<span className="font-mono">{globalScene.type}</span> · <span className="font-mono">{globalScene.path}</span></>
+            : '当前未设置,使用主题色作为窗口底色。'}
+        </div>
+        {/* 操作 */}
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={clear}
+            className="px-3 py-1.5 text-xs rounded transition hover:opacity-80"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              color: 'var(--color-text-primary)',
+            }}
+          >
+            清除
+          </button>
+          <button
+            type="button"
+            onClick={apply}
+            className="px-3 py-1.5 text-xs rounded transition hover:opacity-80"
+            style={{
+              background: 'var(--color-accent)',
+              color: 'var(--color-bubble-user-text)',
+            }}
+          >
+            应用
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -81,8 +81,10 @@ const CharacterStatePanel = memo(function CharacterStatePanel({
 
   const containerStyle: React.CSSProperties = {
     position: 'absolute',
-    background: 'color-mix(in srgb, var(--color-bg-surface) 88%, transparent)',
-    backdropFilter: 'blur(4px)',
+    // 2026-06-02 · 玻璃化 · 装饰性浮条 · 65% 更透 + blur(8px) 让壁纸透出更多
+    background: 'color-mix(in srgb, var(--color-bg-surface) 65%, transparent)',
+    backdropFilter: 'blur(8px)',
+    WebkitBackdropFilter: 'blur(8px)',
     border: '1px solid var(--color-border-subtle)',
     borderRadius: '12px',
     padding: '8px 12px',

@@ -163,7 +163,10 @@ export default function ConversationList() {
       className="shrink-0 h-full flex flex-col overflow-hidden transition-[width] duration-200 ease-out"
       style={{
         width: collapsed ? 0 : convListWidth,
-        background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
+        // 2026-06-02 · 玻璃化 · 含 conv 标题文字 · 72% 保证可读性 + blur(10px)
+        background: 'color-mix(in srgb, var(--color-bg-surface) 72%, transparent)',
+        backdropFilter: collapsed ? undefined : 'blur(10px)',
+        WebkitBackdropFilter: collapsed ? undefined : 'blur(10px)',
         borderRight: collapsed ? 'none' : '1px solid var(--color-border-subtle)',
       }}
     >

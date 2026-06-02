@@ -16,6 +16,8 @@ import CharacterView from '../components/CharacterView';
 import ChatHistoryPanel from '../components/ChatHistoryPanel';
 import ChatInput from '../components/ChatInput';
 import ConversationList from '../components/ConversationList';
+import OverlayShell from '../components/OverlayShell';
+import SceneBackground from '../components/SceneBackground';
 import SettingsPanelV2 from '../components/settings/SettingsPanelV2';
 import Sidebar from '../components/Sidebar';
 import TopBar from '../components/TopBar';
@@ -27,6 +29,9 @@ interface ToastInfo {
 
 export default function Panel() {
   const panelView   = useAppStore((s) => s.panelView);
+  // 2026-06-02 · UI redesign · 浮层路由(取代原 capabilities/settings_v2 整页 view)
+  const activeOverlay    = useAppStore((s) => s.activeOverlay);
+  const setActiveOverlay = useAppStore((s) => s.setActiveOverlay);
   const collapsed   = useAppStore((s) => s.conversationListCollapsed);
   const setCollapsed = useAppStore((s) => s.setConversationListCollapsed);
   // 方案 1:右侧 chat panel 推拉,与左侧 conv list 对称。
@@ -123,12 +128,22 @@ export default function Panel() {
 
   return (
     <div
-      className="w-full h-full flex flex-col overflow-hidden"
+      className="w-full h-full flex flex-col overflow-hidden relative"
       style={{
+        // 2026-06-02 · UI redesign · 容器背景改透明,让 SceneBackground 在 z-0 铺底。
+        // 没设场景时 SceneBackground 渲染 null,这里背景透明 → 露出 App.tsx 顶层
+        // bg-transparent → 露出窗口本底色(--color-bg-base 由各组件玻璃化半透展现)。
+        // 为防"完全没壁纸 + 玻璃组件后面太透看着发白",再加一层兜底 fallback color。
         background: 'var(--color-bg-base)',
         color: 'var(--color-text-primary)',
       }}
     >
+      {/* 2026-06-02 · UI redesign · 全局场景背景层(壁纸)· z-0 整窗铺底 ·
+          没设场景时不渲染、不挡 Panel 容器的 fallback bg-base。 */}
+      <SceneBackground />
+
+      {/* 主 UI 层 · 包整个 TopBar + 主区 · 相对定位让它浮在 SceneBackground 之上 */}
+      <div className="relative z-10 flex flex-col flex-1 overflow-hidden">
       <TopBar />
 
       <div className="flex flex-1 overflow-hidden">
@@ -284,19 +299,20 @@ export default function Panel() {
           <div className="flex flex-1 flex-col overflow-hidden">
             <CharacterPanel />
           </div>
-        ) : panelView === 'capabilities' ? (
-          <CapabilitiesPanel showToast={showToast} />
-        ) : (
-          // bugfix-2.2: 'settings_v2' 是新规范唯一 settings view。任何遗留
-          // 'settings' 字符串(老 localStorage / state 残留)也兜底到 V2 而非
-          // legacy panel —— 老 panel 不再出现在 UI。
-          <SettingsPanelV2 showToast={showToast} />
-        )}
+        ) : null
+        /* 2026-06-02 · UI redesign · 'capabilities' / 'settings_v2' 整页 view
+           已退役 · 改走 activeOverlay 磨砂浮层(本组件底部条件渲染)。任何遗留
+           panelView=='capabilities'/'settings_v2' 字符串 → 主区显示空(null)而
+           非 chat,因为它们的入口被 sidebar onClick 改成 setActiveOverlay 了 ·
+           未来若彻底清掉 panelView 类型字面值再删此条注释。
+           panelView=='chat' 走上面 chat 分支;其它(characters / legacy)各走各的。*/
+        }
+      </div>
       </div>
 
       {/* bugfix-2: 顶层 toast surface 给 V2 panels 用 */}
       {toasts.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+        <div className="fixed bottom-4 right-4 z-[900] flex flex-col gap-2 pointer-events-none">
           {toasts.map((t) => (
             <div
               key={t.id}
@@ -311,6 +327,21 @@ export default function Panel() {
             </div>
           ))}
         </div>
+      )}
+
+      {/* 2026-06-02 · UI redesign · 磨砂浮层 · z-[800] · 高于状态条 30 /
+          低于立绘馆 990 · ESC 或 backdrop click 关闭。
+          原 CapabilitiesPanel / SettingsPanelV2 从整页 panelView 移到这里浮层化 ·
+          关掉 = 回主聊天、场景重新清晰。Sidebar 的 "能力" / "设置" 按钮触发。 */}
+      {activeOverlay === 'capabilities' && (
+        <OverlayShell onClose={() => setActiveOverlay(null)}>
+          <CapabilitiesPanel showToast={showToast} />
+        </OverlayShell>
+      )}
+      {activeOverlay === 'settings' && (
+        <OverlayShell onClose={() => setActiveOverlay(null)}>
+          <SettingsPanelV2 showToast={showToast} />
+        </OverlayShell>
       )}
     </div>
   );

@@ -26,10 +26,11 @@ export default function ChatHistoryPanel() {
       className="shrink-0 h-full flex flex-col overflow-hidden transition-[width] duration-200 ease-out"
       style={{
         width: collapsed ? 0 : chatHistoryWidth,
-        background: 'color-mix(in srgb, var(--color-bg-surface) 80%, transparent)',
+        // 2026-06-02 · 玻璃化 · 核心阅读区,78% 略压实 + blur(10px) 统一面板节奏
+        background: 'color-mix(in srgb, var(--color-bg-surface) 78%, transparent)',
+        backdropFilter: collapsed ? undefined : 'blur(10px)',
+        WebkitBackdropFilter: collapsed ? undefined : 'blur(10px)',
         borderLeft: collapsed ? 'none' : '1px solid var(--color-border-subtle)',
-        backdropFilter: collapsed ? undefined : 'blur(8px)',
-        WebkitBackdropFilter: collapsed ? undefined : 'blur(8px)',
       }}
     >
       <div

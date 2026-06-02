@@ -64,7 +64,10 @@ export default function ChatInput() {
     <div
       className="flex items-center gap-2 px-4 py-3 shrink-0"
       style={{
-        background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
+        // 2026-06-02 · 玻璃化 · 核心交互层,72% 压实 + blur(10px) 跟 ConvList 一致
+        background: 'color-mix(in srgb, var(--color-bg-surface) 72%, transparent)',
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
         borderTop: '1px solid var(--color-border-subtle)',
       }}
     >
