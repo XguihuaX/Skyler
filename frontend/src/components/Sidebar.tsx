@@ -2,6 +2,7 @@ import {
   Boxes,
   GalleryThumbnails,
   MessageCircle,
+  MessagesSquare,
   Settings,
   type LucideIcon,
 } from 'lucide-react';
@@ -25,9 +26,21 @@ export default function Sidebar() {
   const setGalleryOpen    = useAppStore((s) => s.setGalleryOpen);
   const activeOverlay     = useAppStore((s) => s.activeOverlay);
   const setActiveOverlay  = useAppStore((s) => s.setActiveOverlay);
+  // Round 4 ②(2026-06-04):ConvList 唤回 chip 从左上撤掉 · 改用 dock 上的
+  // 「会话列表」图标开/收 · 默认收起。
+  const convListCollapsed    = useAppStore((s) => s.conversationListCollapsed);
+  const setConvListCollapsed = useAppStore((s) => s.setConversationListCollapsed);
 
   const navItems: NavItem[] = [
     { kind: 'view',   view: 'chat',         Icon: MessageCircle,     label: '聊天' },
+    {
+      kind: 'action',
+      id: 'conversations',
+      Icon: MessagesSquare,
+      label: '会话列表',
+      isActive: !convListCollapsed,
+      onClick: () => setConvListCollapsed(!convListCollapsed),
+    },
     {
       kind: 'action',
       id: 'gallery',
@@ -56,13 +69,22 @@ export default function Sidebar() {
 
   return (
     <div
-      className="w-16 flex flex-col items-center py-4 gap-2 shrink-0"
+      className="flex flex-col items-center gap-2"
       style={{
-        // 2026-06-02 · 玻璃化 · 加 backdrop-blur 让 SceneBackground 透出
-        background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
-        backdropFilter: 'blur(10px)',
-        WebkitBackdropFilter: 'blur(10px)',
-        borderRight: '1px solid var(--color-border-subtle)',
+        // Round 4 ④(2026-06-04):吃 glass-* 统一 token(radius 20 → 16 跟其它
+        // 浮件对齐 · alpha 55% → 58% · blur/border/shadow 全走 token)。
+        position: 'absolute',
+        left: '20px',
+        top: '50%',
+        transform: 'translateY(-50%)',
+        padding: '12px 6px',
+        borderRadius: 'var(--glass-radius)',
+        background: 'var(--glass-bg)',
+        backdropFilter: 'blur(var(--glass-blur))',
+        WebkitBackdropFilter: 'blur(var(--glass-blur))',
+        border: 'var(--glass-border)',
+        boxShadow: 'var(--glass-shadow)',
+        zIndex: 30,
       }}
     >
       {navItems.map((item) => {
@@ -84,7 +106,7 @@ export default function Sidebar() {
                     background: 'color-mix(in srgb, var(--color-accent) 25%, transparent)',
                     color: 'var(--color-text-accent)',
                   }
-                : { color: 'var(--color-text-secondary)' }
+                : { color: 'var(--glass-text-muted)' }
             }
             onClick={onClick}
             title={item.label}

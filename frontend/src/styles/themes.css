@@ -207,6 +207,43 @@
       linear-gradient(160deg, #2a2a2a 0%, #1a1a1a 100%);
 }
 
+/* ===================================================================
+ * Round 4 ④ (2026-06-04) — 浮件玻璃 token 单一来源。
+ *
+ * 所有"浮在壁纸上的玻璃面板"(dock / 对话列表 / 聊天记录 / 输入丸 /
+ * 心情小标 / TopBar)统一吃这套 token,以后调一处全跟着变。
+ *
+ *   --glass-radius        圆角(TopBar 例外:顶部贴视口必须 0,见组件注释)
+ *   --glass-blur          backdrop-filter blur 强度
+ *   --glass-border        细边(共用 border-subtle · 主题感知)
+ *   --glass-bg            背景半透(bg-surface 58% · 跨主题感知 · 比原 45-78%
+ *                         统一降一档,壁纸透出更明显)
+ *   --glass-shadow        浮起阴影(共用 shadow-card-lift)
+ *   --glass-text          正文近白 / 浅底主题里改深字
+ *   --glass-text-muted    副文字 ~75%(比 color-text-secondary 更亮防"闷灰")
+ *   --glass-text-shadow   字阴影(深底浅字时 alpha 黑;浅底深字时 alpha 白)
+ *
+ * 浅色主题(morandi / watercolor)用单独 block 覆盖文字相关 token 防止
+ * "近白字落在浅纸壁纸上糊掉"。bg / radius / blur / border / shadow 跨主题
+ * 通用(color-mix bg-surface 自然主题感知)。
+ * =================================================================== */
+:root {
+  --glass-radius: 16px;
+  --glass-blur: 12px;
+  --glass-border: 1px solid var(--color-border-subtle);
+  --glass-bg: color-mix(in srgb, var(--color-bg-surface) 50%, transparent);
+  --glass-shadow: var(--shadow-card-lift);
+  --glass-text: rgba(255, 255, 255, 0.94);
+  --glass-text-muted: rgba(255, 255, 255, 0.74);
+  --glass-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+[data-theme="morandi"],
+[data-theme="watercolor"] {
+  --glass-text: rgba(20, 22, 32, 0.92);
+  --glass-text-muted: rgba(20, 22, 32, 0.66);
+  --glass-text-shadow: 0 1px 2px rgba(255, 255, 255, 0.65);
+}
+
 /* ---------- 全局滚动条样式（webkit） ---------- */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }

@@ -52,6 +52,15 @@ const CHAT_HISTORY_WIDTH_KEY = 'momoos.chatHistoryWidth';
 export const CHAT_HISTORY_WIDTH_DEFAULT = 420;
 export const CHAT_HISTORY_WIDTH_MIN = 320;
 export const CHAT_HISTORY_WIDTH_MAX = 600;
+// 2026-06-04 · Round 4 ③ — ChatHistoryPanel 可拖拽高度(px)。原 Round 3.5 浮卡
+// 用 bottom:100 让高度跟视口走;现改固定 height 用户可调,左下角拖拽手柄同时
+// 改宽 + 高。default 600 = 原 720-800 视口下 bottom:100 实际渲染高度的折中。
+// clamp [240, 1200]:MIN 240 = 顶部 h-12 + ~6 条消息可读下限;MAX 1200 = 大屏
+// 防无限拉(超过常见视口高度的极限值)。
+const CHAT_HISTORY_HEIGHT_KEY = 'momoos.chatHistoryHeight';
+export const CHAT_HISTORY_HEIGHT_DEFAULT = 600;
+export const CHAT_HISTORY_HEIGHT_MIN = 240;
+export const CHAT_HISTORY_HEIGHT_MAX = 1200;
 
 // M1 Air 小屏降级阈值。视口 inner width < SMALL_VIEWPORT_PX → 默认两侧抽屉
 // 都收起,优先保立绘 + 输入框;用户仍可手动展开。13" M1 Air 默认逻辑分辨率
@@ -84,7 +93,10 @@ function initialCollapsedDefault(): boolean {
 }
 
 function readCollapsedFromStorage(): boolean {
-  return readBoolStorage(CONV_LIST_COLLAPSED_KEY, initialCollapsedDefault());
+  // 2026-06-03 · Round 3.4 · ConvList chip 化后默认收起(干净桌面)·
+  // 已有 localStorage 值 → 尊重用户上次选择 · 没有 → 默认 true 显 chip。
+  // 若想默认展开,把 true 改回 initialCollapsedDefault()。
+  return readBoolStorage(CONV_LIST_COLLAPSED_KEY, true);
 }
 
 function writeCollapsedToStorage(v: boolean): void {
@@ -146,6 +158,32 @@ function readChatHistoryWidthFromStorage(): number {
 function writeChatHistoryWidthToStorage(v: number): void {
   try {
     localStorage.setItem(CHAT_HISTORY_WIDTH_KEY, String(v));
+  } catch {
+    // localStorage unavailable — silently ignore
+  }
+}
+
+function clampChatHistoryHeight(v: number): number {
+  if (!Number.isFinite(v)) return CHAT_HISTORY_HEIGHT_DEFAULT;
+  if (v < CHAT_HISTORY_HEIGHT_MIN) return CHAT_HISTORY_HEIGHT_MIN;
+  if (v > CHAT_HISTORY_HEIGHT_MAX) return CHAT_HISTORY_HEIGHT_MAX;
+  return Math.round(v);
+}
+
+function readChatHistoryHeightFromStorage(): number {
+  try {
+    const raw = localStorage.getItem(CHAT_HISTORY_HEIGHT_KEY);
+    if (raw === null) return CHAT_HISTORY_HEIGHT_DEFAULT;
+    const n = Number(raw);
+    return clampChatHistoryHeight(n);
+  } catch {
+    return CHAT_HISTORY_HEIGHT_DEFAULT;
+  }
+}
+
+function writeChatHistoryHeightToStorage(v: number): void {
+  try {
+    localStorage.setItem(CHAT_HISTORY_HEIGHT_KEY, String(v));
   } catch {
     // localStorage unavailable — silently ignore
   }
@@ -330,8 +368,15 @@ interface AppState {
 
   // 2026-05-19 — ChatHistoryPanel 可拖拽宽度(px)。chatPanelCollapsed=false 时生效。
   // clamp [320, 600]:聊天可读下限 + 给立绘区留足最小宽度上限。
+  // 2026-06-04 · Round 4 ③ 起,ChatHistoryPanel 改成"右上锚 + 左下角拖拽手柄
+  // 同时改宽高",这个字段重新生效(Round 3.5 期间曾被硬编码 width:400 覆盖)。
   chatHistoryWidth: number;
   setChatHistoryWidth: (v: number) => void;
+
+  // 2026-06-04 · Round 4 ③ — ChatHistoryPanel 可拖拽高度(px)。原 Round 3.5
+  // bottom:100 固定贴边改为固定 height 用户可调。clamp [240, 1200]。
+  chatHistoryHeight: number;
+  setChatHistoryHeight: (v: number) => void;
 
   // 诊断用：用户最近一次发送 user message 的 performance.now() 时间戳
   // 仅前端 in-memory，所有前端 WS 接收 timer 都相对它计算 elapsed
@@ -577,6 +622,13 @@ export const useAppStore = create<AppState>((set) => ({
     const clamped = clampChatHistoryWidth(v);
     writeChatHistoryWidthToStorage(clamped);
     set({ chatHistoryWidth: clamped });
+  },
+
+  chatHistoryHeight: readChatHistoryHeightFromStorage(),
+  setChatHistoryHeight: (v) => {
+    const clamped = clampChatHistoryHeight(v);
+    writeChatHistoryHeightToStorage(clamped);
+    set({ chatHistoryHeight: clamped });
   },
 
   lastSendTimestamp: 0,

@@ -31,8 +31,11 @@ export default function TopBar() {
     <div
       className="relative z-50 flex items-center h-10 select-none shrink-0"
       style={{
-        background: 'color-mix(in srgb, var(--color-bg-surface) 80%, transparent)',
-        borderBottom: '1px solid var(--color-border-subtle)',
+        // Round 4 ④(2026-06-04):吃 glass-bg / glass-blur 统一 token · 顶部
+        // 贴视口边,radius/border/shadow 例外不加(顶贴边时这三项视觉违和)。
+        background: 'var(--glass-bg)',
+        backdropFilter: 'blur(var(--glass-blur))',
+        WebkitBackdropFilter: 'blur(var(--glass-blur))',
       }}
     >
       {/* Drag region — title lives here so clicks on text still drag */}
@@ -42,7 +45,10 @@ export default function TopBar() {
       >
         <span
           className="text-sm font-semibold pointer-events-none"
-          style={{ color: 'var(--color-text-primary)' }}
+          style={{
+            color: 'var(--glass-text)',
+            textShadow: 'var(--glass-text-shadow)',
+          }}
         >
           MomoOS
         </span>
@@ -58,7 +64,7 @@ export default function TopBar() {
       <div className="flex items-center gap-1 pr-2">
         <button
           className="w-7 h-7 rounded-md flex items-center justify-center transition hover:bg-[color-mix(in_srgb,var(--color-bg-elevated)_70%,transparent)]"
-          style={{ color: 'var(--color-text-secondary)' }}
+          style={{ color: 'var(--glass-text-muted)' }}
           onClick={handleCollapse}
           title="切回 Widget 模式"
         >
@@ -66,7 +72,7 @@ export default function TopBar() {
         </button>
         <button
           className="w-7 h-7 rounded-md flex items-center justify-center transition hover:bg-[color-mix(in_srgb,var(--color-bg-elevated)_70%,transparent)]"
-          style={{ color: 'var(--color-text-secondary)' }}
+          style={{ color: 'var(--glass-text-muted)' }}
           onClick={handleMinimize}
           title="最小化"
         >
@@ -74,7 +80,7 @@ export default function TopBar() {
         </button>
         <button
           className="w-7 h-7 rounded-md flex items-center justify-center transition hover:bg-[color-mix(in_srgb,var(--color-bg-elevated)_70%,transparent)]"
-          style={{ color: 'var(--color-text-secondary)' }}
+          style={{ color: 'var(--glass-text-muted)' }}
           onClick={() => void toggleFullscreen()}
           title={isFullscreen ? '退出全屏' : '进入全屏'}
           aria-label={isFullscreen ? '退出全屏' : '进入全屏'}
@@ -83,7 +89,7 @@ export default function TopBar() {
         </button>
         <button
           className="w-7 h-7 rounded-md flex items-center justify-center transition hover:bg-rose-500/80 hover:text-white"
-          style={{ color: 'var(--color-text-secondary)' }}
+          style={{ color: 'var(--glass-text-muted)' }}
           onClick={handleClose}
           title="关闭"
         >

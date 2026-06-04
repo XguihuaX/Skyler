@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import characterImg from '../assets/character.jpeg';
 import { useAppStore } from '../store';
 import { resolveLive2dModelUrl } from '../config/live2d';
@@ -11,23 +11,12 @@ interface CharacterViewProps {
   className?: string;
 }
 
-// v3.5 chunk 5a：后缀分类，与 backend/services/backgrounds_scanner.py 同
-// 白名单（lowercase 后比较），前端无需后端 type 字段也能独立分发。
-const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
-const VIDEO_EXTS = new Set(['.mp4', '.webm']);
-
-function classifyBackground(path: string | null | undefined): 'image' | 'video' | null {
-  if (!path) return null;
-  const trimmed = path.trim();
-  if (!trimmed) return null;
-  // 取最后一个 ``.`` 之后
-  const dotIdx = trimmed.lastIndexOf('.');
-  if (dotIdx === -1) return null;
-  const ext = trimmed.slice(dotIdx).toLowerCase();
-  if (IMAGE_EXTS.has(ext)) return 'image';
-  if (VIDEO_EXTS.has(ext)) return 'video';
-  return null;
-}
+// 2026-06-03 · Round 3 壁纸统一:per-character background_path 渲染下沉到
+// SceneBackground(全窗 z-0 层),CharacterView 不再画任何背景层 — 只渲染
+// Live2D 或 fallback 静态角色图(角色本身,不是壁纸)。原 v3.5 chunk 5a 的
+// backgroundLayer + bgFailed state + classifyBackground / IMAGE_EXTS /
+// VIDEO_EXTS 工具一并迁移到 SceneBackground.tsx · 数据来源仍是
+// currentCharacter.background_path · 不动 store · 不动设置 UI。
 
 export default function CharacterView({
   modelUrl: _modelUrl,
@@ -36,15 +25,12 @@ export default function CharacterView({
   className,
 }: CharacterViewProps) {
   const [imgError, setImgError]   = useState(false);
-  // v3.5 chunk 5a：背景层（image / video）加载失败 → 静默降回原 fallback。
-  // 切角色时 reset，否则一个角色失败会把下个角色也兜底掉。
-  const [bgFailed, setBgFailed]   = useState(false);
 
   const mode               = useAppStore((s) => s.mode);
   const characters         = useAppStore((s) => s.characters);
   const currentCharacterId = useAppStore((s) => s.currentCharacterId);
-  // v3-E2 patch：scanner 结果作为主数据源传给 resolveLive2dModelUrl，
-  // hardcode 字典退为兜底（store 空时仍能解析 hiyori）。
+  // v3-E2 patch:scanner 结果作为主数据源传给 resolveLive2dModelUrl,
+  // hardcode 字典退为兜底(store 空时仍能解析 hiyori)。
   const live2dModels       = useAppStore((s) => s.live2dModels);
 
   const currentCharacter =
@@ -54,64 +40,15 @@ export default function CharacterView({
     live2dModels,
   );
 
-  // 切角色时把 bgFailed reset，防止上一角色的 onError 状态影响下一角色
-  useEffect(() => {
-    setBgFailed(false);
-  }, [currentCharacterId, currentCharacter?.background_path]);
-
   const isPanel = mode === 'panel';
-  // panel 模式下加一层半透明背景叠加，使前景气泡更易读
-  const panelOverlayStyle: React.CSSProperties | undefined = isPanel
-    ? { background: 'color-mix(in srgb, var(--color-bg-base) 40%, transparent)' }
-    : undefined;
   const rootClass = className ?? 'absolute inset-0';
 
-  // v3.5 chunk 5a：背景层。``background_path`` 配置 + 后缀合法 + 没失败 → 渲染；
-  // 失败或未配置 → 不渲染，让下层 Live2D / 静态 jpeg 走原 fallback。
-  const bgPath = currentCharacter?.background_path ?? null;
-  const bgKind = bgFailed ? null : classifyBackground(bgPath);
-  const backgroundLayer = bgKind ? (
-    <div className="absolute inset-0 z-0 pointer-events-none" aria-hidden="true">
-      {bgKind === 'image' ? (
-        <img
-          src={bgPath!}
-          alt=""
-          className="w-full h-full select-none"
-          draggable={false}
-          style={{
-            objectFit: 'cover',
-            objectPosition: 'center center',
-            userSelect: 'none',
-          }}
-          onError={() => setBgFailed(true)}
-        />
-      ) : (
-        <video
-          key={bgPath!}
-          src={bgPath!}
-          autoPlay
-          loop
-          muted
-          playsInline
-          className="w-full h-full"
-          style={{
-            objectFit: 'cover',
-            objectPosition: 'center center',
-            pointerEvents: 'none',
-          }}
-          onError={() => setBgFailed(true)}
-        />
-      )}
-    </div>
-  ) : null;
-
   // 角色配了 live2d_model 且能解析出资源 URL → 走 Live2D 渲染管道
-  // key 用 live2dUrl，切换角色时强制 unmount 旧 canvas + mount 新的
+  // key 用 live2dUrl,切换角色时强制 unmount 旧 canvas + mount 新的
   if (live2dUrl) {
     return (
-      <div className={rootClass} style={panelOverlayStyle}>
-        {backgroundLayer}
-        {/* Live2D canvas 在背景层之上，z-index 显式指定 */}
+      <div className={rootClass}>
+        {/* Live2D canvas · 背景层已下沉到全窗 SceneBackground · 这里只角色透明 */}
         <div className="absolute inset-0 z-10">
           <Live2DCanvas key={live2dUrl} modelUrl={live2dUrl} />
         </div>
@@ -119,13 +56,12 @@ export default function CharacterView({
     );
   }
 
-  // Fallback：保留 v3-E1 之前的静态图片显示（适用于尚未配置 live2d_model 的角色）。
-  // v3.5 chunk 5a：如果 background_path 有效，则 backgroundLayer 已渲染，
-  // 不再叠加静态 jpeg —— 用户既然配了 per-character 背景就应该看到它。
+  // Fallback:保留 v3-E1 之前的静态角色图(适用于尚未配置 live2d_model 的角色)。
+  // 2026-06-03 · Round 3:per-character background_path 已迁出到 SceneBackground,
+  // 这里不再有 backgroundLayer + !bgKind gate · 直接渲染静态角色 jpeg / fallback svg。
   return (
-    <div className={rootClass} style={panelOverlayStyle}>
-      {backgroundLayer}
-      {!bgKind && (imgError ? (
+    <div className={rootClass}>
+      {imgError ? (
         <div
           className="w-full h-full flex flex-col items-center justify-center relative z-10"
           style={{ color: 'var(--color-text-accent)' }}
@@ -177,7 +113,7 @@ export default function CharacterView({
           }}
           onError={() => setImgError(true)}
         />
-      ))}
+      )}
     </div>
   );
 }

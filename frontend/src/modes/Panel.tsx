@@ -1,14 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import {
-  useAppStore,
-  CONV_LIST_WIDTH_MIN,
-  CONV_LIST_WIDTH_MAX,
-  CONV_LIST_WIDTH_DEFAULT,
-  CHAT_HISTORY_WIDTH_MIN,
-  CHAT_HISTORY_WIDTH_MAX,
-  CHAT_HISTORY_WIDTH_DEFAULT,
-} from '../store';
+import { useCallback, useState } from 'react';
+// Round 3.4(2026-06-03):ConvList 也 chip 化后 · flex 流里 resize handle +
+// collapse button 全删 · ChevronLeft 用于右侧 ChatHistoryPanel 唤回 chip。
+// Round 4 ②(2026-06-04):删左上 ConvList 唤回 chip(ChevronRight),改用
+// Sidebar dock 上的「会话列表」图标(MessagesSquare)开/收。
+import { ChevronLeft } from 'lucide-react';
+import { useAppStore } from '../store';
 import CapabilitiesPanel from '../components/capabilities/CapabilitiesPanel';
 import CharacterPanel from '../components/CharacterPanel';
 import CharacterStatePanel from '../components/CharacterStatePanel';
@@ -32,90 +28,18 @@ export default function Panel() {
   // 2026-06-02 · UI redesign · 浮层路由(取代原 capabilities/settings_v2 整页 view)
   const activeOverlay    = useAppStore((s) => s.activeOverlay);
   const setActiveOverlay = useAppStore((s) => s.setActiveOverlay);
+  // Round 4 ②:ConvList 开/收已移到 Sidebar dock 的「会话列表」图标 ·
+  // Panel 仅订阅 collapsed 用于条件渲染浮卡 · setCollapsed 由 Sidebar / ConvList
+  // 内部 X 按钮调用。
   const collapsed   = useAppStore((s) => s.conversationListCollapsed);
-  const setCollapsed = useAppStore((s) => s.setConversationListCollapsed);
   // 方案 1:右侧 chat panel 推拉,与左侧 conv list 对称。
   const chatPanelCollapsed   = useAppStore((s) => s.chatPanelCollapsed);
   const setChatPanelCollapsed = useAppStore((s) => s.setChatPanelCollapsed);
 
-  // 2026-05-19 — ConversationList 右边缘可拖拽 resize handle。
-  // 拖拽改 store.conversationListWidth (clamp 已在 store 内做),立绘区
-  // (Panel.tsx 中 ``flex-1 min-w-0`` 容器) 自动响应,Live2D runtime
-  // (pixiCubism4.ts:234) ResizeObserver 实时重算 canvas 尺寸,不变形。
-  const convListWidth = useAppStore((s) => s.conversationListWidth);
-  const setConvListWidth = useAppStore((s) => s.setConversationListWidth);
-  const dragStartRef = useRef<{ x: number; w: number } | null>(null);
-  const [dragging, setDragging] = useState(false);
-
-  const onResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    dragStartRef.current = { x: e.clientX, w: convListWidth };
-    setDragging(true);
-    // 锁住 pointer 避免拖快脱离 handle 时停掉
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-  }, [convListWidth]);
-
-  const onResizeMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragStartRef.current) return;
-    const dx = e.clientX - dragStartRef.current.x;
-    const next = dragStartRef.current.w + dx;
-    setConvListWidth(next); // store 内部 clamp [MIN, MAX]
-  }, [setConvListWidth]);
-
-  const onResizeEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragStartRef.current) return;
-    dragStartRef.current = null;
-    setDragging(false);
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
-    } catch { /* swallow */ }
-  }, []);
-
-  // 2026-05-19 — 右侧 ChatHistoryPanel 左边缘 resize handle (镜像左侧)。
-  // ⚠️ dx 取反:handle 在右侧栏左边缘,右拖 dx>0 → panel 应**变窄**
-  // (而左侧栏右边缘 handle 右拖 dx>0 → 它变宽,方向相反)。
-  const chatHistoryWidth = useAppStore((s) => s.chatHistoryWidth);
-  const setChatHistoryWidth = useAppStore((s) => s.setChatHistoryWidth);
-  const dragChatStartRef = useRef<{ x: number; w: number } | null>(null);
-  const [draggingChat, setDraggingChat] = useState(false);
-
-  const onChatResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    dragChatStartRef.current = { x: e.clientX, w: chatHistoryWidth };
-    setDraggingChat(true);
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-  }, [chatHistoryWidth]);
-
-  const onChatResizeMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragChatStartRef.current) return;
-    const dx = e.clientX - dragChatStartRef.current.x;
-    // 取反:右拖(dx 正)→ panel 变窄;左拖(dx 负)→ panel 变宽。
-    const next = dragChatStartRef.current.w - dx;
-    setChatHistoryWidth(next); // store 内部 clamp [MIN, MAX]
-  }, [setChatHistoryWidth]);
-
-  const onChatResizeEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragChatStartRef.current) return;
-    dragChatStartRef.current = null;
-    setDraggingChat(false);
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
-    } catch { /* swallow */ }
-  }, []);
-
-  // 拖拽时给 body 设 col-resize cursor + 禁用 user-select,防止
-  // 拖出 handle 区域时光标变回箭头或选中文本。任一 handle 在拖即生效。
-  useEffect(() => {
-    if (!dragging && !draggingChat) return;
-    const prevCursor = document.body.style.cursor;
-    const prevSelect = document.body.style.userSelect;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    return () => {
-      document.body.style.cursor = prevCursor;
-      document.body.style.userSelect = prevSelect;
-    };
-  }, [dragging, draggingChat]);
+  // Round 3.4(2026-06-03):ConvList chip 化后 · 左侧 resize handle 也删 ·
+  // 浮卡固定 width:280 · convListWidth + conversationListWidth resize 相关
+  // store 字段保留(数据架构不动)· view 层不再消费 · 跟 chatHistoryWidth 同
+  // 处理。
 
   // bugfix-2: 共享 toast 给 CapabilitiesPanel / SettingsPanelV2(老 SettingsPanel
   // 自己内置 toast,不接入)。
@@ -130,10 +54,14 @@ export default function Panel() {
     <div
       className="w-full h-full flex flex-col overflow-hidden relative"
       style={{
-        // 2026-06-02 · UI redesign · 容器背景改透明,让 SceneBackground 在 z-0 铺底。
-        // 没设场景时 SceneBackground 渲染 null,这里背景透明 → 露出 App.tsx 顶层
-        // bg-transparent → 露出窗口本底色(--color-bg-base 由各组件玻璃化半透展现)。
-        // 为防"完全没壁纸 + 玻璃组件后面太透看着发白",再加一层兜底 fallback color。
+        // 2026-06-03 撤销:上一轮删 bg-base 试图让"app 内空区露 OS 桌面"
+        // 走偏了 — 透出了终端等其它程序,这不是"app 内不透明壁纸"是"真桌面集成"
+        // (推迟项)。恢复 bg-base 作为壁纸**不存在时**的不透明兜底色 ·
+        // SceneBackground(fixed inset-0 z-0)在它之上铺设定的壁纸图 ·
+        // 玻璃 UI 在 SceneBackground 之上 z-10/20/30。
+        // 没设壁纸 → 看到 bg-base(主题色 · 不透明)
+        // 设了壁纸 → SceneBackground 图盖住 bg-base
+        // 整 Panel 模式窗口内任何空区永远是 app 内自渲染色,不会透 OS 桌面。
         background: 'var(--color-bg-base)',
         color: 'var(--color-text-primary)',
       }}
@@ -142,158 +70,137 @@ export default function Panel() {
           没设场景时不渲染、不挡 Panel 容器的 fallback bg-base。 */}
       <SceneBackground />
 
+      {/* Round 4 ② 续(2026-06-04):心情小标锚 Panel 根容器(整窗左上角),
+          不再嵌 chat main area —— 让它在 dock 上方、ConvList 浮卡左侧 / 上方
+          那块空角(关会话 = 安静待在左上;开会话 = ConvList 在右下展开,不重叠)。
+          z 由组件内自带(zIndex:30)高于 z-10 主 UI wrapper。 */}
+      <CharacterStatePanel position="panel" />
+
       {/* 主 UI 层 · 包整个 TopBar + 主区 · 相对定位让它浮在 SceneBackground 之上 */}
       <div className="relative z-10 flex flex-col flex-1 overflow-hidden">
       <TopBar />
 
-      <div className="flex flex-1 overflow-hidden">
+      {/* Round 3.4 · Sidebar 浮 dock 后从 flex 流抽出(不占宽度)· 给 flex 父
+          加 padding-left:80px(dock left:20 + width:52 + 右余白 = ~80)避免
+          后面 ConvList 等 flex 子撞 dock。flex 父挂 relative 让 Sidebar
+          absolute 锚定这里(不是 z-10 wrapper 含 TopBar 区域)· dock 垂直
+          居中算 chat 主区高度,不含 TopBar 那 40px。 */}
+      <div className="flex flex-1 overflow-hidden relative" style={{ paddingLeft: '80px' }}>
         <Sidebar />
 
         {panelView === 'chat' ? (
           <>
-            <ConversationList />
-
-            {/* 2026-05-19 — ConversationList 右边缘 resize handle。
-                仅 collapsed=false 时显示;collapsed=true 时整栏 width=0,handle
-                也无意义。4px 宽热区(给鼠标足够命中面积),内部 1px 高亮线;
-                hover/dragging 时加粗加亮。pointer events 走 onResize* 三件套
-                (capture + move + release)。 */}
-            {!collapsed && (
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="拖拽调整对话列表宽度"
-                aria-valuenow={convListWidth}
-                aria-valuemin={CONV_LIST_WIDTH_MIN}
-                aria-valuemax={CONV_LIST_WIDTH_MAX}
-                onPointerDown={onResizeStart}
-                onPointerMove={onResizeMove}
-                onPointerUp={onResizeEnd}
-                onPointerCancel={onResizeEnd}
-                onDoubleClick={() => setConvListWidth(CONV_LIST_WIDTH_DEFAULT)}
-                className="shrink-0 h-full relative group"
-                style={{
-                  width: 4,
-                  cursor: 'col-resize',
-                  touchAction: 'none',
-                }}
-                title="拖拽调整宽度 · 双击重置"
-              >
-                <div
-                  className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 transition-colors"
-                  style={{
-                    width: dragging ? 2 : 1,
-                    background: dragging
-                      ? 'var(--color-accent)'
-                      : 'var(--color-border-subtle)',
-                  }}
-                />
-                <div
-                  className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
-                  style={{
-                    width: 2,
-                    background: 'var(--color-accent)',
-                  }}
-                />
-              </div>
-            )}
-
-            {/* Vertical collapse toggle — always visible in chat view */}
-            <button
-              type="button"
-              className="group w-6 shrink-0 h-full flex items-center justify-center transition-colors"
-              style={{
-                background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
-                borderRight: '1px solid var(--color-border-subtle)',
-                color: 'var(--color-text-secondary)',
-              }}
-              onClick={() => setCollapsed(!collapsed)}
-              title={collapsed ? '展开对话列表' : '折叠对话列表'}
-              aria-label={collapsed ? '展开对话列表' : '折叠对话列表'}
-            >
-              {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-            </button>
+            {/* 2026-06-04 · Round 4 ② · ConvList 折进 dock:展开浮卡仍 absolute
+                · 收起态不再渲左上唤回 chip(被 dock 上的 MessagesSquare「会话列表」
+                图标取代)。chip 删后左上彻底清爽,只剩心情小标。 */}
+            {!collapsed && <ConversationList />}
 
             {/* Chat main area — galgame-style: full-bleed character + floating overlays。
                 方案 1:中央立绘区 flex-1 自适应剩余,两侧 ConversationList +
                 ChatHistoryPanel 各自推拉,任意组合下立绘竖图等比缩放不变形。
                 两侧都收起 = 纯 Galgame 沉浸。删除右上角"历史"按钮 +
                 ChatHistoryDrawer + CharacterDialogueBubble(audit_chat_panel 方案
-                1 决策:聊天列已显示全列表,浮动单气泡冗余)。 */}
+                1 决策:聊天列已显示全列表,浮动单气泡冗余)。
+
+                2026-06-03 · Round 3.1 角色落位(B 修订版):
+                第一版用 60% 宽 + 92% 高 wrapper 压缩 → 角色被裁/偏小。
+                改为 wrapper 保持满高满宽(inset-0),让 ResizeObserver 拿到完整
+                尺寸 · Live2D 按全高等比饱满渲染(整只不裁、回到 3.1 之前的尺寸
+                饱满感)· 用 CSS transform: translateX(-17%) 把整个 wrapper 内容
+                左移到画面 ~33% 横向位 · 右侧 40% 留位由 3.5 暖巷以浮层盖在角色
+                之上来完成,**不**靠压扁容器。runtime / background_path /
+                panelOverlayStyle 不动。 */}
             <div className="relative flex-1 h-full overflow-hidden min-w-0">
-              <CharacterView className="absolute inset-0 w-full h-full z-0" />
+              {/* 角色容器 · 满高满宽 · CSS transform 整体左移 · 底落地 */}
+              <div
+                className="absolute inset-0 z-0"
+                style={{
+                  transform: 'translateX(0)',
+                }}
+              >
+                <CharacterView className="absolute inset-0 w-full h-full" />
+                {/* 脚下光台 · 跟着 wrapper 左移 · 在 wrapper 中心底部一片柔光 ·
+                    width 缩到 30%(原 55% 是给 60% 压扁 wrapper 算的,现满宽
+                    要按总画面比例算) · pointer-events-none. */}
+                <div
+                  className="absolute pointer-events-none"
+                  style={{
+                    bottom: '4%',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    width: '30%',
+                    height: '36px',
+                    background:
+                      'radial-gradient(ellipse at center, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0.06) 50%, transparent 75%)',
+                    filter: 'blur(10px)',
+                    zIndex: 1,
+                  }}
+                  aria-hidden="true"
+                />
+              </div>
 
-              {/* UX-003 hotfix: 情绪状态条挂在 chat-view ``relative`` 容器内,
-                  ``left: 16px / top: 48px`` 锚到 CharacterView 实际占据的子区域。 */}
-              <CharacterStatePanel position="panel" />
+              {/* Round 4 ② 续(2026-06-04):CharacterStatePanel 已从这里搬到
+                  Panel 根容器(SceneBackground 旁),锚整窗左上角(top:48 left:8),
+                  不再跟着 chat main area paddingLeft:80 偏移。关闭会话时纯净
+                  待在左上,打开会话列表(ConvList top:60 left:80)在它右下方
+                  展开,两者不重叠。 */}
 
-              <div className="absolute bottom-0 left-0 right-0 z-20">
+              {/* 2026-06-03 · Round 3.5 对话暖巷:ChatHistoryPanel 从 flex 流贴边
+                  满高栏剥离,改 absolute 浮动定位挂在 chat main area 内部 z-20 ·
+                  四周留白 + 圆角 + glass + scrim · chatPanelCollapsed=true 时
+                  改渲染唤出 chip(右上角 chevron)而非整个浮动条。
+                  TODO(v2): 收起时显示她最新一条 assistant/proactive 消息的
+                  "浮角色身边、几秒淡出"临时气泡,本批不做。 */}
+              {!chatPanelCollapsed ? (
+                <ChatHistoryPanel />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setChatPanelCollapsed(false)}
+                  className="absolute flex items-center justify-center transition hover:opacity-80"
+                  style={{
+                    top: '20px',
+                    right: '20px',
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '999px',
+                    background: 'var(--glass-bg)',
+                    backdropFilter: 'blur(var(--glass-blur))',
+                    WebkitBackdropFilter: 'blur(var(--glass-blur))',
+                    border: 'var(--glass-border)',
+                    boxShadow: 'var(--glass-shadow)',
+                    color: 'var(--glass-text-muted)',
+                    zIndex: 20,
+                  }}
+                  title="展开聊天记录"
+                  aria-label="展开聊天记录"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+              )}
+
+              {/* 2026-06-03 · Round 3.2 输入丸:从贴底满宽栏改为底部居中浮动胶囊 ·
+                  四周留白、壁纸从两侧透出 · maxWidth 限宽避免大窗下拉太长 ·
+                  bottom 留 20px 不贴边、跟玻璃浮卡视觉一致。 */}
+              <div
+                className="absolute z-20"
+                style={{
+                  bottom: '20px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  width: 'calc(100% - 32px)',
+                  maxWidth: '680px',
+                }}
+              >
                 <ChatInput />
               </div>
             </div>
 
-            {/* 右侧推拉切换 button(镜像左侧的 ConversationList 折叠 button)。
-                Chevron 方向相反:展开时 ▶ → 收起 / 收起时 ◀ → 展开。 */}
-            <button
-              type="button"
-              className="group w-6 shrink-0 h-full flex items-center justify-center transition-colors"
-              style={{
-                background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
-                borderLeft: '1px solid var(--color-border-subtle)',
-                color: 'var(--color-text-secondary)',
-              }}
-              onClick={() => setChatPanelCollapsed(!chatPanelCollapsed)}
-              title={chatPanelCollapsed ? '展开聊天记录' : '收起聊天记录'}
-              aria-label={chatPanelCollapsed ? '展开聊天记录' : '收起聊天记录'}
-            >
-              {chatPanelCollapsed ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
-            </button>
-
-            {/* 2026-05-19 — ChatHistoryPanel 左边缘 resize handle (镜像左侧 handle)。
-                仅 chatPanelCollapsed=false 时显示。dx 取反:右拖 panel 变窄、立绘
-                变大;左拖 panel 变宽、立绘变小。同 4px 热区 + 1px/2px 灰/accent
-                高亮 + col-resize cursor + 双击重置 DEFAULT(420)。 */}
-            {!chatPanelCollapsed && (
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="拖拽调整聊天记录宽度"
-                aria-valuenow={chatHistoryWidth}
-                aria-valuemin={CHAT_HISTORY_WIDTH_MIN}
-                aria-valuemax={CHAT_HISTORY_WIDTH_MAX}
-                onPointerDown={onChatResizeStart}
-                onPointerMove={onChatResizeMove}
-                onPointerUp={onChatResizeEnd}
-                onPointerCancel={onChatResizeEnd}
-                onDoubleClick={() => setChatHistoryWidth(CHAT_HISTORY_WIDTH_DEFAULT)}
-                className="shrink-0 h-full relative group"
-                style={{
-                  width: 4,
-                  cursor: 'col-resize',
-                  touchAction: 'none',
-                }}
-                title="拖拽调整宽度 · 双击重置"
-              >
-                <div
-                  className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 transition-colors"
-                  style={{
-                    width: draggingChat ? 2 : 1,
-                    background: draggingChat
-                      ? 'var(--color-accent)'
-                      : 'var(--color-border-subtle)',
-                  }}
-                />
-                <div
-                  className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
-                  style={{
-                    width: 2,
-                    background: 'var(--color-accent)',
-                  }}
-                />
-              </div>
-            )}
-
-            <ChatHistoryPanel />
+            {/* Round 3.5 起删除原 flex 流里的 collapse button + resize handle +
+                ChatHistoryPanel 三块(共 62 行) · 全部改成 chat main area 内部
+                浮动定位(上方条件渲染暖巷 / chip)· chat main area 自然变宽 ·
+                角色 wrapper(translateX -17%)仍偏左到画面 ~1/3 横向位 · 暖巷
+                浮在右侧 ~33%-100% 区域,左右平衡。 */}
           </>
         ) : panelView === 'characters' ? (
           <div className="flex flex-1 flex-col overflow-hidden">

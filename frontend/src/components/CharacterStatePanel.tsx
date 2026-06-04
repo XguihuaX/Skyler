@@ -1,9 +1,13 @@
 /**
  * v3-G chunk 3b — 角色状态浮动小条。
  *
- * 显示当前 mood emoji + intimacy 数字，hover 展开 thought / activity 两行
- * 闲笔。Widget 模式右下角；Panel 模式 CharacterView 顶部（位置由父组件决
- * 定，本组件只负责"绝对定位 + 内容"）。
+ * Round 4 ①(2026-06-04)起改成小心情标:默认只渲 emoji + 词,hover 或 click
+ * 锁定展开完整卡(intimacy 数字 + 进度条 + activity / thought)。
+ *
+ * Widget 模式:锚 App 外层 relative 容器右下角(right:8 bottom:8)。
+ * Panel 模式:锚 Panel 根容器(整窗)左上角(left:8 top:48)· TopBar 下方 8px ·
+ * dock 上方(dock 垂直居中,顶端远在心情标下方)· ConvList 浮卡左上(ConvList
+ * 在 left:80 top:60)→ 三者错位,关 / 开会话两态都不重叠。
  *
  * 数据源：
  *   1. store.currentCharacterState（WS 'state_update' 实时更新）
@@ -12,7 +16,7 @@
  * 隐藏开关：store.showCharacterStatePanel（SettingsPanel [角色] section 的
  * "显示状态条" toggle 控制；默认 on，localStorage 持久）。
  */
-import { memo, useEffect } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { useAppStore } from '../store';
 import {
   fetchCharacterState,
@@ -57,6 +61,14 @@ const CharacterStatePanel = memo(function CharacterStatePanel({
   const setState       = useAppStore((s) => s.setCurrentCharacterState);
   const characterId    = useAppStore((s) => s.currentCharacterId);
 
+  // 2026-06-04 · Round 4 ① 心情小标 · 默认只渲 emoji+词 紧凑标 · hover 或 click
+  // 锁定展开:intimacy 数字 + 进度条 + activity / thought 完整卡。
+  // pinned 一旦点开会保留展开,再点收;hover 是临时态 mouse-leave 即收。
+  // expanded = pinned || hovering。click 用 stopPropagation 避免冒泡到角色/壁纸点击。
+  const [pinned, setPinned] = useState(false);
+  const [hovering, setHovering] = useState(false);
+  const expanded = pinned || hovering;
+
   // mount + character switch 时拉一次（保证 panel 一开就有内容，无需等 WS 推送）
   useEffect(() => {
     let cancelled = false;
@@ -75,89 +87,101 @@ const CharacterStatePanel = memo(function CharacterStatePanel({
   const label = MOOD_LABEL[mood] ?? mood;
   const intimacy = state.intimacy ?? 0;
 
-  // intimacy 0-100 → 颜色温度（蓝→绿→粉）
+  // intimacy 0-100 → 进度条颜色温度(蓝→绿→粉)。
+  // Round 4 ④ 后续(2026-06-04):饱和度 70% → 40% 降跳,跟蓝壁纸 + 暖角色不打架。
+  // 数字本身改 var(--color-accent) 跟主题主色绑,见下方 JSX(不再消费 intimacyColor)。
   const intimacyHue = 200 - Math.round(intimacy * 1.5); // 200 (cool blue) → 50 (warm pink)
-  const intimacyColor = `hsl(${intimacyHue}, 70%, 60%)`;
+  const intimacyBarColor = `hsl(${intimacyHue}, 40%, 60%)`;
 
   const containerStyle: React.CSSProperties = {
     position: 'absolute',
-    // 2026-06-02 · 玻璃化 · 装饰性浮条 · 65% 更透 + blur(8px) 让壁纸透出更多
-    background: 'color-mix(in srgb, var(--color-bg-surface) 65%, transparent)',
-    backdropFilter: 'blur(8px)',
-    WebkitBackdropFilter: 'blur(8px)',
-    border: '1px solid var(--color-border-subtle)',
-    borderRadius: '12px',
+    // Round 4 ④(2026-06-04):吃 glass-* 统一 token · radius 12 → 16 跟齐 ·
+    // blur 8 → 12 跟齐 · alpha 65% → 58%(--glass-bg)· 删硬编码 shadow 改用
+    // glass-shadow · 文字色改 glass-text(标题)/ glass-text-muted(label)/ 加
+    // glass-text-shadow 让字在花壁纸上能读清。
+    background: 'var(--glass-bg)',
+    backdropFilter: 'blur(var(--glass-blur))',
+    WebkitBackdropFilter: 'blur(var(--glass-blur))',
+    border: 'var(--glass-border)',
+    borderRadius: 'var(--glass-radius)',
     padding: '8px 12px',
     fontSize: '13px',
-    color: 'var(--color-text-primary)',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+    color: 'var(--glass-text)',
+    textShadow: 'var(--glass-text-shadow)',
+    boxShadow: 'var(--glass-shadow)',
     zIndex: 30,
     pointerEvents: 'auto',
-    minWidth: '120px',
+    // Round 4 ① 心情小标 · minWidth 移除让默认态按内容紧凑撑 · transition 过渡。
     transition: 'all 0.15s ease',
-    // UX-001：Panel 模式 TopBar 高度 = h-10 (40px) + z-50；旧 top: 12px 让
-    // CharacterStatePanel 物理上落在 TopBar 0-40px 范围内并被它压住（panel
-    // z-30 < TopBar z-50）。这里把 top 抬到 ``calc(TopBar_h + 8px)``，状
-    // 态条整体放在 TopBar 下方，不再被 TopBar 遮。z-index 维持 30 即可
-    // （不需要浮在 TopBar 之上）。
-    //
-    // UX-003 commit 3: Panel 模式从 ``right: 16px`` 改 ``left: 16px``。
-    // 原因: Panel mode CharacterView 区域右上角 ``absolute top-4 right-4 z-30``
-    // 是 ``[ScrollText] 历史`` 按钮(modes/Panel.tsx)。旧位置让情绪条挡到
-    // 历史按钮 hover/点击区。左上角实测完全空闲(CharacterView ``absolute
-    // inset-0 z-0`` 满铺背景,无其他 positioned 元素),挪过去无冲突。
-    //
-    // Widget 模式无 TopBar / 无历史按钮,沿用右下角不变。
+    cursor: 'pointer',
+    // Panel:left:8 top:48 锚 Panel 根容器(整窗) · TopBar h-10(40px) 下方 8px ·
+    //   dock(垂直居中) / ConvList 浮卡(top:60 left:80) 均在它右下方 · 不重叠。
+    // Widget:right:8 bottom:8 锚 App 外层 relative 容器右下角 · 无 TopBar。
     ...(position === 'widget'
       ? { right: '8px', bottom: '8px' }
-      : { left: '16px', top: '48px' }),
+      : { left: '8px', top: '48px' }),
   };
 
   return (
-    <div className="character-state-panel group" style={containerStyle}>
+    <div
+      className="character-state-panel"
+      style={containerStyle}
+      onClick={(e) => { e.stopPropagation(); setPinned((p) => !p); }}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
+      role="button"
+      tabIndex={0}
+      aria-label={pinned ? '收起心情卡' : '展开心情卡'}
+    >
       <div className="flex items-center gap-2">
         <span style={{ fontSize: '18px', lineHeight: 1 }}>{emoji}</span>
-        <span style={{ color: 'var(--color-text-secondary)', fontSize: '11px' }}>
+        <span style={{ color: 'var(--glass-text-muted)', fontSize: '11px' }}>
           {label}
         </span>
-        <div className="flex-1" />
-        <span
-          className="tabular-nums"
-          style={{ fontSize: '12px', color: intimacyColor, fontWeight: 600 }}
-          title={`亲密度 ${intimacy}/100`}
-        >
-          {intimacy}<span style={{ opacity: 0.5 }}>/100</span>
-        </span>
+        {expanded && (
+          <>
+            <div className="flex-1" style={{ minWidth: '8px' }} />
+            <span
+              className="tabular-nums"
+              style={{ fontSize: '12px', color: 'var(--color-accent)', fontWeight: 600 }}
+              title={`亲密度 ${intimacy}/100`}
+            >
+              {intimacy}<span style={{ opacity: 0.5 }}>/100</span>
+            </span>
+          </>
+        )}
       </div>
-      {/* Intimacy bar */}
-      <div
-        style={{
-          height: '3px',
-          marginTop: '6px',
-          background: 'var(--color-bg-input)',
-          borderRadius: '2px',
-          overflow: 'hidden',
-        }}
-      >
+      {expanded && (
         <div
           style={{
-            width: `${intimacy}%`,
-            height: '100%',
-            background: intimacyColor,
-            transition: 'width 0.4s ease',
+            height: '3px',
+            marginTop: '6px',
+            background: 'var(--color-bg-input)',
+            borderRadius: '2px',
+            overflow: 'hidden',
           }}
-        />
-      </div>
-      {/* Hover-only：thought / activity（容器 group-hover；用 CSS pseudo 简化为始终
-          展示但 max-height 0 折叠 + group-hover 展开）*/}
-      {(state.thought || state.activity) && (
+        >
+          <div
+            style={{
+              width: `${intimacy}%`,
+              height: '100%',
+              background: intimacyBarColor,
+              transition: 'width 0.4s ease',
+            }}
+          />
+        </div>
+      )}
+      {expanded && (state.thought || state.activity) && (
         <div
-          className="hidden group-hover:block"
           style={{
             marginTop: '8px',
             paddingTop: '8px',
             borderTop: '1px dashed var(--color-border-subtle)',
-            color: 'var(--color-text-secondary)',
+            color: 'var(--glass-text-muted)',
+            // Round 4 ④ 后续:显式 textShadow(虽然 CSS text-shadow 本身从父继承,
+            // 但 muted 浅色文字在 50% 透玻璃 + 花壁纸上最容易糊 · 显式声明防御
+            // 未来谁加 textShadow: none 把它清掉 + 阅读代码时意图清晰)。
+            textShadow: 'var(--glass-text-shadow)',
             fontSize: '11px',
             lineHeight: 1.4,
           }}

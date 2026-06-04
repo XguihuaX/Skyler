@@ -64,11 +64,14 @@ export default function ChatInput() {
     <div
       className="flex items-center gap-2 px-4 py-3 shrink-0"
       style={{
-        // 2026-06-02 · 玻璃化 · 核心交互层,72% 压实 + blur(10px) 跟 ConvList 一致
-        background: 'color-mix(in srgb, var(--color-bg-surface) 72%, transparent)',
-        backdropFilter: 'blur(10px)',
-        WebkitBackdropFilter: 'blur(10px)',
-        borderTop: '1px solid var(--color-border-subtle)',
+        // Round 4 ④(2026-06-04):吃 glass-* 统一 token · 删 rounded-2xl 改用
+        // borderRadius var(--glass-radius) 让圆角跟所有浮件对齐(16px)。
+        borderRadius: 'var(--glass-radius)',
+        background: 'var(--glass-bg)',
+        backdropFilter: 'blur(var(--glass-blur))',
+        WebkitBackdropFilter: 'blur(var(--glass-blur))',
+        border: 'var(--glass-border)',
+        boxShadow: 'var(--glass-shadow)',
       }}
     >
       <StatusBadge status={status} />
