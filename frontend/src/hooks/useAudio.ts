@@ -135,6 +135,9 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
   const micVadRef = useRef<MicVAD | null>(null);
 
   const store = useAppStore;
+  // 2026-06-05 · 订阅 recordingMode 给下方 auto-pause-on-mode-manual effect 用。
+  // 单值 selector · 切 'vad' 不重渲染下面那个 effect 逻辑里只关心 manual 翻转。
+  const recordingMode = useAppStore((s) => s.recordingMode);
 
   // 始终持有最新 sendVoice 引用（避免 useCallback 闭包过期）
   const sendVoiceRef = useRef(sendVoice);
@@ -541,6 +544,20 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
       toggleInFlightRef.current = false;
     }
   }, [vadLoop, store]);
+
+  // 2026-06-05 · 切到手动时自动 pause silero(避免引擎仍在 active 听话/送 voice)。
+  // 原 bug:onRecordingMode 仅改字段 + 写 LS,完全不碰 silero 引擎 → 用户在 VAD
+  // active 状态下切手动 → silero 实例仍 active,onSpeechEnd 仍向 WS 送 voice,
+  // 且按 ChatInput mic 还会并行 startManual → 双路 send voice。
+  // 修法:用 useEffect 订阅 recordingMode 字段(单源 from store),manual 翻转时
+  // 主动调 toggleVad 让引擎走 active→sleep 同款 race-safe 路径(toggleInFlightRef
+  // 防快按、v.pause + AudioContext teardown 同 UI 触发的 toggleVad 一致)。
+  // 切回 VAD 不自动 start —— 用户按 mic 才启,跟现状一致(避免后台监听)。
+  useEffect(() => {
+    if (recordingMode !== 'manual') return;
+    if (store.getState().vadState === 'sleep') return;
+    void toggleVad();
+  }, [recordingMode, toggleVad, store]);
 
   // ── INV-17 v3 · eager init MicVAD at mount ───────────────────────────────
   // 模块 import 用 dynamic import 避开 SSR / Tauri prerender 期 navigator.
