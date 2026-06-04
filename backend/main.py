@@ -1029,6 +1029,20 @@ app.mount(
     StaticFiles(directory=str(_FISH_REFS_STATIC_DIR)),
     name="fish_references",
 )
+
+# Round 5 step 2 (2026-06-04) · User-uploaded backgrounds StaticFiles mount.
+# Resolves to ``<appData>/backgrounds/`` via platformdirs (same path Tauri's
+# appDataDir() returns, anchored on the bundle identifier — see
+# backgrounds_scanner.py). Bundled defaults stay in frontend/public/backgrounds/
+# and are served by Vite; this mount only serves user uploads at
+# /userdata/backgrounds/<file>.
+from backend.services.backgrounds_scanner import get_user_backgrounds_dir as _get_user_bg_dir
+_USER_BG_DIR = _get_user_bg_dir()  # mkdir on first call
+app.mount(
+    "/userdata/backgrounds",
+    StaticFiles(directory=str(_USER_BG_DIR)),
+    name="user_backgrounds",
+)
 app.include_router(activity_router,      prefix="/api", tags=["activity"])
 app.include_router(mcp_router,           prefix="/api", tags=["mcp"])
 # bugfix-3.1: AI Providers REST API (vendors + providers + credentials + activate)

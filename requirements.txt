@@ -41,3 +41,7 @@ jinja2>=3.0
 mutagen>=1.47.0
 # 2026-05-28: faster-whisper 中文输出繁体 · OpenCC t2s 转简体 (asr/whisper.py)
 opencc>=1.1
+# 2026-06-04 · Round 5 step2 · OS 标准 appData 路径(等价 Tauri appDataDir(),
+# 用 Tauri identifier "com.skyler.momoos" 作为 appname 对齐路径)。用户上传
+# 的 background 资产落到 ~/Library/Application Support/com.skyler.momoos/backgrounds/。
+platformdirs>=4.0
