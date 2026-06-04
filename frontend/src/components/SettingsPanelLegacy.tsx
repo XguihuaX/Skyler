@@ -1532,54 +1532,13 @@ export function AsrVadSection() {
   const setMuteWhileSpeaking = useAppStore((s) => s.setMuteWhileSpeaking);
   const vadReady           = useAppStore((s) => s.vadReady);
 
-  // Hydrate from localStorage · INV-17 v3 新 key · 旧 LS_VAD_THRESHOLD /
-  // LS_SILENCE_TIMEOUT 弃用不读(旧 0-100 / 秒值对 silero 语义错位 · 直接默认)。
-  useEffect(() => {
-    try {
-      const rm = localStorage.getItem(LS_RECORDING_MODE);
-      if (rm === 'manual' || rm === 'vad') useAppStore.getState().setRecordingMode(rm);
-      const vp = localStorage.getItem(LS_VAD_POSITIVE);
-      if (vp !== null) {
-        const n = parseFloat(vp);
-        if (!isNaN(n) && n >= 0.1 && n <= 0.9) {
-          useAppStore.getState().setVadPositiveThreshold(n);
-        }
-      }
-      const rd = localStorage.getItem(LS_VAD_REDEMPTION_MS);
-      if (rd !== null) {
-        const ms = parseFloat(rd);
-        if (!isNaN(ms) && ms >= 500 && ms <= 3000) {
-          useAppStore.getState().setVadRedemptionMs(Math.round(ms));
-        }
-      }
-      const ms = localStorage.getItem(LS_MUTE_SPEAKING);
-      if (ms === 'true' || ms === 'false') {
-        useAppStore.getState().setMuteWhileSpeaking(ms === 'true');
-      }
-    } catch (e) {
-      console.warn('[AsrVadSection] localStorage hydrate failed:', e);
-    }
-  }, []);
-
-  const onRecordingMode = (v: 'manual' | 'vad') => {
-    setRecordingMode(v);
-    try { localStorage.setItem(LS_RECORDING_MODE, v); } catch {/* ignore */}
-  };
-  const onVadPositive = (v: number) => {
-    // step 0.05 · 数值类型 float · 不 round 到 int
-    const n = Math.round(v * 100) / 100;
-    setVadPositive(n);
-    try { localStorage.setItem(LS_VAD_POSITIVE, String(n)); } catch {/* ignore */}
-  };
-  const onVadRedemptionMs = (v: number) => {
-    const n = Math.round(v);
-    setVadRedemption(n);
-    try { localStorage.setItem(LS_VAD_REDEMPTION_MS, String(n)); } catch {/* ignore */}
-  };
-  const onMuteWhileSpeaking = (v: boolean) => {
-    setMuteWhileSpeaking(v);
-    try { localStorage.setItem(LS_MUTE_SPEAKING, String(v)); } catch {/* ignore */}
-  };
+  // 2026-06-05 · 删 mount[] useEffect hydrate + UI 层 LS 双写:
+  // store init 已直读 LS,setter 已直写 LS(单源)。原"mount 才同步"导致 store
+  // ≠ LS 长期 desync,且打开能力浮层会把 LS 旧 'vad' 灌进当前 session 翻转模式。
+  const onRecordingMode = setRecordingMode;
+  const onVadPositive = (v: number) => setVadPositive(Math.round(v * 100) / 100);
+  const onVadRedemptionMs = (v: number) => setVadRedemption(Math.round(v));
+  const onMuteWhileSpeaking = setMuteWhileSpeaking;
 
   return (
     <Section title="ASR / VAD">

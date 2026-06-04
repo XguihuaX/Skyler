@@ -40,6 +40,73 @@ export interface ChatMessage {
 const CONV_LIST_COLLAPSED_KEY = 'momoos.convListCollapsed';
 // 方案 1(右侧 chat panel 推拉)— 与 conv list 推拉对称。同样持久化到 localStorage。
 const CHAT_PANEL_COLLAPSED_KEY = 'momoos.chatPanelCollapsed';
+// 2026-06-05 · VAD/ASR LS keys — 从 SettingsPanelLegacy 搬过来,store init 直读
+// 直写,取代原 AsrVadSection useEffect[] 懒 hydrate 模式(走"组件 mount 才同步"
+// 路径会让 store 默认值在用户打开设置前一直跟 LS 不一致 · 切角色 / WS 重连 /
+// 启动都不会拉齐 · 还存在 lazy hydrate 把上次 LS=vad 灌进当前 session 的 desync)。
+const LS_RECORDING_MODE        = 'momoos.recordingMode';
+const LS_VAD_POSITIVE          = 'momoos.vadPositiveThreshold';
+const LS_VAD_REDEMPTION_MS     = 'momoos.vadRedemptionMs';
+const LS_MUTE_SPEAKING         = 'momoos.muteWhileSpeaking';
+
+const RECORDING_MODE_DEFAULT: 'manual' | 'vad' = 'manual';
+// INV-17 v3.4 (2026-05-28) 实测:0.6 解决麦底噪 0.3-0.5 误触发。
+const VAD_POSITIVE_DEFAULT = 0.6;
+const VAD_POSITIVE_MIN = 0.1;
+const VAD_POSITIVE_MAX = 0.9;
+const VAD_REDEMPTION_MS_DEFAULT = 1400;
+const VAD_REDEMPTION_MS_MIN = 500;
+const VAD_REDEMPTION_MS_MAX = 3000;
+const MUTE_SPEAKING_DEFAULT = true;
+
+function readRecordingModeFromStorage(): 'manual' | 'vad' {
+  try {
+    const v = localStorage.getItem(LS_RECORDING_MODE);
+    if (v === 'manual' || v === 'vad') return v;
+    return RECORDING_MODE_DEFAULT;
+  } catch { return RECORDING_MODE_DEFAULT; }
+}
+function writeRecordingModeToStorage(v: 'manual' | 'vad'): void {
+  try { localStorage.setItem(LS_RECORDING_MODE, v); } catch { /* swallow */ }
+}
+function readVadPositiveFromStorage(): number {
+  try {
+    const raw = localStorage.getItem(LS_VAD_POSITIVE);
+    if (raw === null) return VAD_POSITIVE_DEFAULT;
+    const n = parseFloat(raw);
+    if (Number.isFinite(n) && n >= VAD_POSITIVE_MIN && n <= VAD_POSITIVE_MAX) return n;
+    return VAD_POSITIVE_DEFAULT;
+  } catch { return VAD_POSITIVE_DEFAULT; }
+}
+function writeVadPositiveToStorage(v: number): void {
+  try { localStorage.setItem(LS_VAD_POSITIVE, String(v)); } catch { /* swallow */ }
+}
+function readVadRedemptionMsFromStorage(): number {
+  try {
+    const raw = localStorage.getItem(LS_VAD_REDEMPTION_MS);
+    if (raw === null) return VAD_REDEMPTION_MS_DEFAULT;
+    const n = parseFloat(raw);
+    if (Number.isFinite(n) && n >= VAD_REDEMPTION_MS_MIN && n <= VAD_REDEMPTION_MS_MAX) {
+      return Math.round(n);
+    }
+    return VAD_REDEMPTION_MS_DEFAULT;
+  } catch { return VAD_REDEMPTION_MS_DEFAULT; }
+}
+function writeVadRedemptionMsToStorage(v: number): void {
+  try { localStorage.setItem(LS_VAD_REDEMPTION_MS, String(v)); } catch { /* swallow */ }
+}
+function readMuteSpeakingFromStorage(): boolean {
+  try {
+    const v = localStorage.getItem(LS_MUTE_SPEAKING);
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    return MUTE_SPEAKING_DEFAULT;
+  } catch { return MUTE_SPEAKING_DEFAULT; }
+}
+function writeMuteSpeakingToStorage(v: boolean): void {
+  try { localStorage.setItem(LS_MUTE_SPEAKING, String(v)); } catch { /* swallow */ }
+}
+
 // 2026-05-19 — ConversationList 可拖拽宽度。default 240 (= 旧 w-60),clamp [160,400]。
 const CONV_LIST_WIDTH_KEY = 'momoos.convListWidth';
 export const CONV_LIST_WIDTH_DEFAULT = 240;
@@ -582,8 +649,14 @@ export const useAppStore = create<AppState>((set) => ({
 
   recording: false,
   setRecording: (recording) => set({ recording }),
-  recordingMode: 'manual',
-  setRecordingMode: (recordingMode) => set({ recordingMode }),
+  // 2026-06-05 · 单源 LS:store init 直读 · setter 直写。取代原 AsrVadSection
+  // useEffect[] 懒 hydrate 模式(只有用户打开能力浮层才同步,导致 store ≠ LS
+  // 长期 desync · 切角色 / 重启都不读)。
+  recordingMode: readRecordingModeFromStorage(),
+  setRecordingMode: (recordingMode) => {
+    writeRecordingModeToStorage(recordingMode);
+    set({ recordingMode });
+  },
 
   inputMode: 'voice',
   setInputMode: (inputMode) => set({ inputMode }),
@@ -662,13 +735,23 @@ export const useAppStore = create<AppState>((set) => ({
   // INV-17 v3.4 (2026-05-28): 0.3 → 0.6 · 真机实测安静环境麦克底噪 confidence
   // 0.3-0.5 误触发录音 · 0.6 解决。silero 库 default 0.3 同款问题。AsrVadSection
   // hydrate localStorage missing/错值时保持 store default · 故只改这里即可。
-  vadPositiveThreshold: 0.6,
-  setVadPositiveThreshold: (vadPositiveThreshold) => set({ vadPositiveThreshold }),
-  vadRedemptionMs: 1400,
-  setVadRedemptionMs: (vadRedemptionMs) => set({ vadRedemptionMs }),
+  // 2026-06-05 · 同款 LS 直读直写 · 取代 AsrVadSection 懒 hydrate。
+  vadPositiveThreshold: readVadPositiveFromStorage(),
+  setVadPositiveThreshold: (vadPositiveThreshold) => {
+    writeVadPositiveToStorage(vadPositiveThreshold);
+    set({ vadPositiveThreshold });
+  },
+  vadRedemptionMs: readVadRedemptionMsFromStorage(),
+  setVadRedemptionMs: (vadRedemptionMs) => {
+    writeVadRedemptionMsToStorage(vadRedemptionMs);
+    set({ vadRedemptionMs });
+  },
   vadIdleTimeoutMs: 60000,
-  muteWhileSpeaking: true,
-  setMuteWhileSpeaking: (muteWhileSpeaking) => set({ muteWhileSpeaking }),
+  muteWhileSpeaking: readMuteSpeakingFromStorage(),
+  setMuteWhileSpeaking: (muteWhileSpeaking) => {
+    writeMuteSpeakingToStorage(muteWhileSpeaking);
+    set({ muteWhileSpeaking });
+  },
 
   ttsEnabled: true,
   setTtsEnabled: (ttsEnabled) => set({ ttsEnabled }),
