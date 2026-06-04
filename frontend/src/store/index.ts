@@ -370,7 +370,8 @@ function _writeGlobalSceneToStorage(v: GlobalScene | null): void {
 
 // 2026-06-02 · UI redesign step 2: 浮层路由(磨砂浮层取代整页 settings/capabilities)。
 // session-only · 不持久化(打开浮层 = UI 临时态,关 app 后默认回主聊天)。
-export type ActiveOverlay = 'capabilities' | 'settings' | null;
+// 2026-06-05 · ② 系统状态页 · 加 'system' 浮层(Sidebar Gauge 图标触发)。
+export type ActiveOverlay = 'capabilities' | 'settings' | 'system' | null;
 
 interface AppState {
   // 窗口模式

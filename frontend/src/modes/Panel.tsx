@@ -16,6 +16,7 @@ import OverlayShell from '../components/OverlayShell';
 import SceneBackground from '../components/SceneBackground';
 import SettingsPanelV2 from '../components/settings/SettingsPanelV2';
 import Sidebar from '../components/Sidebar';
+import SystemPanel from '../components/system/SystemPanel';
 import TopBar from '../components/TopBar';
 
 interface ToastInfo {
@@ -248,6 +249,11 @@ export default function Panel() {
       {activeOverlay === 'settings' && (
         <OverlayShell onClose={() => setActiveOverlay(null)}>
           <SettingsPanelV2 showToast={showToast} />
+        </OverlayShell>
+      )}
+      {activeOverlay === 'system' && (
+        <OverlayShell onClose={() => setActiveOverlay(null)}>
+          <SystemPanel />
         </OverlayShell>
       )}
     </div>

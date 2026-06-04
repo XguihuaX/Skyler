@@ -1,6 +1,7 @@
 import {
   Boxes,
   GalleryThumbnails,
+  Gauge,
   MessageCircle,
   MessagesSquare,
   Settings,
@@ -64,6 +65,16 @@ export default function Sidebar() {
       label: '设置',
       isActive: activeOverlay === 'settings',
       onClick: () => setActiveOverlay('settings'),
+    },
+    {
+      // 2026-06-05 · ② 系统状态页 · 实时仪表 + 后端 health 子状态 + 模型 active +
+      // 角色/场景/资源监控 · 主用途:逮间歇 VAD bug + 一眼看后端模型加载/连接。
+      kind: 'action',
+      id: 'system',
+      Icon: Gauge,
+      label: '系统',
+      isActive: activeOverlay === 'system',
+      onClick: () => setActiveOverlay('system'),
     },
   ];
 
