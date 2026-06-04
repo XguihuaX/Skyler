@@ -201,7 +201,9 @@ python -m tools.check_moc3_version frontend/public/live2d/yae/
 ### 🎙 输入与输出
 - **语音输入**两种模式:
   - **手动模式** —— 点击开始录音,再点击发送
-  - **VAD 模式** —— 点击激活后,Web Audio API 自动检测语音;1.5 秒静音自动发送;60 秒空闲回 sleep
+  - **VAD 模式** —— silero MicVAD(自托管 ONNX,web 构建,`@ricky0123/vad-web`);点击激活后自动检测语音,说话结束自动发送;`positiveSpeechThreshold` + `redemptionMs` 在**设置 → 能力 → ASR / VAD** 可调
+  - **模式切换单源**(LS)—— store init 直读 localStorage · setter 直写 · 切手动时 `useAudio` 内 useEffect 订阅 `recordingMode` 自动 `toggleVad()` 让 silero 走 active→sleep race-safe 路径(Round 5,2026-06-05;取代旧 AsrVadSection useEffect[] 懒 hydrate 导致的 store ≠ LS desync)。仍有一个手动模式偶发"麦还在听"间歇 bug 未根治,见已知问题
+- **录音按钮按模式变形**(2026-06-05):图标手动=Mic / VAD=AudioWaveform;高亮 = "真在听"双源(手动看 `recording` / VAD 看 `vadState ∈ {active, recording}`)
 - **ASR 实时回显** —— 通过 `asr_result` WebSocket 消息把识别结果即时显示在输入框上方,并写入聊天历史
 - **流式输出** —— 文字和音频按句到达
 - **TTS** —— 3 provider paradigm(INV-11 Stage 1.5,2026-05-26):CosyVoice(DashScope,默认 + 复刻 voice 双轨)· Fish Audio(云端,per-character 上传参考音频)· GSV(GPT-SoVITS,自部署)。Edge-TTS legacy fallback。每角色 `voice_model` JSON 解析 provider × model × voice;注册表在 `backend/config/tts_models.json`。Mai(`cid=1`)当前走 GSV `mai_v4` + 16 emotion bank(日语 TTS)。VoicePicker UI 是 inline(paradigm B),auto-save debounce 300ms。加新 model 走 `docs/adding-new-tts-model.md`。
@@ -233,13 +235,14 @@ python -m tools.check_moc3_version frontend/public/live2d/yae/
 - **每角色音色** —— `character.voice_model` JSON:cosyvoice slim schema `{provider, model, voice, instruct_supported, tts_language?}`,或 fish / gsv 完整 schema(从 `tts_models.json` spread 默认值:`gpt_weights` / `sovits_weights` / `server_url` / `emotion_bank_dir` / `inference_params` 等);空值 fallback 到全局默认。
 - **已知限制** —— v4-beta 仅 Mai(`cid=1`)有完整 persona;其他角色为空骨架,v4.1 (F1) 逐个补真 persona。
 
-### 🎨 对话 UI(v4-beta 统一)
+### 🎨 对话 UI(Round 3/4/5 浮动玻璃陪伴态,2026-06-01~05)
 
-v4-beta 把分裂的对话/历史入口收敛成一套:
+旧版 v4-beta "推拉 chat panel + 左对话列表"布局已**完全取代**。陪伴界面现为:
 
-- 右上角独立"历史"入口 **已移除**;旧浮现台词气泡 **已移除**(有 bug + 与 chat panel 功能重叠)。
-- 对话内容统一由**左侧推拉 chat panel** 承载(显示当前 conversation 完整聊天记录)。
-- 左 conversation list + 右 chat panel **双推拉**;切角色自动加载该角色最新对话内容(无对话则空状态引导);两侧全收起 = 纯立绘 Galgame 沉浸;窗口 <1280px 自动降级布局。
+- **全窗壁纸**作为底层(Live2D 角色透明,只渲模型 —— 无 per-character 背景层,无 `bg-base` 左右带);`SceneBackground` 是唯一渲染层,挂 Panel 根 `absolute inset-0`。
+- **浮动玻璃组件**漂在上面:TopBar / Sidebar dock(垂直居中,left:20)/ ConversationList(默认收起,dock 图标开/收)/ ChatHistoryPanel(右上锚定,**宽 + 高都可拖**,左下角拖拽手柄,持久化到 store + LS)/ ChatInput(底部胶囊,maxWidth 680)/ **心情小标**(左上,默认 emoji + 词,hover / 点击展开完整亲密度 + thought 卡)。
+- **共享玻璃 token**(`themes.css` 内 `--glass-bg` / `--glass-radius` 16 / `--glass-blur` 12 / `--glass-border` / `--glass-shadow` lift / `--glass-text` + 浅色主题翻深字 override)。6 个浮件吃同一套,改一处全跟着变。
+- **系统状态浮层**(Round 5 ②):dock 上第 5 个 nav 图标(Gauge)→ 5 卡仪表 — 🎙 语音(实时 store:recordingMode / vadState / confidence 条 / 阈值刻度)/ 🔌 连接(WS + AI status + `/api/health` poll 5s)/ 🧠 模型(LLM/TTS active providers + ASR config)/ 🎴 角色 / 场景(currentCharacter + state + globalScene + bundled/user 来源)/ 📊 资源(RAM / CPU / 网络 poll 3s)。
 
 ### 🎨 UI:8 套主题
 
@@ -259,6 +262,17 @@ Settings → UI 风格切换:
 所有组件走 `var(--color-*)`(styles/themes.css),没有硬编码 Tailwind 色值。状态存 `localStorage`,首次渲染 `data-theme` 上 mount 防闪烁。
 
 `lucide-react` 图标全组件覆盖。
+
+### 🖼 壁纸(Round 5,2026-06-05)
+
+壁纸**跟角色完全解耦** —— 切角色不再换壁纸。图统一**全局**,在**设置 → 外观 → 🖼 场景背景**里选。
+
+- **缩略图网格选择器**(点击即生效,无"应用"按钮)—— bundled 默认样例在 `frontend/public/backgrounds/`(只读,随 app 出货)+ user 自传在 `<appData>/backgrounds/`(可写,走 `platformdirs.user_data_dir('com.skyler.momoos', appauthor=False)`,跟 Tauri 2 `appDataDir()` 默认行为对齐)。
+- **添加 / 删除** —— POST `/api/backgrounds/upload`(multipart + sanitize + macOS Finder 同款重名加 `-1`/`-2` 后缀 + 200 MB 流式上限 413 + cleanup half-written);DELETE `/api/backgrounds/{name}`(仅 user · path traversal 双层防御)。后端用 StaticFiles mount `/userdata/backgrounds/` serve user 文件。
+- **格式白名单** —— `.jpg/.jpeg/.png/.webp`(图片)· `.mp4/.webm`(视频)· 其它一律忽略。
+- **跟主题独立** —— 主题只换 `--color-*` token;壁纸在 z-0 浮件之下,切主题它不动。
+
+> Legacy `character.background_path` DB 列 + Pydantic 模型保留 dormant(零迁移)。未来若做"每角色默认 + 全局覆盖"混合档可启用,详 ROADMAP Tech Debt。
 
 ### 🔔 主动陪伴
 - **Trigger pack** —— `lunch_call` / `dinner_call` / `bedtime_chat` / `long_idle` 常驻;`wake_call` ⇄ `morning_briefing` 互斥(由 `config.proactive.mode` 选其一)。角色在该出现的时候才出现,不是每个 polling 都说话
@@ -456,6 +470,8 @@ llm:
 ## ⚠️ 已知问题
 
 按优先级排列。日常运行不阻塞,但未来需要处理。完整 backlog 散见 [ROADMAP.md §Tech Debt & Backlog](ROADMAP.md#tech-debt--backlog) / [docs/archive/DESIGN.md §十四之B](docs/archive/DESIGN.md);本块是 manual 验收期间发现的活跃 issue 汇总。
+
+> **VAD 手动模式"麦还在听"间歇 bug**(Round 5 衍生,**仍未根治**)—— Round 5 系列(2026-06-05)已修两个表层根因:① `recordingMode` store init 直读 LS 取代 AsrVadSection 懒 hydrate(原 bug:store 硬编码 manual default + 用户打开 Capabilities 时被翻转回 vad);② useAudio 新加 useEffect 订阅 `recordingMode`,切手动时自动 `toggleVad()` 让 silero 走 active→sleep race-safe 路径(原 bug:onRecordingMode 仅改字段不动引擎)。**但 PM 真机仍偶发观察到手动模式下"麦还在听"。** 根因未抓全 · 诊断仪器已就绪:系统状态浮层 → 🎙 语音卡显示 live `vadState` badge + ConfidenceBar(positiveSpeechThreshold 阈值刻度)+ recording flag,用它复现抓现场。ROADMAP P1 立项。
 
 > **注**:本节当前仅同步了 `characters.yaml` 双源一条;EN README 完整列了 19+ 条(7 文件 pre-existing test failures / 网易云 mpv / MCP 凭证加密 / `config.yaml` 双写源 / 表层重构 等),逐条翻译同步留作后续单独小刀。
 

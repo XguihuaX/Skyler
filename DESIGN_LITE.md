@@ -104,8 +104,10 @@ v3 时代 persona 9 段自由拼装 → 字段语义混乱、跨字段冲突、p
 
 ```
 用户输入(语音 / 文本)
-  ├─ VAD 模式  Web Audio API speech detect → MediaRecorder
-  ├─ 手动      点击起停
+  ├─ VAD 模式  silero MicVAD(Web,自托管 onnx) → 内部 buffer audio
+  │            recordingMode 切手动时 useAudio useEffect 订阅自动 pause silero
+  │            (避免双路并行 sendVoice;详 Round 5 系列)
+  ├─ 手动      MediaRecorder + 用户点起停
   └─ 文本      直接送
 
   → ASR        faster-whisper(本地)→ asr_result 推送前端
@@ -657,13 +659,81 @@ GET /api/observability/system/resources         — psutil RAM/CPU/Whisper/netwo
 
 ### 7.4 UI 入口
 - ⚙ TTS tab 底部 today/month + [查看最近] modal
-- ⚙ 设置 / 系统状态 section(3s 自动刷新)
+- 🎛 **系统状态页**(Round 5 ②,2026-06-05):Sidebar Gauge 图标 → OverlayShell → 5 cards 仪表(语音 / 连接 / 模型 / 角色场景 / 资源);ResourcesCard 复用 `/api/observability/system/resources` poll 3s,救活原 `SettingsPanelLegacy:1155 SystemStatusSection` 死代码渲染;ConnectionCard 加 `/api/health` poll 5s 显示 embedding/whisper/llm 三模型 ready/loading 子状态;ModelsCard 拉 `/api/ai-providers?type=llm/tts` filter `is_active` + `/api/config/asr` 显示 active provider name + model,挂载一次 + 手动刷新(不 poll)
 
 ### 7.5 v4.1 加固
 - TTS daily char cap per-user enforcement(**deferred · 移出 v4.0 范围,多人测试再议**;当前仅 `tts_call_log` 埋点监控,无强制闸 — 单人 dogfood 烧量可控)
 - main chat per-minute throttle(同上 deferred)
 - UI token 用量 daily display
 - 推送延迟 metric(audio_consumer perf_counter)
+
+---
+
+## §7.5 大窗陪伴 UI 架构(Round 3/4/5,2026-06-01~05 重做)
+
+### 7.5.1 浮件化 + 全窗壁纸
+
+旧版:CharacterView `absolute inset-0` 内含 `panelOverlayStyle = bg-base 40%` scrim + 每角色 background_path 图层,壁纸只覆盖 chat main area(paddingLeft:80 之后),左右两条带和 character wrapper `translateX(-17%)` 漏出 bg-base 兜底色。
+
+Round 3 重做:
+- **`SceneBackground.tsx` 成为整窗壁纸唯一渲染层** · 挂 Panel 根 `absolute inset-0 zIndex:0` · img/video cover 真 edge-to-edge
+- **CharacterView 透明** · 只渲 Live2D canvas 或 fallback 静态角色图,无任何背景叠加层
+- **6 个浮件** 全部 absolute floating + glass token:TopBar / Sidebar dock(垂直居中) / ConversationList(top:20 left:80 width:280 · 折入 dock 后默认收起) / ChatHistoryPanel(右上锚定 + 左下角拖拽手柄改宽高) / ChatInput(底部胶囊 maxWidth:680) / CharacterStatePanel(锚 Panel 根 left:8 top:48,hover/click 展开完整卡)
+
+### 7.5.2 共享玻璃 token(themes.css `--glass-*`)
+
+单源 token,改一处全跟着变,跨 8 主题:
+
+```
+--glass-radius   16px
+--glass-blur    12px
+--glass-border  1px solid var(--color-border-subtle)
+--glass-bg      color-mix(bg-surface 50%, transparent)     ; bg-surface 跟主题
+--glass-shadow  var(--shadow-card-lift)
+--glass-text    rgba(255,255,255,0.94)                     ; 深底主题
+                rgba(20,22,32,0.92)                        ; morandi/watercolor 浅底翻深
+--glass-text-muted   ~75% alpha
+--glass-text-shadow  深底浅字 0 1 2 rgba(0,0,0,.45)
+                     浅底深字 0 1 2 rgba(255,255,255,.65)
+```
+
+### 7.5.3 背景架构(Round 5)
+
+| 层 | 数据源 | 目录 | 写路径 |
+|---|---|---|---|
+| **bundled 默认样例**(只读) | git tracked | `frontend/public/backgrounds/` | git commit |
+| **user 自传**(可加可删) | runtime | `platformdirs.user_data_dir('com.skyler.momoos', appauthor=False)` / `backgrounds/`(macOS `~/Library/Application Support/com.skyler.momoos/backgrounds/`,对齐 Tauri 2 `appDataDir()` 默认行为) | POST `/api/backgrounds/upload`(multipart + sanitize + 重名 `-1`/`-2` · 200MB 上限流式 413 + cleanup half-written)/ DELETE `/api/backgrounds/{name}`(仅 user · path traversal 双层防御)|
+
+`backend/services/backgrounds_scanner.py` 扫两处合并 + 加 `source: 'bundled'|'user'` 标签;前端 `lib/backgrounds.ts::resolveBackgroundUrl(item)` 根据 source 决定是否拼 `BACKEND_BASE`(bundled 走 Vite `/backgrounds/x` · user 走 backend StaticFiles mount `/userdata/backgrounds/x`)。
+
+**关键解耦**(Round 5 step 1):SceneBackground 只消费 `store.globalScene`,不再消费 `currentCharacter.background_path` — 切角色绝不再换壁纸。`character.background_path` DB 列 + Pydantic 模型 + frontend form 字段保留 dormant(零迁移,见 §8 Tech Debt)。
+
+### 7.5.4 VAD/ASR 单源 LS + 引擎订阅
+
+旧版:`recordingMode` 等 4 个用户偏好硬编码 store default + AsrVadSection `useEffect[]` 懒 hydrate 从 LS · 用户上次 LS=vad 时本次启动 store 是默认 manual,打开能力浮层 hydrate 才同步 → store ≠ LS 长期 desync。切手动时仅 `setRecordingMode` 不动 silero 引擎 → silero 仍 active 继续 send voice。
+
+Round 5 系列修法:
+- `store/index.ts` `_readRecordingModeFromStorage()` 等 4 个 helper,store init 直读 LS,setter 直写 LS,LS = 单源
+- `useAudio.ts` 新 useEffect 订阅 `recordingMode`,`recordingMode==='manual' && vadState!=='sleep'` → 自动 `toggleVad()` 走 active→sleep race-safe 路径
+- **known issue**:手动模式仍有间歇"麦还在听"bug 未根治(P1),根因待用 7.4 系统状态页 🎙 VoiceCard 现场诊断仪 + ConfidenceBar 抓现场
+
+### 7.5.5 关键路径速查
+
+```
+frontend/src/components/SceneBackground.tsx         整窗壁纸渲染(z-0)
+frontend/src/components/CharacterStatePanel.tsx     心情小标
+frontend/src/components/ConversationList.tsx        会话列表浮卡(折入 dock)
+frontend/src/components/ChatHistoryPanel.tsx        聊天记录浮卡(右上锚 + 左下拖手柄)
+frontend/src/components/Sidebar.tsx                 dock(5 nav · Gauge=系统)
+frontend/src/components/system/SystemPanel.tsx      系统状态页主容器
+frontend/src/components/system/cards/               5 卡(Voice/Connection/Models/Character/Resources)
+frontend/src/components/settings/SettingsPanelV2.tsx::SceneSection
+                                                     缩略图网格 + 上传 + 删除 + 高级折叠手填路径
+frontend/src/styles/themes.css                      --glass-* token 单源
+frontend/src/lib/backgrounds.ts                     resolveBackgroundUrl + uploadBackground + deleteBackground
+backend/services/backgrounds_scanner.py             双源扫描(bundled + user)+ source 标签
+backend/routes/backgrounds_api.py                   upload/delete endpoint + sanitize + 200MB 上限
+```
 
 ---
 
@@ -694,6 +764,9 @@ GET /api/observability/system/resources         — psutil RAM/CPU/Whisper/netwo
 17. MCP 凭证升级 OS keyring
 18. LLM 慢(qwen3.6-plus + 网络;绑定锁死后纯性能问题,独立优化不混功能修复)
 19. CosyVoice WS 建链 5s 超时(SDK 写死,弱网失败)
+20. **`character.background_path` dormant 字段待清**(Round 5 step 1 衍生)—— 解耦后 view 层不再消费,DB 列 + Pydantic 模型 + frontend form 字段保留 round-trip 透传。未来若做"每角色默认壁纸 + 全局覆盖"混合档可启用,否则按 chore 清(form 字段删 + Pydantic 移除 + DROP COLUMN migration)。详 §7.5.3
+21. **`SystemStatusSection` 旧 export 死代码**(Round 5 ② 衍生)—— `SettingsPanelLegacy.tsx:1155` 函数仍在但 caller 已删(`chore: drop dead SettingsPanel default`),Round 5 ② `ResourcesCard.tsx` 已重做同款渲染。顺手 chore 删整个函数 export
+22. **VAD 手动模式间歇 bug 根因未抓全**(Round 5 衍生 P1)—— 已修两个表层根因(LS desync + 切手动 silero 未 pause),PM 真机仍偶发"麦还在听"。下一步用 §7.4 系统状态页 🎙 VoiceCard 现场诊断仪复现 + 抓 vadState/WS voice/silero 实例生命周期。详 ROADMAP P1
 
 完整 backlog 见 [ROADMAP.md](ROADMAP.md)。
 

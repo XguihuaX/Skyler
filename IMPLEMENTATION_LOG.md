@@ -1533,3 +1533,26 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
 
 ---
 
+### v4-beta 后续 ship 批次 — Round 3/4/5 大窗 UI 重做 + 系统状态页 + VAD desync 修复(2026-06-01~05)
+
+> 2026-06-05 doc 对账时归档。git log Range `4399494..4cb4eec`(8 commits, UI 重做 + 背景架构 + 系统页 + VAD desync 修复)。
+
+| Status | Item | Goal / Notes |
+|---|---|---|
+| ✅ | **Round 3 浮件化 + 全窗壁纸**(commit `4399494`)| `SceneBackground.tsx` 成整窗 z-0 唯一壁纸渲染层(挂 Panel 根 `absolute inset-0`)· `CharacterView.tsx` 删 `panelOverlayStyle` bg-base 40% scrim + 删 `backgroundLayer` per-character 渲染段(壁纸不再被 chat main area paddingLeft 推开 / 不再被 character wrapper translateX 漏空 / 不再被 scrim 染色)· 6 浮件 absolute floating + glass token(TopBar / Sidebar dock / ConvList / ChatHistoryPanel / ChatInput / CharacterStatePanel)· character wrapper transform 重置到 translateX(0) 居中 |
+| ✅ | **Round 4 ① 心情小标**(commit `4399494` 同批)| `CharacterStatePanel.tsx` 默认只渲 emoji + 词,hover/click 展开完整卡(intimacy 数字 + 进度条 + activity / thought)· 锚 Panel 根(整窗 left:8 top:48)而不再嵌 chat main area · intimacy 数字改 `var(--color-accent)` 跟主题主色 · 进度条 HSL 饱和度 70%→40% 降跳 · 默认 textShadow 防糊 |
+| ✅ | **Round 4 ② 对话列表折入坞**(commit `4399494` 同批)| Sidebar 加 MessagesSquare「会话列表」nav item · Panel.tsx 删左上 ConvList 唤回 chip(原 ChevronRight 圆按钮)· ConvList 浮卡仍 absolute top:60 left:80 width:280 锚 dock 右侧 8px 空隙 · 默认收起(store init 改 `true`) |
+| ✅ | **Round 4 ③ 聊天记录可伸缩**(commit `4399494` 同批)| ChatHistoryPanel 右上锚定(top:20 right:20)· 左下角拖拽手柄(CornerDownLeft 14×14)· pointer events + `setPointerCapture` 防拖快脱离 · 同时改宽 + 高(`newW = startW - dx` / `newH = startH + dy`)· store 加 `chatHistoryHeight`(default 600 / clamp [240, 1200])+ helpers + localStorage key `momoos.chatHistoryHeight` · dragging useEffect body `cursor: sw-resize` |
+| ✅ | **Round 4 ④ 玻璃 token 统一**(commit `4399494` 同批)| themes.css `:root` 加 `--glass-radius` / `--glass-blur` / `--glass-border` / `--glass-bg`(bg-surface 50%)/ `--glass-shadow`(lift)/ `--glass-text` / `--glass-text-muted` / `--glass-text-shadow` · `[data-theme="morandi"]`, `[data-theme="watercolor"]` override 翻深字 + 浅光阴影 · 6 浮件吃同一套 |
+| ✅ | **Round 5 step 1 背景跟角色解耦 + 缩略图选择器**(commit `f00a3c7`)| `SceneBackground.tsx` 只消费 `globalScene`,删 `currentCharacter.background_path` 整路(切角色不再换壁纸)· `CharacterPanel.tsx` 删整段"背景层" select UI + `backgrounds` / `bgLoading` / `bgError` state + `refreshBackgrounds` callback + `fetchBackgrounds` import,`form.background_path` 字段保留 dormant round-trip · `SettingsPanelV2.tsx` `SceneSection` 重做:fetchBackgrounds → 缩略图网格 + accent 边框 + 角标选中态 + 即时生效;手填路径降级 `<details>` advanced |
+| ✅ | **Round 5 step 2 背景前端加 / 删 + 200MB 上限**(commits `f00a3c7` / `22fc8fb`)| `backend/services/backgrounds_scanner.py` 扫两源(bundled `frontend/public/backgrounds/` + user `appData/backgrounds/`)+ `source: 'bundled'/'user'` 标签 · `_user_backgrounds_dir()` 用 `platformdirs.user_data_dir('com.skyler.momoos', appauthor=False)` 对齐 Tauri 2 `appDataDir()` · `backend/routes/backgrounds_api.py` 加 POST `/upload`(multipart + `_sanitize_name` 黑名单 regex + 重名 `-1`/`-2` 后缀 + 流式 1 MiB 分块 + 200 MB 累计上限 413 + cleanup half-written)+ DELETE `/{name}`(`name` 等值检查 `(.., ., '')` + `is_relative_to` 双层防 path traversal)· `backend/main.py` mount StaticFiles `/userdata/backgrounds/` · `frontend/src/lib/backgrounds.ts` 加 `resolveBackgroundUrl` / `uploadBackground` / `deleteBackground` / `userFilenameFromItem` · SceneSection 加上传 form + inline confirm 替换 `window.confirm`(避免 Tauri WKWebView 静默坑)· `requirements.txt` 加 `platformdirs>=4.0` |
+| ✅ | **VAD/ASR desync 修复链**(commits `bbcb119` / `6768e54` / `177451c`)| ① `store/index.ts` 加 `readRecordingModeFromStorage` / `readVadPositiveFromStorage` / `readVadRedemptionMsFromStorage` / `readMuteSpeakingFromStorage` 4 helper · 4 字段 initial state 直读 LS · setter 内同步写 LS · 删 `SettingsPanelLegacy.tsx` AsrVadSection mount[] useEffect 懒 hydrate(25 行)+ 简化 `onRecordingMode` / `onVadPositive` 等 4 个 handler(去 LS 双写)· ② `useAudio.ts` 加 `useEffect(() => { if (recordingMode==='manual' && vadState!=='sleep') void toggleVad(); }, [recordingMode, toggleVad, store])` · ③ chore 删 `export default function SettingsPanel()` 294 行死代码 + 4 个孤儿 LS const · **known issue**:手动模式仍有间歇"麦还在听"bug,根因未抓全(Round 5 衍生 P1)|
+| ✅ | **录音按钮按模式 + 真在听点亮**(commit `b9c1dc7`)| ChatInput / ControlBar 两处同款:`recordingMode === 'vad' ? AudioWaveform : Mic` 图标双源 · `isListening` 双源(手动看 `recording` / VAD 看 `vadState ∈ {active, recording}`)· `aria-pressed` + `aria-label` + title 按状态切 |
+| ✅ | **系统状态页 5 卡仪表**(commit `4cb4eec`)| `ActiveOverlay` 扩 `'system'` · Sidebar 加 Gauge nav item · Panel.tsx 加 `<OverlayShell><SystemPanel/></OverlayShell>` 块 · 新 `frontend/src/components/system/` 目录(`SystemPanel.tsx` 主容器 + `cards/Card.tsx` 共享 glass 外壳 + 5 cards:`VoiceCard` 含 `<ConfidenceBar />` 子组件隔离 silero 32ms 高频写 / `ConnectionCard` poll `/api/health` 5s / `ModelsCard` 拉 ai-providers + asr config + SystemRes 一次 + 手动刷新 / `CharacterCard` 实时 store + scene path 形态判 bundled/user / `ResourcesCard` 复用 `/api/observability/system/resources` poll 3s,救活 SettingsPanelLegacy:1155 死代码 → 拆 card 重做)· 关于/版本 card skip(无现成数据源)|
+
+> **下一步**:VAD 手动模式间歇 bug 根因 audit(用系统状态页 🎙 VoiceCard 现场诊断仪复现 + 抓 vadState 翻转链路 + WS voice 发送链路 + silero 实例生命周期),详 ROADMAP P1。
+
+> **Tech debt 入册**(详 ROADMAP Tech Debt 表):① `character.background_path` dormant 字段(form 字段 + DB 列 + Pydantic 模型,Round 5 解耦后 view 层不消费)· ② `SystemStatusSection` 旧 export 死代码(SettingsPanelLegacy:1155,Round 5 ② 已重做同款渲染)。
+
+---
+

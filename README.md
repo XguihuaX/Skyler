@@ -174,7 +174,9 @@ Here's what Skyler currently does. None of these are locked — every layer is b
 ### 🎙 Input & Output
 - **Voice input** with two modes:
   - **Manual mode** — click to start recording, click again to send
-  - **VAD mode** — click to activate; auto-detects speech via Web Audio API; auto-sends after 1.5 s silence; 60 s idle returns to sleep
+  - **VAD mode** — silero MicVAD (self-hosted ONNX, web build, `@ricky0123/vad-web`); click to activate; auto-detects speech; auto-sends on speech-end; configurable `positiveSpeechThreshold` + `redemptionMs` in **Settings → Capabilities → ASR / VAD**
+  - **Mode switch is single-source** (LS) — store reads localStorage on init, setter writes back; switching to manual auto-pauses the silero engine via a `useEffect` in `useAudio` (Round 5, 2026-06-05; no more residual "still listening" desync from the old lazy-hydrate path). One intermittent "still listening" edge case still open — see Known Problems
+- **Mic button** state-aware (2026-06-05): icon switches by mode (Mic / AudioWaveform), highlight = actually listening (manual: `recording`; VAD: `vadState ∈ {active, recording}`)
 - **ASR result preview** — recognized text shown above input box in real time via `asr_result` WS message; persists into chat history
 - **Streaming output** — text and audio arrive sentence by sentence
 - **TTS** — 3 provider paradigm (INV-11 Stage 1.5, 2026-05-26): CosyVoice (DashScope, default + cloned voice 双轨) · Fish Audio (cloud, reference upload per-character) · GSV (GPT-SoVITS, self-hosted). Edge-TTS legacy fallback. Per-character `voice_model` JSON resolves provider × model × voice; registry in `backend/config/tts_models.json`. Mai (`cid=1`) currently runs GSV `mai_v4` with 16-emotion bank (ja TTS). VoicePicker UI is inline (paradigm B) with auto-save (debounce 300ms). Add new models via `docs/adding-new-tts-model.md`.
@@ -205,13 +207,14 @@ Here's what Skyler currently does. None of these are locked — every layer is b
 - **Per-character voice** — `character.voice_model` JSON: cosyvoice slim schema `{provider, model, voice, instruct_supported, tts_language?}` or fish/gsv full schema (model defaults spread from `tts_models.json`: `gpt_weights` / `sovits_weights` / `server_url` / `emotion_bank_dir` / `inference_params` / etc); empty falls back to global default
 - **Known limitation** — v4-beta only Mai (`cid=1`) has a full persona; other characters are empty skeletons, filled one by one in v4.1 (F1)
 
-### 🎨 Chat UI (v4-beta unified)
+### 🎨 Chat UI (Round 3/4/5 floating-glass companion mode, 2026-06-01~05)
 
-v4-beta collapses the split conversation/history entries into one:
+The old v4-beta "push/pull chat panel + left conversation list" layout has been **fully replaced**. The companion view is now:
 
-- The separate top-right "history" entry **is removed**; the old fading dialogue bubble **is removed** (had bugs + overlapped chat-panel function).
-- Conversation content is served by a single **left-side push/pull chat panel** (full chat log of the current conversation).
-- Left conversation-list + right chat-panel **both push/pull**; switching character auto-loads that character's latest conversation content (empty state with prompt if none); both collapsed = pure-avatar Galgame immersion; window <1280px auto-degrades layout.
+- **A full-window wallpaper** as the base layer (Live2D character is transparent, only the model renders — no per-character background scrim, no `bg-base` strip on the sides). `SceneBackground` is the sole renderer, anchored to the Panel root `absolute inset-0`.
+- **Floating glass widgets** on top: TopBar / Sidebar dock (vertical-centered, left:20) / ConversationList (collapsed by default, expand via dock icon) / ChatHistoryPanel (top-right, **resizable both width & height** via a bottom-left drag handle, persisted to store + LS) / ChatInput (bottom capsule, maxWidth 680) / **mood badge** (top-left, default = emoji + word, hover/click to expand to full intimacy + thought card).
+- **A unified glass token system** in `themes.css` (`--glass-bg` / `--glass-radius` 16 / `--glass-blur` 12 / `--glass-border` / `--glass-shadow` lift / `--glass-text` + light-theme override). All 6 widgets share one set — adjust one token, every floating element follows.
+- **System status overlay** (Round 5 ②): a fifth nav item in the dock (Gauge icon) opens a 5-card dashboard — Voice (live store: recordingMode / vadState / confidence bar / threshold marker) / Connection (WS + AI status + `/api/health` poll 5s) / Models (LLM/TTS active providers + ASR config) / Character & Scene (current character + state + wallpaper source) / Resources (RAM/CPU/network poll 3s).
 
 ### 🎨 UI: 8-Theme System
 Settings → UI lets you switch between:
@@ -230,6 +233,17 @@ Settings → UI lets you switch between:
 All components use `var(--color-*)` from `styles/themes.css` (no hardcoded Tailwind colors). Persisted in `localStorage`. First-paint flash prevented by applying `data-theme` on mount.
 
 `lucide-react` icons across all components.
+
+### 🖼 Wallpaper (Round 5, 2026-06-05)
+
+Wallpaper is **fully decoupled from character** — switching character does not change the wallpaper anymore. The image is **global**, set once in **Settings → UI → 🖼 Scene Background**.
+
+- **Thumbnail grid picker** (click-to-apply, no "Save" button) — bundled samples in `frontend/public/backgrounds/` (read-only, ships with the app) + user uploads in `<appData>/backgrounds/` (writable, via `platformdirs.user_data_dir('com.skyler.momoos', appauthor=False)`, aligned with Tauri 2's `appDataDir()`).
+- **Upload / delete** — POST `/api/backgrounds/upload` (multipart, sanitize, dup-suffix `-1`/`-2` à la Finder, 200 MB streaming cap with 413 + half-written cleanup); DELETE `/api/backgrounds/{name}` (user-only, path-traversal double-guard). Backend serves user files via StaticFiles mount `/userdata/backgrounds/`.
+- **Format whitelist** — `.jpg/.jpeg/.png/.webp` (image) · `.mp4/.webm` (video) · everything else ignored.
+- **Independence from theme** — themes only swap `--color-*` tokens; wallpaper lives at z-0 underneath the glass widgets and stays put when you switch themes.
+
+> The legacy `character.background_path` DB column and Pydantic model are kept dormant (zero migration) — see Tech Debt in ROADMAP if you want to repurpose for a future "per-character default + global override" mode.
 
 ### 🔔 Proactive Engagement
 - **Trigger pack** — `lunch_call` / `dinner_call` / `bedtime_chat` / `long_idle` always on; `wake_call` ⇄ `morning_briefing` are mutually exclusive (choose one via `config.proactive.mode`). Momo reaches out when it matters, not on every poll.
@@ -430,6 +444,8 @@ See [ROADMAP.md](ROADMAP.md) for the full picture (P1 / P2 / P3 / 5070ti-trigger
 ---
 
 ## ⚠️ Known Problems / 已知问题
+
+> **VAD "still listening" intermittent edge case** (Round 5 derived, **open**) — Two surface root causes have been fixed (Round 5, 2026-06-05): (1) `recordingMode` store-init now reads localStorage directly so the old AsrVadSection `useEffect[]` lazy hydrate can't flip the store back to `'vad'` when the user opens Capabilities; (2) a new `useEffect` in `useAudio` watches `recordingMode` and auto-calls `toggleVad()` when it flips to `'manual'` while the silero engine is still `active`, so the engine is paused via the same race-safe path as the mic button. **But PM has still observed intermittent "mic seems to be listening in manual mode" on-device.** The full root cause is not yet pinned down. Diagnostic instrumentation is in place: the System status overlay → 🎙 Voice card shows live `vadState` badge, ConfidenceBar with `positiveSpeechThreshold` marker, and recording flag — use it to capture the repro. Tracked as **P1** in ROADMAP.
 
 按优先级排列。日常运行不阻塞，但未来需要处理。详细 backlog 散落条目散见 [ROADMAP.md §Tech Debt & Backlog](ROADMAP.md#tech-debt--backlog) / [docs/archive/DESIGN.md §十四之B](docs/archive/DESIGN.md)；本块是 manual 验收期间发现的活跃 issue 汇总。
 

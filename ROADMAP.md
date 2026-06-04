@@ -2,9 +2,25 @@
 
 > Skyler 是一个**可塑型 AI 角色容器** —— 桌面端、角色驱动、能拆到 agent 内核、所有权归你。这条路线图按四条支柱组织,版本号 / chunk 罗列见末尾 [Implementation Log](#implementation-log-historical)。
 
-> **状态(2026-05-26)**:v4-beta 收口阶段后期 + **INV-11 全段 ship**(GSV 真接入 + 全角色 provider × model × voice paradigm)。Persona Engineering 五层框架 + 记忆/对话三级隔离 + conversation 锚定绑定语义 + 对话 UI 统一 + Mai ja TTS via GSV mai_v4 emotion bank 全部 ship 并真机验证。9 character · 3 TTS provider(cosyvoice / fish / gsv)· 4 model · 1 Live2D model(Hiyori on cid=1 Mai)。下方 Now / P1 / P2 / P3 + 5070ti 触发清单见 INV-11 闭环段。
+> **状态(2026-06-05)**:v4-beta 收口阶段后期 + **大窗陪伴 UI 重做 ship**(全窗壁纸 + 浮动玻璃组件 + 心情小标 + 系统状态页)+ **背景架构解耦**(壁纸跟角色脱钩 + appData 用户上传)+ **VAD/ASR desync 部分根治**(recordingMode store-init LS + silero 切手动自动 pause;仍有手动模式偶发"在听" known issue,见 P1)。INV-11 全段 ship + Persona Engineering 五层框架 + 记忆/对话三级隔离 + conversation 锚定绑定语义。9 character · 3 TTS provider(cosyvoice / fish / gsv)· 4 model · 1 Live2D model(Hiyori on cid=1 Mai)。下方 Now / P1 / P2 / P3 + 5070ti 触发清单见 INV-11 闭环段。
 
 **Legend**: ✅ shipped · 🚧 in progress · 📋 planned · 🔬 research
+
+---
+
+## Round 3/4/5 全段闭环(2026-06-01~05 · 大窗陪伴 UI 重做 + 背景架构 + 系统状态页 + VAD desync 部分根治)
+
+| Round | 主题 | 状态 | Notes |
+|---|---|---|---|
+| ✅ | **Round 3 · 大窗陪伴态浮件化(全窗壁纸 + CharacterView 透明)** | shipped + 真机 ✓ | commit `4399494` · CharacterView 删 backgroundLayer + panelOverlay scrim 整段(壁纸不再被 chat main area 推开 / 不再被 character wrapper translateX 漏空 / 不再被 bg-base 半透 scrim 染色)· SceneBackground 成整窗 z-0 唯一壁纸渲染层 · 输入丸 / Sidebar dock / ChatHistoryPanel / ConversationList 全部 absolute 浮动 + glass token;角色 wrapper transform 重置到 translateX(0) 居中 |
+| ✅ | **Round 4 · 心情小标 + 对话列表折入坞 + 聊天记录可伸缩 + 玻璃 token 统一** | shipped + 真机 ✓ | commit `4399494` 同批 · ① CharacterStatePanel:默认只渲 emoji+词 · hover/click 展开完整卡 · 锚 Panel 根(整窗 left:8 top:48,不再嵌 chat main area)· ② ConvList 唤回 chip 从左上撤掉,改用 dock 上 MessagesSquare「会话列表」图标开/收 · ③ ChatHistoryPanel 右上锚定 + 左下角拖拽手柄同时改宽 + 高 · store 加 `chatHistoryHeight`(default 600,clamp [240,1200]) · ④ themes.css 加 `--glass-*` token 一套(`--glass-bg` bg-surface 50% · `--glass-radius` 16 · `--glass-blur` 12 · `--glass-border` · `--glass-shadow` lift · `--glass-text` 浅底主题翻深字)· 6 浮件共享 |
+| ✅ | **Round 5 step 1 · 背景跟角色解耦 + 缩略图选择器** | shipped + 真机 ✓ | commit `f00a3c7` · SceneBackground 只消费 globalScene(无视 `character.background_path`,切角色绝不再换壁纸)· CharacterPanel 删 per-character 背景下拉 UI(form.background_path 字段保留 round-trip 透传 DB 不动 · **dormant 字段待清,见 Tech Debt**) · SettingsPanelV2 SceneSection 改成 fetchBackgrounds() 缩略图网格 + accent 边框 + 角标选中态 + 即时生效 + 手填路径降级 `<details>` advanced |
+| ✅ | **Round 5 step 2 · 背景前端加 / 删 + 上传 200MB 上限** | shipped + 真机 ✓ | commits `f00a3c7` / `22fc8fb` · 后端 scanner 扫两处(bundled public/backgrounds/ 只读 + user appData/backgrounds/ 可写)· `platformdirs.user_data_dir('com.skyler.momoos', appauthor=False)` 对齐 Tauri 2 `appDataDir()` 默认行为 · 新 endpoints:POST `/api/backgrounds/upload`(multipart + sanitize + 重名自动 `-1`)/ DELETE `/api/backgrounds/{name}`(仅 user · path traversal 双层防御)· StaticFiles mount `/userdata/backgrounds/` · 流式累计 200 MB 上限 413 + cleanup half-written · frontend inline 确认条取代 `window.confirm`(避免 Tauri WKWebView 静默坑)· requirements.txt 加 `platformdirs>=4.0` |
+| ✅ | **VAD/ASR desync 部分根治** | shipped + 真机 ✓ | commits `bbcb119` / `6768e54` / `177451c` · ① store init 直读 LS(`recordingMode` / `vadPositiveThreshold` / `vadRedemptionMs` / `muteWhileSpeaking`)取代原 AsrVadSection useEffect[] 懒 hydrate · setter 内同步写 LS,LS = 单源(原 bug:store 硬编码 manual default + 只在用户打开 Capabilities 浮层才同步,导致上次 LS=vad 用户切浮层时被翻转)· ② useAudio 新加 useEffect 订阅 recordingMode,切手动时自动 `toggleVad()` 让 silero 走 active→sleep 同款 race-safe 路径(原 bug:onRecordingMode 仅改字段不动引擎,VAD active 时切手动 silero 仍在听 + 并行 send voice)· ③ 顺手 chore 删 `export default function SettingsPanel()` 294 行死代码 + 4 个孤儿 LS const。**注:仍有手动模式偶发"仍在聆听"间歇 bug 未根治,见 P1 known issue** |
+| ✅ | **录音按钮按模式 + 真在听点亮** | shipped | commit `b9c1dc7` · 图标按 recordingMode 切(手动=Mic / VAD=AudioWaveform)· 点亮 = "真在听"双源(手动看 recording / VAD 看 vadState∈{active,recording})· `aria-pressed` + `aria-label` · 改 ChatInput + ControlBar 两处保持一致 |
+| ✅ | **系统状态页(Sidebar Gauge → 5 卡仪表)** | shipped | commit `4cb4eec` · `ActiveOverlay` 扩 `'system'` · Sidebar 加第 5 个 nav `Gauge` 图标 · 5 cards / 2 列响应式 grid auto-fit minmax 320px:🎙 VoiceCard(实时 store 全字段 + `<ConfidenceBar />` 子组件隔离 silero 32ms 高频写)/ 🔌 ConnectionCard(WS + AI status 实时 + `/api/health` poll 5s)/ 🧠 ModelsCard(LLM/TTS active providers + ASR config + Whisper loaded,挂载拉一次 + 手动刷新)/ 🎴 CharacterCard(currentCharacter + state + globalScene + bundled/user 路径形态判)/ 📊 ResourcesCard(救活 SettingsPanelLegacy:1155 死代码 → 拆 card,poll 3s + toggle)· 关于/版本 card skip(无现成数据源)|
+
+> 详 git log Range `f00a3c7..4cb4eec` (8 commits)· 关联 Tech Debt 见底部表的"UI 重做衍生"3 条。
 
 ---
 
@@ -37,6 +53,7 @@
 
 | Status | Item | Goal | Notes |
 |---|---|---|---|
+| 📋 | **VAD 手动模式偶发"仍在聆听"间歇 bug**(known issue · 根因未抓全)| 现状:Round 5 系列已修两个表层根因(① recordingMode store-init LS desync · ② 切手动时 silero 引擎未 pause)+ 部分根治,但 PM 真机仍偶发观察到手动模式下"麦还在听"的现象 · 系统状态页 🎙 VoiceCard 已加 `vadState` badge + ConfidenceBar 作为现场诊断仪 · 下一步:用诊断仪复现 → 抓 vadState 翻转链路 + WS voice 发送链路 + silero 实例生命周期(可能涉及 onSpeechStart/End 残留触发 / stream.onended recovery 走偏 / micVadRef 实例脏)| Round 5 衍生 · 立项 |
 | 📋 | **Conversation-vs-Character paradigm 决策** | 现状:conversation 1:1 绑 character(§5.9 锚定语义);PM 提出 "一 character 多 conversation" vs "一 character 一永久 stream + RAG 远期" 选型未定 · 影响记忆架构 v2 / F8 归属分级路径 | 待 PM 拍板 |
 | 📋 | **Proactive 污染 short_term 长期 fix** | proactive 推送 turn 写入 short_term · 跟用户主动 turn 混 · 长期影响"对话连贯感";现状靠 proactive 文本压缩 mitigate · 长期解 = 分桶 + 注入分层 | 立项 |
 | 📋 | **句子并发 TTS pipeline(chunk 15 复活)** | sentence-level 并发合成 + 顺序播放 · 改善 ja TTS 长句首字延迟(现 GSV ja 7-15s 单句串行)· chunk 15 实施过但未 ship 留 backlog。**2026-05-27 INV-15 P1 Option A 部分 mitigation**(commit 534a6ca · `merge_short_sentences` 扩 zh · HOL blocking 概率降)· 完整 out-of-order / 整 turn buffer **不推荐**(UX 破) · P3 candidate:TTS_CONCURRENCY 3→5 / push_latency observability(ROADMAP:206)/ threshold tune | INV-8 §1.1 Step 6 + INV-15 §6/§8 |
@@ -145,6 +162,8 @@ v4.0.0 tag 之后的主线。本 session 多个"治标 vs 治本"的决策都把
 | 📋 | **`v4_0_0_mai_revert_zh.py` 空转 ensure 待删** | 2026-06-01 doc 对账发现:hotfix scope(`provider IN (NULL,'cosyvoice')`)生效后,cid=1 已切到 gsv 路径,该 migration 每次 lifespan 启动 rowcount=0,纯空转。三步联动可干净删:删迁移文件 + `backend/main.py:148-151` import block + `:418-422` await 调用 | v4.1+ 清理 |
 | 📋 | **`VoiceButton.tsx` 死 stub 待删** | 2026-06-01 doc 对账发现:`frontend/src/components/VoiceButton.tsx` 是空壳(仅 className,无 onClick),全仓零外部 import;真录音键在 `ControlBar.tsx` / `ChatInput.tsx` 的 `handleMic`。留着易让 review 误以为它是真录音键 | v4.1+ 清理 |
 | 📋 | **`switch_character` 死代码注释清理** | LLM tool 已下线(`backend/tools/registry.py:99` 只 register `clear_short_term`),但 `backend/tools/builtin.py:16-25,52` 函数体 + schema 和 `registry.py:14` docstring 仍举它为例,易让后续开发以为还能 LLM-call。或加 `@deprecated` 注释,或直接删 | v4.1+ 清理 |
+| 📋 | **`character.background_path` dormant 字段待清**(Round 5 step 1 衍生)| Round 5 step 1 解耦后 SceneBackground 只消费 `globalScene`,`character.background_path` DB 列 + Pydantic 模型 + `CharacterPanel.form.background_path` 字段都保留(零迁移)· 编辑老角色时 DB 原值 round-trip 透传不被清空。**未来若做"每角色默认壁纸 + 全局壁纸覆盖"混合档**可启用;否则按 chore 清:`character_panel.tsx` 删 form 字段 + 后端 Pydantic 模型移除 + DB DROP COLUMN migration | v4.1+ 清理 |
+| 📋 | **`SystemStatusSection` 旧 export 死代码待清**(Round 5 系统状态页衍生)| `SettingsPanelLegacy.tsx:1155` 仍有 `export function SystemStatusSection()` 完整定义(挂在已退役的 SettingsPanel default 内),但 step1 系列 `chore: drop dead SettingsPanel default` 把 caller 删了 → 现在 orphan · Round 5 ② 系统状态页的 `ResourcesCard.tsx` 已"拆 card"重做同款渲染。顺手 chore:删 `SystemStatusSection` 整个函数 export | v4.1+ 清理 |
 
 ---
 
