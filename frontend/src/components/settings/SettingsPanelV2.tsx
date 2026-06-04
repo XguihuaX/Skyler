@@ -32,6 +32,11 @@ import {
 } from '../SettingsPanelLegacy';
 import UserProfileSection from '../UserProfileSection';
 import TwoPaneShell, { type PaneSection } from '../TwoPaneShell';
+import {
+  fetchBackgrounds,
+  type BackgroundItem,
+} from '../../lib/backgrounds';
+import { RefreshCw } from 'lucide-react';
 
 /**
  * bugfix-2.2: ⚙ 设置 V2 (Settings V2) — "Skyler 自身行为偏好"
@@ -212,16 +217,43 @@ export default function SettingsPanelV2({ showToast }: SettingsPanelV2Props) {
 // ---------------------------------------------------------------------------
 // 2026-06-02 · UI redesign step 1 · 场景背景层(壁纸)section
 // 主题(8 套色)只换 --color-* token,场景独立于色之上 · 全局共享、跨角色。
-// 最简控件:type radio (image / video) + 路径 input + 应用 / 清除。
+// 2026-06-04 · Round 5 step1:解耦 per-character bg(SceneBackground 不再读
+// character.background_path)· UI 改成 fetchBackgrounds() 缩略图网格 · 点选即时
+// 生效(无需"应用"按钮)· 手填路径降级成折叠 <details> advanced 高级入口。
 // ---------------------------------------------------------------------------
 
 function SceneSection() {
   const globalScene    = useAppStore((s) => s.globalScene);
   const setGlobalScene = useAppStore((s) => s.setGlobalScene);
+
+  const [items, setItems]     = useState<BackgroundItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchBackgrounds();
+      setItems(data.items);
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.error('[SceneSection] fetchBackgrounds failed:', e);
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const currentPath = globalScene?.path ?? null;
+
+  // 高级:手填路径(默认折叠)。draft 仅在打开 advanced 后初始化。
   const [draftType, setDraftType] = useState<'image' | 'video'>(globalScene?.type ?? 'image');
   const [draftPath, setDraftPath] = useState<string>(globalScene?.path ?? '');
 
-  const apply = () => {
+  const applyDraft = () => {
     const trimmed = draftPath.trim();
     if (trimmed === '') {
       setGlobalScene(null);
@@ -230,106 +262,244 @@ function SceneSection() {
     setGlobalScene({ type: draftType, path: trimmed });
   };
 
-  const clear = () => {
-    setDraftPath('');
-    setGlobalScene(null);
-  };
-
   return (
     <section>
-      <h3
-        className="text-base font-medium mb-1"
-        style={{ color: 'var(--color-text-primary)' }}
-      >
-        🖼 场景背景
-      </h3>
+      <div className="flex items-baseline justify-between mb-1">
+        <h3
+          className="text-base font-medium"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          🖼 场景背景
+        </h3>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          disabled={loading}
+          className="text-[11px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+          style={{ color: 'var(--color-text-secondary)' }}
+          aria-label="重新扫描 backgrounds 目录"
+        >
+          <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+          刷新
+        </button>
+      </div>
       <p
         className="text-xs mb-3"
         style={{ color: 'var(--color-text-secondary)' }}
       >
-        全局壁纸 · 跨角色共享 · 独立于 8 套配色主题。支持图片(jpg/png/webp)或视频(mp4/webm)。
-        填本地路径或 URL,改完点"应用"。
+        全局壁纸 · 跨角色共享 · 独立于配色主题 · 切角色不会换。
+        资产放 <span className="font-mono">frontend/public/backgrounds/</span>(含一级子目录),
+        后缀白名单 jpg / png / webp / mp4 / webm。点缩略图即应用。
       </p>
+
+      {/* 缩略图网格 · "无壁纸"+ 已扫描资产 */}
       <div
-        className="rounded-lg p-4 space-y-3"
+        className="rounded-lg p-3"
         style={{
           background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
           border: '1px solid var(--color-border-subtle)',
         }}
       >
-        {/* type radio */}
-        <div className="flex items-center gap-4 text-sm">
-          <label className="flex items-center gap-1 cursor-pointer">
-            <input
-              type="radio"
-              checked={draftType === 'image'}
-              onChange={() => setDraftType('image')}
-            />
-            <span style={{ color: 'var(--color-text-primary)' }}>图片</span>
-          </label>
-          <label className="flex items-center gap-1 cursor-pointer">
-            <input
-              type="radio"
-              checked={draftType === 'video'}
-              onChange={() => setDraftType('video')}
-            />
-            <span style={{ color: 'var(--color-text-primary)' }}>视频</span>
-          </label>
-        </div>
-        {/* path input */}
-        <input
-          type="text"
-          value={draftPath}
-          onChange={(e) => setDraftPath(e.target.value)}
-          placeholder={
-            draftType === 'image'
-              ? '/path/to/wallpaper.jpg 或 https://… '
-              : '/path/to/scene.mp4 或 https://…'
-          }
-          className="w-full rounded px-2 py-1.5 text-sm font-mono outline-none focus:ring-1"
-          style={{
-            background: 'var(--color-bg-input)',
-            color: 'var(--color-text-primary)',
-            border: '1px solid var(--color-border)',
-          }}
-          autoComplete="off"
-        />
-        {/* 当前生效 */}
         <div
-          className="text-[11px]"
+          className="grid gap-3"
+          style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))' }}
+        >
+          {/* "无壁纸" 单元(清除 globalScene)*/}
+          <BackgroundTile
+            label="无壁纸"
+            kind="none"
+            selected={currentPath === null}
+            onClick={() => setGlobalScene(null)}
+          />
+          {items.map((b) => (
+            <BackgroundTile
+              key={b.path}
+              label={b.name}
+              kind={b.type}
+              path={b.path}
+              selected={currentPath === b.path}
+              onClick={() => setGlobalScene({ type: b.type, path: b.path })}
+            />
+          ))}
+        </div>
+        {items.length === 0 && !loading && !error && (
+          <p
+            className="text-[11px] mt-2"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            目录为空 · 放图片 / 视频到 backgrounds/ 再点上方"刷新"。
+          </p>
+        )}
+        {error && (
+          <p
+            className="text-[11px] mt-2"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            列表加载失败:{error}
+          </p>
+        )}
+      </div>
+
+      {/* 高级:自定义路径(折叠) */}
+      <details className="mt-3">
+        <summary
+          className="text-xs cursor-pointer select-none"
           style={{ color: 'var(--color-text-secondary)' }}
         >
-          {globalScene
-            ? <>当前生效:<span className="font-mono">{globalScene.type}</span> · <span className="font-mono">{globalScene.path}</span></>
-            : '当前未设置,使用主题色作为窗口底色。'}
-        </div>
-        {/* 操作 */}
-        <div className="flex justify-end gap-2 pt-1">
-          <button
-            type="button"
-            onClick={clear}
-            className="px-3 py-1.5 text-xs rounded transition hover:opacity-80"
+          自定义路径(高级)
+        </summary>
+        <div
+          className="mt-2 rounded-lg p-3 space-y-3"
+          style={{
+            background: 'color-mix(in srgb, var(--color-bg-surface) 50%, transparent)',
+            border: '1px solid var(--color-border-subtle)',
+          }}
+        >
+          <div className="flex items-center gap-4 text-sm">
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="radio"
+                checked={draftType === 'image'}
+                onChange={() => setDraftType('image')}
+              />
+              <span style={{ color: 'var(--color-text-primary)' }}>图片</span>
+            </label>
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="radio"
+                checked={draftType === 'video'}
+                onChange={() => setDraftType('video')}
+              />
+              <span style={{ color: 'var(--color-text-primary)' }}>视频</span>
+            </label>
+          </div>
+          <input
+            type="text"
+            value={draftPath}
+            onChange={(e) => setDraftPath(e.target.value)}
+            placeholder={
+              draftType === 'image'
+                ? '/path/to/wallpaper.jpg 或 https://…'
+                : '/path/to/scene.mp4 或 https://…'
+            }
+            className="w-full rounded px-2 py-1.5 text-sm font-mono outline-none focus:ring-1"
             style={{
-              background: 'var(--color-bg-elevated)',
+              background: 'var(--color-bg-input)',
               color: 'var(--color-text-primary)',
+              border: '1px solid var(--color-border)',
             }}
+            autoComplete="off"
+          />
+          <div className="flex justify-end pt-1">
+            <button
+              type="button"
+              onClick={applyDraft}
+              className="px-3 py-1.5 text-xs rounded transition hover:opacity-80"
+              style={{
+                background: 'var(--color-accent)',
+                color: 'var(--color-bubble-user-text)',
+              }}
+            >
+              应用
+            </button>
+          </div>
+          <p
+            className="text-[11px]"
+            style={{ color: 'var(--color-text-secondary)' }}
           >
-            清除
-          </button>
-          <button
-            type="button"
-            onClick={apply}
-            className="px-3 py-1.5 text-xs rounded transition hover:opacity-80"
-            style={{
-              background: 'var(--color-accent)',
-              color: 'var(--color-bubble-user-text)',
-            }}
-          >
-            应用
-          </button>
+            适合用 URL 或不放进 backgrounds/ 的本地路径。空字符串 = 清除全局壁纸。
+          </p>
         </div>
-      </div>
+      </details>
     </section>
+  );
+}
+
+// 缩略图单元 · 120 宽自适应高(image 16:9 cover · video 同 · none 给个虚框)。
+// 选中态:accent 实色边框 + 右上角小圆点(角标),保证花壁纸上仍醒目。
+interface BackgroundTileProps {
+  label: string;
+  kind: 'image' | 'video' | 'none';
+  path?: string;
+  selected: boolean;
+  onClick: () => void;
+}
+function BackgroundTile({ label, kind, path, selected, onClick }: BackgroundTileProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="relative rounded-md overflow-hidden text-left transition hover:opacity-90 focus:outline-none"
+      style={{
+        aspectRatio: '16 / 10',
+        border: selected
+          ? '2px solid var(--color-accent)'
+          : '1px solid var(--color-border-subtle)',
+        background: 'var(--color-bg-elevated)',
+      }}
+      aria-pressed={selected}
+      title={path ?? label}
+    >
+      {kind === 'image' && path && (
+        <img
+          src={path}
+          alt=""
+          className="absolute inset-0 w-full h-full"
+          style={{ objectFit: 'cover' }}
+          draggable={false}
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.opacity = '0.2';
+          }}
+        />
+      )}
+      {kind === 'video' && path && (
+        <video
+          key={path}
+          src={path}
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="absolute inset-0 w-full h-full"
+          style={{ objectFit: 'cover', pointerEvents: 'none' }}
+        />
+      )}
+      {kind === 'none' && (
+        <div
+          className="absolute inset-0 flex items-center justify-center text-xs"
+          style={{
+            color: 'var(--color-text-secondary)',
+            backgroundImage:
+              'repeating-linear-gradient(45deg, transparent 0 6px, color-mix(in srgb, var(--color-border-subtle) 80%, transparent) 6px 7px)',
+          }}
+        >
+          ✕ 无壁纸
+        </div>
+      )}
+      {/* 底部 label scrim */}
+      <div
+        className="absolute left-0 right-0 bottom-0 px-1.5 py-1 text-[10px] truncate"
+        style={{
+          background: 'linear-gradient(to top, rgba(0,0,0,0.55), transparent)',
+          color: '#fff',
+          textShadow: '0 1px 2px rgba(0,0,0,0.6)',
+        }}
+      >
+        {label}
+        {kind === 'video' && <span className="ml-1 opacity-80">▶</span>}
+      </div>
+      {/* 选中角标 */}
+      {selected && (
+        <span
+          className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full"
+          style={{
+            background: 'var(--color-accent)',
+            boxShadow: '0 0 0 2px var(--color-bg-elevated)',
+          }}
+          aria-hidden="true"
+        />
+      )}
+    </button>
   );
 }
 

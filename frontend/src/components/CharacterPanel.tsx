@@ -29,10 +29,10 @@ import SplashArtDropzone from './character/SplashArtDropzone';
 import VoiceLinesSection from './character/VoiceLinesSection';
 import VoicePicker from './character/VoicePicker';
 import { deleteSplashArt } from '../lib/characters';
-import {
-  fetchBackgrounds,
-  type BackgroundItem,
-} from '../lib/backgrounds';
+// Round 5 step1(2026-06-04)解耦:壁纸只走全局 SceneSection,per-character
+// background_path 的下拉 + 预览 UI 在本组件已隐藏。DB 列 + 模型 + form 字段
+// round-trip 保留(dormant tech debt:见 ROADMAP/IMPL_LOG · 以后做"每角色默认
+// + 全局覆盖"混合档时再启用)。lib/backgrounds.ts 留给 SceneSection 用。
 // v4 segment 2:Persona variant 编辑入口取代老 persona textarea
 import PersonaEditorModal from './PersonaEditorModal';
 import {
@@ -541,11 +541,9 @@ export default function CharacterPanel() {
   const [toasts, setToasts]         = useState<ToastInfo[]>([]);
   const [live2dLoading, setLive2dLoading] = useState(false);
   const [live2dError,   setLive2dError]   = useState<string | null>(null);
-  // v3.5 chunk 5a：背景资产清单（GET /api/backgrounds）。空数组 = 未扫
-  // 到，下拉退化为只有 "(无)"。
-  const [backgrounds, setBackgrounds]     = useState<BackgroundItem[]>([]);
-  const [bgLoading, setBgLoading]         = useState(false);
-  const [bgError,   setBgError]           = useState<string | null>(null);
+  // Round 5 step1:per-character background 下拉 UI 已移除,backgrounds/bgLoading/
+  // bgError state + refreshBackgrounds 已删 · form.background_path 字段保留
+  // round-trip 透传 DB(dormant)。
   // v4-fan chunk 5: splash art 删除确认对话框 target(point to character row,
   // 拿名字 + id 给确认文案;upload 不需要 confirm,直接走 SplashArtDropzone)
   const [pendingSplashDelete, setPendingSplashDelete] =
@@ -738,24 +736,7 @@ export default function CharacterPanel() {
   // v3.5 chunk 5a：背景资产 mount 时拉一次，[刷新] 按钮 + 新增 / 编辑表单
   // 打开时复用 callback。失败不阻塞主路径——下拉只剩 "(无)"，用户能继续
   // 编辑其他字段。
-  const refreshBackgrounds = useCallback(async () => {
-    setBgLoading(true);
-    setBgError(null);
-    try {
-      const data = await fetchBackgrounds();
-      setBackgrounds(data.items);
-    } catch (e) {
-      const msg = (e as Error).message;
-      console.error('[CharacterPanel] backgrounds fetch failed:', e);
-      setBgError(msg);
-    } finally {
-      setBgLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshBackgrounds();
-  }, [refreshBackgrounds]);
+  // Round 5 step1:refreshBackgrounds + mount useEffect 已删(对应 UI 撤掉)。
 
   // INV-11 Stage 1.5 paradigm B: TTS provider/voice fetch 内化进 VoicePicker
   // (自己 fetch /api/tts/providers nested tree + voice aliases)· CharacterPanel
@@ -1303,119 +1284,6 @@ export default function CharacterPanel() {
               </p>
             </div>
 
-            {/* v3.5 chunk 5a — 每角色背景层（image / video）。Live2D 在
-                背景层之上，仍正常显示。第一项 "(无)" → 保存 null，回退到
-                原 fallback 链。 */}
-            <div>
-              <div className="flex items-baseline justify-between mb-1">
-                <label
-                  className="block text-xs"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
-                  背景层
-                </label>
-                <button
-                  type="button"
-                  onClick={() => void refreshBackgrounds()}
-                  disabled={bgLoading}
-                  className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                  title="重新扫描 frontend/public/backgrounds/"
-                >
-                  <RefreshCw
-                    size={10}
-                    className={bgLoading ? 'animate-spin' : ''}
-                  />
-                  刷新
-                </button>
-              </div>
-              <div className="relative">
-                <select
-                  value={form.background_path}
-                  onChange={(e) =>
-                    setForm({ ...form, background_path: e.target.value })
-                  }
-                  className="w-full appearance-none rounded-md px-2 py-1.5 pr-8 text-sm focus:outline-none"
-                  style={inputStyle}
-                >
-                  <option value="">(无 —— 使用默认 fallback)</option>
-                  {/* 当前 background_path 不在扫描列表里 → 保留它做"自定义"
-                      避免编辑时被改写（与 live2d 同 pattern）。 */}
-                  {form.background_path &&
-                    !backgrounds.some((b) => b.path === form.background_path) && (
-                      <option value={form.background_path}>
-                        自定义：{form.background_path}
-                      </option>
-                    )}
-                  {backgrounds.map((b) => (
-                    <option key={b.path} value={b.path}>
-                      [{b.type === 'image' ? '图' : '视频'}] {b.name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown
-                  size={14}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                />
-              </div>
-              {/* 预览框 120×80 */}
-              {form.background_path && (() => {
-                const selected = backgrounds.find(
-                  (b) => b.path === form.background_path,
-                );
-                const inferredType = selected?.type
-                  ?? (/\.(mp4|webm)$/i.test(form.background_path) ? 'video' : 'image');
-                return (
-                  <div
-                    className="mt-2 rounded overflow-hidden"
-                    style={{
-                      width: 120, height: 80,
-                      border: '1px solid var(--color-border)',
-                      background: 'var(--color-bg-elevated)',
-                    }}
-                  >
-                    {inferredType === 'image' ? (
-                      <img
-                        src={form.background_path}
-                        alt=""
-                        className="w-full h-full"
-                        style={{ objectFit: 'cover' }}
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).style.opacity = '0.2';
-                        }}
-                      />
-                    ) : (
-                      <video
-                        key={form.background_path}
-                        src={form.background_path}
-                        autoPlay
-                        loop
-                        muted
-                        playsInline
-                        className="w-full h-full"
-                        style={{ objectFit: 'cover' }}
-                      />
-                    )}
-                  </div>
-                );
-              })()}
-              {bgError && (
-                <p
-                  className="text-[10px] mt-1"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                >
-                  列表加载失败：{bgError}
-                </p>
-              )}
-              <p
-                className="text-[10px] mt-1"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                选项来自 frontend/public/backgrounds/（含一层子目录）。
-                后缀白名单：jpg / png / webp / mp4 / webm。详见目录下 README.md。
-              </p>
-            </div>
 
             <div className="flex justify-end gap-2 pt-2">
               <button

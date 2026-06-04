@@ -1,80 +1,32 @@
 /**
  * 2026-06-02 · UI redesign step 1 · 全局场景背景层(壁纸,跨角色共享)。
- * 2026-06-03 · Round 3 重构:per-character background_path 渲染从 CharacterView
- * 迁入这里,SceneBackground 成为整窗壁纸的**唯一**渲染层。
+ * 2026-06-03 · Round 3 重构:per-character background_path 渲染也搬过这里。
+ * 2026-06-04 · Round 5 step1 解耦:撤掉 per-character bg 这一路,SceneBackground
+ * 只消费 globalScene。切角色绝不再换壁纸,壁纸 100% 走全局设置(SceneSection)。
+ * character.background_path DB 列 + 模型 + form 字段保留 dormant(tech debt:
+ * 以后做"每角色默认 + 全局覆盖"混合档再启用)。
  *
- * 挂载位置:Panel.tsx 容器内 z-0(整个 Panel 之下) · 不挂 Widget(小窗暂不动)。
+ * 挂载位置:Panel.tsx 容器内 z-0(整个 Panel 之下) · 不挂 Widget。
  *
- * 数据优先级(effective scene):
- *   1. 当前角色的 background_path(per-character bg)— 后缀合法且加载成功
- *   2. store.globalScene(全局壁纸,跨角色)
- *   3. 都没 → 不渲染,Panel 容器 bg-base 兜底色透出
- *
- * 关键差异(老版本):老 character bg 挂在 CharacterView 内 absolute inset-0,只
- * 覆盖 chat main area(paddingLeft:80 之后的区域)且被 character wrapper
- * translateX(-17%) 左移 → 左右出现"没壁纸"的色阶断层。迁入这里后,无论
- * per-character 还是 globalScene,都画在整窗 z-0 层,真正 edge-to-edge。
- *
- * 视频:autoPlay/loop/muted/playsInline,失败 silent + onError 静默降级(per-
- * character 失败 → globalScene · globalScene 失败 → 不渲染)。
+ * 渲染:globalScene 加载成功 → img / video edge-to-edge cover · 失败或未设
+ * → 不渲染,Panel bg-base 兜底色透出。
  */
 import { useState, useEffect } from 'react';
 import { useAppStore } from '../store';
 
-// 后缀分类(从 CharacterView 迁过来 · 跟 backend/services/backgrounds_scanner.py
-// 同白名单 · lowercase 后比较 · 前端按后缀分发到 <img> / <video>)。
-const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
-const VIDEO_EXTS = new Set(['.mp4', '.webm']);
-
-function classifyBackground(path: string | null | undefined): 'image' | 'video' | null {
-  if (!path) return null;
-  const trimmed = path.trim();
-  if (!trimmed) return null;
-  const dotIdx = trimmed.lastIndexOf('.');
-  if (dotIdx === -1) return null;
-  const ext = trimmed.slice(dotIdx).toLowerCase();
-  if (IMAGE_EXTS.has(ext)) return 'image';
-  if (VIDEO_EXTS.has(ext)) return 'video';
-  return null;
-}
-
 export default function SceneBackground() {
-  const globalScene        = useAppStore((s) => s.globalScene);
-  const characters         = useAppStore((s) => s.characters);
-  const currentCharacterId = useAppStore((s) => s.currentCharacterId);
+  const scene = useAppStore((s) => s.globalScene);
+  const [failed, setFailed] = useState(false);
 
-  // per-character bg 失败 → 静默降级到 globalScene;globalScene 失败 → 不渲染。
-  // 两路失败状态独立,切换角色或 path 时各自 reset。
-  const [charBgFailed, setCharBgFailed]     = useState(false);
-  const [globalBgFailed, setGlobalBgFailed] = useState(false);
-
-  const currentCharacter =
-    characters.find((c) => c.id === currentCharacterId) ?? null;
-  const charBgPath = currentCharacter?.background_path ?? null;
-  const charBgKind = charBgFailed ? null : classifyBackground(charBgPath);
-
+  // 切 path 时 reset 失败标志(避免上一资源 fail 残留)
   useEffect(() => {
-    setCharBgFailed(false);
-  }, [currentCharacterId, charBgPath]);
+    setFailed(false);
+  }, [scene?.path]);
 
-  useEffect(() => {
-    setGlobalBgFailed(false);
-  }, [globalScene?.path]);
-
-  // effective scene:per-character bg 优先,没有再降到 globalScene。
-  type Resolved = { kind: 'character' | 'global'; type: 'image' | 'video'; path: string };
-  let effective: Resolved | null = null;
-  if (charBgKind && charBgPath) {
-    effective = { kind: 'character', type: charBgKind, path: charBgPath };
-  } else if (globalScene && !globalBgFailed) {
-    effective = { kind: 'global', type: globalScene.type, path: globalScene.path };
-  }
-
-  if (!effective) return null;
+  if (!scene || failed) return null;
 
   // img/video 显式 absolute inset-0 + width/height 100% inline style(不依赖
-  // Tailwind w-full h-full,某些嵌套下 100% 可能拿不到 wrapper 真实尺寸 ·
-  // cover 后留白)。
+  // Tailwind w-full h-full,某些嵌套下 100% 可能拿不到 wrapper 真实尺寸)。
   const mediaStyle: React.CSSProperties = {
     position: 'absolute',
     top: 0,
@@ -86,10 +38,6 @@ export default function SceneBackground() {
     userSelect: 'none',
     pointerEvents: 'none',
   };
-
-  const onError = effective.kind === 'character'
-    ? () => setCharBgFailed(true)
-    : () => setGlobalBgFailed(true);
 
   return (
     <div
@@ -107,24 +55,24 @@ export default function SceneBackground() {
         zIndex: 0,
       }}
     >
-      {effective.type === 'image' ? (
+      {scene.type === 'image' ? (
         <img
-          src={effective.path}
+          src={scene.path}
           alt=""
           draggable={false}
           style={mediaStyle}
-          onError={onError}
+          onError={() => setFailed(true)}
         />
       ) : (
         <video
-          key={effective.path}
-          src={effective.path}
+          key={scene.path}
+          src={scene.path}
           autoPlay
           loop
           muted
           playsInline
           style={mediaStyle}
-          onError={onError}
+          onError={() => setFailed(true)}
         />
       )}
     </div>
