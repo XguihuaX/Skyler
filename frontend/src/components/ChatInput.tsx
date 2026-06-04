@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Ban, CornerDownLeft, Mic, Volume2, VolumeX, Sparkles, Loader2 } from 'lucide-react';
+import { AudioWaveform, Ban, CornerDownLeft, Mic, Volume2, VolumeX, Sparkles, Loader2 } from 'lucide-react';
 import { useAppStore } from '../store';
 import { useAppApi } from '../contexts/appApi';
 import StatusBadge from './StatusBadge';
@@ -13,6 +13,9 @@ export default function ChatInput() {
   const micMuted     = useAppStore((s) => s.micMuted);
   const status       = useAppStore((s) => s.status);
   const recordingMode = useAppStore((s) => s.recordingMode);
+  // 2026-06-05 · "真在听" 高亮:VAD 模式看 vadState · 手动模式看 recording。
+  // 双源任一翻 truthy → 按钮点亮。手动话筒图标 + 点亮 = VAD 残留 active(bug)。
+  const vadState     = useAppStore((s) => s.vadState);
   const ttsEnabled   = useAppStore((s) => s.ttsEnabled);
   const currentThinking = useAppStore((s) => s.currentThinking);
   const currentToolName = useAppStore((s) => s.currentToolName);
@@ -153,23 +156,38 @@ export default function ChatInput() {
         <CornerDownLeft size={18} />
       </button>
 
-      {/* Mic */}
-      <button
-        className="w-9 h-9 rounded-full flex items-center justify-center transition disabled:opacity-40 disabled:cursor-not-allowed"
-        style={
-          recording
-            ? { background: 'var(--color-accent)', color: 'var(--color-bubble-user-text)' }
-            : {
-                background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
-                color: 'var(--color-text-primary)',
-              }
-        }
-        onClick={handleMic}
-        disabled={micMuted}
-        title={recording ? '停止录音' : '开始录音'}
-      >
-        <Mic size={18} />
-      </button>
+      {/* Mic · 2026-06-05 · 图标按 recordingMode 切(手动=话筒/VAD=波形) ·
+          点亮 = "真在听":手动看 recording、VAD 看 vadState∈{active,recording} ·
+          手动按钮 + 点亮 = silero 残留 active 的 bug 信号 */}
+      {(() => {
+        const isVad = recordingMode === 'vad';
+        const isListening = isVad
+          ? (vadState === 'active' || vadState === 'recording')
+          : recording;
+        const Icon = isVad ? AudioWaveform : Mic;
+        const titleListening = isVad ? '停止监听' : '停止录音';
+        const titleIdle      = isVad ? '开始监听' : '开始录音';
+        return (
+          <button
+            className="w-9 h-9 rounded-full flex items-center justify-center transition disabled:opacity-40 disabled:cursor-not-allowed"
+            style={
+              isListening
+                ? { background: 'var(--color-accent)', color: 'var(--color-bubble-user-text)' }
+                : {
+                    background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
+                    color: 'var(--color-text-primary)',
+                  }
+            }
+            onClick={handleMic}
+            disabled={micMuted}
+            title={isListening ? titleListening : titleIdle}
+            aria-label={isListening ? titleListening : titleIdle}
+            aria-pressed={isListening}
+          >
+            <Icon size={18} />
+          </button>
+        );
+      })()}
 
       {/* TTS toggle */}
       <button

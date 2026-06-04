@@ -1,4 +1,4 @@
-import { Keyboard, Mic, Settings, Volume2, VolumeX } from 'lucide-react';
+import { AudioWaveform, Keyboard, Mic, Settings, Volume2, VolumeX } from 'lucide-react';
 import { useAppStore } from '../store';
 import { useAppApi } from '../contexts/appApi';
 import ConnectionDot from './ConnectionDot';
@@ -17,6 +17,8 @@ export default function ControlBar({ onSettings }: ControlBarProps) {
   const inputMode     = useAppStore((s) => s.inputMode);
   const setInputMode  = useAppStore((s) => s.setInputMode);
   const recordingMode = useAppStore((s) => s.recordingMode);
+  // 2026-06-05 · "真在听" 高亮 · 跟 ChatInput 同款双源(手动→recording / VAD→vadState)。
+  const vadState      = useAppStore((s) => s.vadState);
   const ttsEnabled    = useAppStore((s) => s.ttsEnabled);
 
   const { startManual, stopManualAndSend, toggleVad } = useAppApi();
@@ -64,20 +66,32 @@ export default function ControlBar({ onSettings }: ControlBarProps) {
         <Settings size={18} />
       </button>
 
-      {/* Microphone */}
-      <button
-        className={`${btnBase} ${micMuted ? 'opacity-40 cursor-not-allowed' : ''}`}
-        style={
-          recording
-            ? { background: 'var(--color-accent)', color: 'var(--color-bubble-user-text)' }
-            : surfaceStyle
-        }
-        onClick={handleMic}
-        disabled={micMuted}
-        title={recording ? '停止录音' : '开始录音'}
-      >
-        <Mic size={18} />
-      </button>
+      {/* Microphone · 2026-06-05 · 跟 ChatInput 同款逻辑(手动=Mic,VAD=AudioWaveform;
+          点亮=真在听 双源)。点击行为 handleMic 不变。 */}
+      {(() => {
+        const isVad = recordingMode === 'vad';
+        const isListening = isVad
+          ? (vadState === 'active' || vadState === 'recording')
+          : recording;
+        const Icon = isVad ? AudioWaveform : Mic;
+        const titleListening = isVad ? '停止监听' : '停止录音';
+        const titleIdle      = isVad ? '开始监听' : '开始录音';
+        return (
+          <button
+            className={`${btnBase} ${micMuted ? 'opacity-40 cursor-not-allowed' : ''}`}
+            style={isListening
+              ? { background: 'var(--color-accent)', color: 'var(--color-bubble-user-text)' }
+              : surfaceStyle}
+            onClick={handleMic}
+            disabled={micMuted}
+            title={isListening ? titleListening : titleIdle}
+            aria-label={isListening ? titleListening : titleIdle}
+            aria-pressed={isListening}
+          >
+            <Icon size={18} />
+          </button>
+        );
+      })()}
 
       {/* Text input toggle */}
       <button
