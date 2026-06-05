@@ -61,12 +61,13 @@ const CharacterStatePanel = memo(function CharacterStatePanel({
   const setState       = useAppStore((s) => s.setCurrentCharacterState);
   const characterId    = useAppStore((s) => s.currentCharacterId);
 
-  // 2026-06-04 · Round 4 ① 心情小标 · 默认只渲 emoji+词 紧凑标 · hover 或 click
-  // 锁定展开:intimacy 数字 + 进度条 + activity / thought 完整卡。
-  // pinned 一旦点开会保留展开,再点收;hover 是临时态 mouse-leave 即收。
-  // expanded = pinned || hovering。click 用 stopPropagation 避免冒泡到角色/壁纸点击。
+  // 2026-06-04 · Round 4 ① 心情小标 · 默认 emoji+词,hover/click 展开成完整卡。
+  // 2026-06-06 · widget 态:展开态也去 glass 壳(展开后 intimacy/进度条/activity/
+  // thought 全部裸显 + text-shadow,无 glass 容器/border/radius/shadow/blur);
+  // hover/click 展开行为保留(照常能开卡看信息)。panel 态完整 glass 容器不动。
   const [pinned, setPinned] = useState(false);
   const [hovering, setHovering] = useState(false);
+  const isWidget = position === 'widget';
   const expanded = pinned || hovering;
 
   // mount + character switch 时拉一次（保证 panel 一开就有内容，无需等 WS 推送）
@@ -99,16 +100,36 @@ const CharacterStatePanel = memo(function CharacterStatePanel({
     // blur 8 → 12 跟齐 · alpha 65% → 58%(--glass-bg)· 删硬编码 shadow 改用
     // glass-shadow · 文字色改 glass-text(标题)/ glass-text-muted(label)/ 加
     // glass-text-shadow 让字在花壁纸上能读清。
-    background: 'var(--glass-bg)',
-    backdropFilter: 'blur(var(--glass-blur))',
-    WebkitBackdropFilter: 'blur(var(--glass-blur))',
-    border: 'var(--glass-border)',
-    borderRadius: 'var(--glass-radius)',
-    padding: '8px 12px',
+    // 2026-06-06 · widget 态不分收/展开都去 glass 壳(emoji/词/intimacy/进度条/
+    // activity/thought 全部裸显 + textShadow 防糊);panel 态完整 glass 容器不动。
+    //   - widget:transparent / no border / radius 0 / no shadow / no blur ·
+    //     padding 4 0 让收起态视觉高度跟左侧 StatusBadge 同款(StatusBadge =
+    //     text-xs 12px + line-height 16 + py-1 = 24px 总高 · 心情标 padding 4
+    //     0 + emoji 16 + label 12 + line-height 16 同样 24px 总高,横向左右对齐)。
+    //   - panel:--glass-* 一整套(多行内容容器仍是阅读需要)。
+    ...(isWidget
+      ? {
+          background: 'transparent',
+          border: 'none',
+          borderRadius: 0,
+          padding: '4px 0',
+          boxShadow: 'none',
+          // backdropFilter 显式 none · 防主题切换时 var fallback 漏 blur
+          backdropFilter: 'none',
+          WebkitBackdropFilter: 'none',
+        }
+      : {
+          background: 'var(--glass-bg)',
+          backdropFilter: 'blur(var(--glass-blur))',
+          WebkitBackdropFilter: 'blur(var(--glass-blur))',
+          border: 'var(--glass-border)',
+          borderRadius: 'var(--glass-radius)',
+          padding: '8px 12px',
+          boxShadow: 'var(--glass-shadow)',
+        }),
     fontSize: '13px',
     color: 'var(--glass-text)',
     textShadow: 'var(--glass-text-shadow)',
-    boxShadow: 'var(--glass-shadow)',
     zIndex: 30,
     pointerEvents: 'auto',
     // Round 4 ① 心情小标 · minWidth 移除让默认态按内容紧凑撑 · transition 过渡。
@@ -116,9 +137,14 @@ const CharacterStatePanel = memo(function CharacterStatePanel({
     cursor: 'pointer',
     // Panel:left:8 top:48 锚 Panel 根容器(整窗) · TopBar h-10(40px) 下方 8px ·
     //   dock(垂直居中) / ConvList 浮卡(top:60 left:80) 均在它右下方 · 不重叠。
-    // Widget:right:8 bottom:8 锚 App 外层 relative 容器右下角 · 无 TopBar。
+    // Widget(2026-06-06 五次挪位):right:12 top:12 跟左上 StatusBadge(left:12
+    //   top:12)左右平齐 · 视觉同高度同款角标(StatusBadge / 心情标都用 24px 总高 ·
+    //   见上方 padding 注释)。
+    //   历史:① right:8 bottom:8 撞底部坨 → ② left:12 top:44 飘空气 →
+    //   ③ right:12 top:44 贴她中部偏上 → ④ right:8 top:8 顶死右上 →
+    //   ⑤ right:12 top:12 跟 StatusBadge 平齐(本次)。
     ...(position === 'widget'
-      ? { right: '8px', bottom: '8px' }
+      ? { right: '12px', top: '12px' }
       : { left: '8px', top: '48px' }),
   };
 
@@ -134,8 +160,15 @@ const CharacterStatePanel = memo(function CharacterStatePanel({
       aria-label={pinned ? '收起心情卡' : '展开心情卡'}
     >
       <div className="flex items-center gap-2">
-        <span style={{ fontSize: '18px', lineHeight: 1 }}>{emoji}</span>
-        <span style={{ color: 'var(--glass-text-muted)', fontSize: '11px' }}>
+        {/* widget 态:emoji 16 + label 12 + line-height 16 → 跟左侧 StatusBadge
+            (text-xs 12 / line-height 16 / py-1)同视觉高度 24px。panel 态保留
+            原 18 / 11 紧凑卡视觉。 */}
+        <span style={{ fontSize: isWidget ? '16px' : '18px', lineHeight: isWidget ? '16px' : 1 }}>{emoji}</span>
+        <span style={{
+          color: 'var(--glass-text-muted)',
+          fontSize: isWidget ? '12px' : '11px',
+          lineHeight: isWidget ? '16px' : undefined,
+        }}>
           {label}
         </span>
         {expanded && (

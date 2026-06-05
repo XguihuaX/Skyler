@@ -6,12 +6,16 @@ import StatusBadge from '../components/StatusBadge';
 import AsrPreview from '../components/AsrPreview';
 import VadBar from '../components/VadBar';
 import ControlBar from '../components/ControlBar';
+import WidgetTextInput from '../components/WidgetTextInput';
 
 export default function Widget() {
   const status       = useAppStore((s) => s.status);
   const asrText      = useAppStore((s) => s.asrText);
   const asrTimestamp = useAppStore((s) => s.asrTimestamp);
   const setMode      = useAppStore((s) => s.setMode);
+  // 2026-06-05 · ControlBar Keyboard 按钮翻 inputMode='text'/'voice' · 之前
+  // 无消费者 · 这里订阅 · text 态在 ControlBar 上方渲染 WidgetTextInput 浮件。
+  const inputMode    = useAppStore((s) => s.inputMode);
 
   const handleOpenPanel = async () => {
     await applyModeWindowProps('panel');
@@ -60,6 +64,9 @@ export default function Widget() {
         <StatusBadge status={status} />
       </div>
 
+      {/* 2026-06-06 · 删 WidgetSpeechBubble · 小窗只用 AsrPreview(实时 ASR
+          回显) + Live2D 嘴动 + TTS 出声,不再叠成句台词气泡浮件。 */}
+
       {/* ASR preview — centered above control bar */}
       <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20">
         <AsrPreview text={asrText} timestamp={asrTimestamp} />
@@ -70,6 +77,20 @@ export default function Widget() {
       <div className="absolute bottom-16 left-3 right-3 z-10 pointer-events-none">
         <VadBar />
       </div>
+
+      {/* 2026-06-05 · Widget text input — 仅 inputMode==='text' 时渲染 ·
+          位于 ControlBar(bottom:12 + 36 高 = 顶 48)之上 8px 间距 = bottom:56 ·
+          跟 VadBar(bottom:64)有 8px overlap 但 VadBar idle 不渲染(text 态
+          vadState=sleep 自然不渲染)· hover 控制跟其它浮件同节奏。 */}
+      {inputMode === 'text' && (
+        <div
+          data-tauri-drag-region="false"
+          className={`absolute z-20 isolate ${controlsClass}`}
+          style={{ bottom: '56px', left: '12px', right: '12px' }}
+        >
+          <WidgetTextInput />
+        </div>
+      )}
 
       {/* Control bar — hover-controlled. bugfix-4 (4.3): JSX ``={false}`` 会让
           属性消失,改成显式字符串 "false" (Tauri 检查 attribute presence) +
