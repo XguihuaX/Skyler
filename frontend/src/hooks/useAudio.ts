@@ -136,8 +136,12 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
 
   const store = useAppStore;
   // 2026-06-05 · 订阅 recordingMode 给下方 auto-pause-on-mode-manual effect 用。
-  // 单值 selector · 切 'vad' 不重渲染下面那个 effect 逻辑里只关心 manual 翻转。
+  // 同时(闸 2)订阅 vadState · 让 effect 也跟 vadState 变化重跑 — manual 态下
+  // vadState 一旦漏成非 sleep(silero callback / recover / 其它路径),effect
+  // 立刻再 pause。原 deps 只 [recordingMode] 漏 vadState 是 manual-active 残留
+  // 的根因之一。
   const recordingMode = useAppStore((s) => s.recordingMode);
+  const vadState      = useAppStore((s) => s.vadState);
 
   // 始终持有最新 sendVoice 引用（避免 useCallback 闭包过期）
   const sendVoiceRef = useRef(sendVoice);
@@ -273,6 +277,31 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
   const recoverStream = useCallback(async (reason: string): Promise<void> => {
     if (recoveryInFlightRef.current) {
       // 多事件源(onended + 周期 check)可能同时触发 · 单飞行锁防 race
+      return;
+    }
+    // 2026-06-05 闸 3:手动态不 recover。原 gate 只看 vadState='sleep',vadState
+    // 漏成 active 时 recover 会续命 audio graph + 让 silero 引擎延寿。手动态下
+    // 直接灭灯:pause silero 实例(防 onnxruntime worker 空烧) + 翻 vadState 到
+    // sleep(让闸 2 effect 看到归零)+ 清 confidence/recording。
+    //
+    // 2026-06-06 修正版(A 调研:teardown→重入第一次失败根因):去掉抢先的
+    // teardownAudioGraph() 调用 · 只 await v.pause(),让 silero 内部 pauseStream
+    // callback(已注入 teardownRef = teardownAudioGraph)按 silero 自己的 lifecycle
+    // 拆 graph,跟正常 toggleVad active→sleep 同一条 race-safe 路径 · 修第一次
+    // 切回 vad 重入 v.start 失败(因外部抢先 teardown 让 silero 内部 worker 状态
+    // 半挂,第二次 start 才自愈)的真因。
+    if (store.getState().recordingMode === 'manual') {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      // 不直接 teardown · 让 silero pauseStream callback(teardownRef)自己跑
+      try { await micVadRef.current?.pause(); } catch { /* swallow */ }
+      const s = store.getState();
+      if (s.vadState !== 'sleep') s.setVadState('sleep');
+      if (s.vadConfidence !== 0) s.setVadConfidence(0);
+      s.setRecording(false);
+      console.log('[Audio] stream recover (%s) skipped · manual mode + silero pause (callback teardown)', reason);
       return;
     }
     const vadState = store.getState().vadState;
@@ -555,9 +584,9 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
   // 切回 VAD 不自动 start —— 用户按 mic 才启,跟现状一致(避免后台监听)。
   useEffect(() => {
     if (recordingMode !== 'manual') return;
-    if (store.getState().vadState === 'sleep') return;
+    if (vadState === 'sleep') return;
     void toggleVad();
-  }, [recordingMode, toggleVad, store]);
+  }, [recordingMode, vadState, toggleVad, store]);
 
   // ── INV-17 v3 · eager init MicVAD at mount ───────────────────────────────
   // 模块 import 用 dynamic import 避开 SSR / Tauri prerender 期 navigator.
@@ -604,6 +633,10 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
             store.getState().setVadConfidence(probs.isSpeech);
           },
           onSpeechStart: () => {
+            // 2026-06-05 闸 1:手动态 silero callback 全部掐死,防偷改 state +
+            // (onSpeechEnd 那条)偷送 voice。直接 return,不动 vadState。effect
+            // 自愈(闸 2)兜底翻 sleep,recoverStream(闸 3)兜底 pause silero 引擎。
+            if (store.getState().recordingMode === 'manual') return;
             // silero 检测到 speech 进 recording 状态 · status='listening' 同
             // 旧 startRecorder 路径语义。silero 内部已开始 buffer audio · 我
             // 们不需要 MediaRecorder。
@@ -612,6 +645,9 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
             store.getState().setStatus('listening');
           },
           onSpeechEnd: (audio: Float32Array) => {
+            // 闸 1:手动态掐死 · 不改 state · **不送 voice**(关键:这条原本
+            // 是 manual+silero 残留时她"自己应答"的根源)。
+            if (store.getState().recordingMode === 'manual') return;
             // silero 收尾 · 给完整 Float32 段(16kHz mono)
             // 注:audio 长度含 preSpeechPadMs(800ms default)前 padding
             store.getState().setRecording(false);
@@ -630,6 +666,8 @@ export function useAudio({ sendVoice, sendInterrupt }: UseAudioParams): UseAudio
             }
           },
           onVADMisfire: () => {
+            // 闸 1:手动态掐死 · 同 onSpeechStart/End。
+            if (store.getState().recordingMode === 'manual') return;
             // 段太短(< minSpeechMs default 400)· silero 视作 false positive ·
             // 不送 ASR · 回 active 待新段
             console.log('[silero] VAD misfire (segment < minSpeechMs)');
