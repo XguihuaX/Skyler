@@ -408,6 +408,18 @@ interface AppState {
   connection: ConnectionStatus;
   setConnection: (c: ConnectionStatus) => void;
 
+  // 第三刀 · 进入动画 appReady 四路(每路独立 source ·
+  // embedding/whisper ← /api/health · wsReady ← useWebSocket onopen ·
+  // live2dReady ← Live2DCanvas runtime.loadModel resolve)。
+  embeddingReady: boolean;
+  whisperReady: boolean;
+  wsReady: boolean;
+  live2dReady: boolean;
+  setEmbeddingReady: (v: boolean) => void;
+  setWhisperReady: (v: boolean) => void;
+  setWsReady: (v: boolean) => void;
+  setLive2dReady: (v: boolean) => void;
+
   // ASR 回显（模块 7 才接真实数据，本模块只放接口）
   asrText: string;
   setAsrText: (t: string) => void;
@@ -664,6 +676,15 @@ export const useAppStore = create<AppState>((set) => ({
 
   connection: 'disconnected',
   setConnection: (connection) => set({ connection }),
+
+  embeddingReady: false,
+  whisperReady: false,
+  wsReady: false,
+  live2dReady: false,
+  setEmbeddingReady: (embeddingReady) => set({ embeddingReady }),
+  setWhisperReady: (whisperReady) => set({ whisperReady }),
+  setWsReady: (wsReady) => set({ wsReady }),
+  setLive2dReady: (live2dReady) => set({ live2dReady }),
 
   asrText: '',
   asrTimestamp: 0,

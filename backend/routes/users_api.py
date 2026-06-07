@@ -70,6 +70,11 @@ async def get_user_profile(
         "user_name": u.user_name,
         "nickname": u.nickname,
         "language": u.language,
+        # V4 持久化"上次选的角色"· 前端 App.tsx mount 用这个优先选当前角色 ·
+        # null = 没选过 / 没记上 · 前端 fallback chars[0]。前端再做一次有效性校验
+        # (id 不在当前 chars 列表 → fallback chars[0]),后端 _resolve_conv_char
+        # 也独立校验目标角色存在(指向已删 → 静默回落 Momo)。
+        "current_character_id": u.current_character_id,
     }
 
 
@@ -96,6 +101,7 @@ async def patch_user_profile(
         "user_name": u.user_name,
         "nickname": u.nickname,
         "language": u.language,
+        "current_character_id": u.current_character_id,
     }
 
 

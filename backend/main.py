@@ -162,9 +162,14 @@ from backend.database.migrations.v4_0_0_memory_tombstone import (
 from backend.database.migrations.v4_voice_greeting import (
     run_migration as migrate_v4_voice_greeting,
 )
+# v4 · users.current_character_id 列(持久化"上次选的角色")
+from backend.database.migrations.v4_users_current_character import (
+    run_migration as migrate_v4_users_current_character,
+)
 from backend.database.services import create_user, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory, SHORT_TERM_MAX
+from backend.utils.boot_tracker import get_tracker as _get_boot_tracker
 from backend.routes.activity_api import router as activity_router
 from backend.routes.backgrounds_api import router as backgrounds_router
 from backend.routes.briefing_api import router as briefing_router
@@ -262,9 +267,12 @@ logger.info("[logging] FileHandler enabled · path=%s", _LOG_FILE)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    _boot = _get_boot_tracker()
+    _boot.start()
     # ── 1. Database ─────────────────────────────────────────────────────────
     await init_db()
     logger.info("Database initialised")
+    _boot.mark("init_db")
 
     # ── 1b. V2.5-B schema migration (idempotent) ─────────────────────────────
     await migrate_v2_5_b()
@@ -441,6 +449,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 系统纯 storage + serve(不走 TTS 预渲染)。CREATE IF NOT EXISTS,幂等。
     await migrate_v4_voice_greeting()
 
+    # ── 1b35. V4 · users.current_character_id 列(持久化上次选的角色) ─────
+    # nullable INT · ws character_switch 写入 · ws _resolve_conv_char 读优先 ·
+    # 前端 App.tsx mount 优先用 · 指向已删角色应用层兜底 Momo · 不设 FK 约束。
+    await migrate_v4_users_current_character()
+    _boot.mark("db_migrations_all")
+
     # ── 2. Default user ──────────────────────────────────────────────────────
     default_uid: str  = config_yaml.get("default_user_id", "default")
     default_name: str = "Momo"
@@ -452,6 +466,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("Created default user: %s (%s)", default_uid, default_name)
         else:
             logger.info("Default user already exists: %s", default_uid)
+    _boot.mark("default_user")
 
     # ── 3. Restore short-term memory from chat_history ───────────────────────
     # 路径 7 修法(audit_role_switch.md / audit_ja_persist.md):
@@ -537,6 +552,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "(per-char limit=%d, ja/en tag stripped, conv-aware)",
             total_restored, len(char_ids), SHORT_TERM_MAX,
         )
+    _boot.mark("short_term_restore")
 
     # ── 3.5. HF mirror reachability probe (INV-14 §8) ────────────────────────
     # 启动期 HEAD HF_ENDPOINT(default hf-mirror.com)3s 超时 · mirror 不通
@@ -563,6 +579,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "若反复发生 · 检查网络 / 换镜像 / 预下载模型 cache。",
                 _hf_endpoint, exc,
             )
+    _boot.mark("hf_mirror_probe")
 
     # ── 4. Preload local models (embedding + whisper) ────────────────────────
     async def _preload_embedding() -> None:
@@ -570,10 +587,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             await long_term_memory.preload()
             app_state["embedding_ready"] = True
-            logger.info(
-                "[TIME] Embedding model load: %.0fms",
-                (time.perf_counter() - t0) * 1000,
-            )
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.info("[TIME] Embedding model load: %.0fms", elapsed)
+            _boot.mark_bg("embedding_warm", elapsed)
         except Exception:
             logger.exception("Embedding model preload failed")
 
@@ -582,10 +598,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             await whisper_asr.load_model()
             app_state["whisper_ready"] = True
-            logger.info(
-                "[TIME] Whisper model load: %.0fms",
-                (time.perf_counter() - t0) * 1000,
-            )
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.info("[TIME] Whisper model load: %.0fms", elapsed)
+            _boot.mark_bg("whisper_warm", elapsed)
         except Exception:
             logger.exception("Whisper model preload failed")
 
@@ -593,11 +608,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # so /api/health can answer "warming" while models load in parallel.
     asyncio.create_task(_preload_embedding())
     asyncio.create_task(_preload_whisper())
+    _boot.mark("spawn_preload_tasks")
 
     # ── 6. v3-G chunk 0 — Cron scheduler (APScheduler) ──────────────────────
     # (旧 AlarmScheduler / scheduler.task 已于 2026-05-19 退役;
     # 提醒走 apple_calendar.create_event + macOS EventKit,无需后端轮询。)
     await cron_scheduler.start()
+    _boot.mark("cron_scheduler_start")
 
     # ── 6b. v3-G chunk 3b — intimacy_decay daily cron（每天 0:00）─────────
     try:
@@ -610,6 +627,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("[cron] intimacy_decay_daily already registered (hot-reload)")
     except Exception:
         logger.exception("[cron] intimacy_decay_daily registration failed")
+    _boot.mark("cron_intimacy_decay")
 
     # ── 6b'. v3.5 chunk 11 — structured profile daily regenerate ─────────
     # Cron 取代 chunk 9 的"每 50 turn" in-memory 计数器（已删除）。
@@ -636,6 +654,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.exception(
             "[cron] profile_daily_regenerate registration failed"
         )
+    _boot.mark("cron_profile_regen")
 
     # ── 6b'''. v3.5 chunk 14 — activity_sessions daily cleanup cron ─────
     # 删 > config.activity_timeline.cleanup_days(默 30 天)的 session 行。
@@ -662,6 +681,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.exception(
             "[cron] activity_timeline_cleanup registration failed"
         )
+    _boot.mark("cron_activity_cleanup")
 
     # ── 6b''. v3.5 chunk 10 — MemoryExtractor worker ─────────────────────
     # 每 N 分钟扫 chat_history 提取 memory entries。worker 用
@@ -685,6 +705,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("[extractor] disabled by config (memory.extractor.enabled=false)")
     except Exception:
         logger.exception("[extractor] worker startup failed")
+    _boot.mark("extractor_worker_start")
 
     # ── 6c. v3-G chunk 3a — clipboard polling task ─────────────────────────
     try:
@@ -692,6 +713,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         clipboard_watcher.start_polling()
     except Exception:
         logger.exception("[clipboard] polling task spawn failed")
+    _boot.mark("clipboard_polling_start")
 
     # ── 6c'. v3.5 chunk 8a — ActivityWatcher + smart trigger ────────────────
     # activity_watcher.enabled=false → 完全不启动（log 静默）。enabled=true →
@@ -748,6 +770,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         asyncio.create_task(_permission_check())
     except Exception:
         logger.exception("[activity] watcher startup failed")
+    _boot.mark("activity_watcher_start")
 
     # ── 6d. v3-G chunk 4 Part C — v3-F' trigger pack registration ──────────
     # 4 个新 trigger 各自按 config.proactive.triggers.{name}.enabled 决定。
@@ -853,6 +876,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 logger.info("[cron] long_idle_check already registered")
     except Exception:
         logger.exception("[cron] v3-F' trigger pack registration failed")
+    _boot.mark("proactive_trigger_pack")
 
     # ── 7. v3-G chunk 2 / 2.6 — Proactive engine cron 注册（mode 互斥）─
     # ``config.proactive.mode`` 决定哪个 trigger 上 cron：
@@ -909,6 +933,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "Proactive enabled but mode=%r (off/unknown); no cron registered",
                 mode,
             )
+    _boot.mark("proactive_engine_cron")
 
     # ── 8. v3-G chunk 1.5 — MCP server SessionManager（必要 lifecycle）──
     # mcp SDK 的 StreamableHTTPSessionManager 必须在 ``async with .run()``
@@ -925,7 +950,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if server_enabled:
         async with mcp_server.get_session_manager().run():
             logger.info("MCP server session manager started")
+            _boot.mark("mcp_server_session_manager_start")
             await mcp_client_module.init_clients_from_config()
+            _boot.mark("mcp_clients_init")
+            _boot.dump_summary()
             try:
                 yield
             finally:
@@ -934,6 +962,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         # mcp server 关掉时 client 仍可独立工作
         await mcp_client_module.init_clients_from_config()
+        _boot.mark("mcp_clients_init")
+        _boot.dump_summary()
         try:
             yield
         finally:

@@ -60,6 +60,26 @@ export async function fetchHealth(): Promise<HealthResponse> {
 }
 
 // ---------------------------------------------------------------------------
+// V4 持久化"上次选的角色"· App.tsx mount 时拉这个 · 用 current_character_id
+// (校 chars 有效)优先决定启动角色 · 没有 / 无效则 fallback chars[0]。
+// ---------------------------------------------------------------------------
+export interface UserProfileResponse {
+  user_id: string;
+  user_name: string;
+  nickname: string | null;
+  language: string | null;
+  current_character_id: number | null;
+}
+
+export async function fetchUserProfile(userId: string): Promise<UserProfileResponse> {
+  const res = await fetch(
+    `${BACKEND_BASE}/api/users/${encodeURIComponent(userId)}/profile`,
+  );
+  if (!res.ok) throw new Error(`fetch user profile failed: ${res.status}`);
+  return (await res.json()) as UserProfileResponse;
+}
+
+// ---------------------------------------------------------------------------
 // v3-B 补丁: 通用设定 (base_instruction)
 // ---------------------------------------------------------------------------
 

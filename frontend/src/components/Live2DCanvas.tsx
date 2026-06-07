@@ -169,6 +169,12 @@ export default function Live2DCanvas({ modelUrl }: Live2DCanvasProps) {
           return;
         }
         handleRef.current = handle;
+        // 第三刀 · 喂 appReady 第 3 路(进入动画 LoadingScreen 闸 4 路之一)·
+        // 静态 import 同模块单例 · 同步调用 · 不走 dynamic import(race-free)·
+        // 首次 loadModel 成功 resolve 即翻 true · 后续 character switch 再 set
+        // 也是 no-op(已经 true)。loadModel 失败 / cancelled / throw 都不会 set,
+        // engine 仍在 gate-wait → 真实 warming 态 → 绝不假 100%。
+        useAppStore.getState().setLive2dReady(true);
       } catch (err) {
         // loadModel 在 cancelled 时会自己 throw，吞掉
         if (!cancelled) {

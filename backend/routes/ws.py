@@ -59,7 +59,7 @@ from backend.asr.whisper import whisper_asr
 from backend.config import config_yaml, get_planner_model, get_tts_enabled
 from backend.config.prompt_manager import prompt_manager
 from backend.database import AsyncSessionLocal
-from backend.database.models import Character, Conversation
+from backend.database.models import Character, Conversation, User
 from backend.database.services import (
     add_chat_history,
     get_chat_history,
@@ -297,7 +297,11 @@ async def _resolve_conv_char(
 ) -> Tuple[Optional[int], Optional[int]]:
     """Backwards-compatible resolution for v2 frontends that don't send IDs.
 
-    - character_id: use incoming if provided, else look up Momo by name.
+    - character_id: use incoming if provided, else 三级兜底链:
+        (1) users.current_character_id 持久值(V4)· 校验角色仍存在
+        (2) Character.name == "Momo"(v2 老兜底)
+        (3) None(DB 啥都没 · fresh install 前)
+      指向已删角色 → 静默走 (2) · 不崩。
     - conversation_id: use incoming if provided, else pick the user's
       most-recently-updated conversation.
     Returns (conv_id_or_None, char_id_or_None). Either may be None if the
@@ -306,6 +310,25 @@ async def _resolve_conv_char(
     async with AsyncSessionLocal() as session:
         char_id = incoming_char
         if char_id is None:
+            # 兜底 1:用户持久值(上次选的角色)
+            persisted = (await session.execute(
+                select(User.current_character_id).where(User.user_id == user_id)
+            )).scalar_one_or_none()
+            if persisted is not None:
+                # 校验目标角色仍存在(已删 / 脏数据 → 静默走兜底 2)
+                exists = (await session.execute(
+                    select(Character.id).where(Character.id == int(persisted))
+                )).scalar_one_or_none()
+                if exists is not None:
+                    char_id = int(exists)
+                else:
+                    logger.info(
+                        "[resolve_char] persisted user=%s current_character_id=%s "
+                        "指向已删角色 · 回落 Momo",
+                        user_id, persisted,
+                    )
+        if char_id is None:
+            # 兜底 2:Momo by name(v2 老路径)
             row = (await session.execute(
                 select(Character.id).where(Character.name == "Momo")
             )).scalar_one_or_none()
@@ -334,6 +357,34 @@ async def _bump_conversation_updated_at(conv_id: int) -> None:
         if c is not None:
             c.updated_at = datetime.utcnow()
             await session.commit()
+
+
+async def _persist_current_character(
+    user_id: str, char_id: Optional[int],
+) -> None:
+    """V4 持久化"上次选的角色" — 单一实现 · 真 handler(endpoint loop 1235)+
+    dead branch(_handle_message 643)都调它。
+
+    - char_id is None → 不写(前端清选 · 极少触发 · 避免误清持久值)
+    - DB 异常吞 + log · 永不阻塞 ack 或后续逻辑(切角色 UI 体验高于持久成功率)
+    - 下次启动 _resolve_conv_char 兜底 1 / 前端 fetchUserProfile 一起读它
+    """
+    if char_id is None:
+        return
+    try:
+        async with AsyncSessionLocal() as session:
+            u = (await session.execute(
+                select(User).where(User.user_id == user_id)
+            )).scalar_one_or_none()
+            if u is not None:
+                u.current_character_id = int(char_id)
+                await session.commit()
+    except Exception:
+        logger.exception(
+            "[character_switch] persist current_character_id failed "
+            "user=%s char=%s",
+            user_id, char_id,
+        )
 
 
 async def _apply_and_push_state_update(
@@ -618,11 +669,16 @@ async def _handle_message(
     # 前端切角色时通知 backend 当前 UI 状态,不触发 LLM,仅更新连接状态。
     # 必须在 _resolve_conv_char 之前处理(避免反查 chat_history 干扰)。
     if msg_type == "character_switch":
+        # 注:bisect-1 实证此分支是 dead code — endpoint loop 1235 已 continue
+        # 不到此处。保留 + 同样调持久 helper 是保险:将来若多出 character_switch
+        # 入口(WebSocket 子协议 / 内部转发)不漏 persist。Bug 2 修法的真路径
+        # 在 endpoint loop · 不动它。
         connection_manager.set_current(user_id, incoming_char, incoming_conv)
         logger.info(
-            "[character_switch] user=%s char=%s conv=%s",
+            "[character_switch] user=%s char=%s conv=%s (dead branch · insurance)",
             user_id, incoming_char, incoming_conv,
         )
+        await _persist_current_character(user_id, incoming_char)
         try:
             await ws.send_json({
                 "type": "character_switch_ack",
@@ -1205,6 +1261,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     "[character_switch] user=%s char=%s conv=%s "
                     "(in-flight turn preserved)", user_id, new_char, new_conv,
                 )
+                # V4 持久化 · 真路径在此(bisect-1 确认 dead branch 在 _handle_message
+                # 永远不到)· helper 内部异常吞 + log · 不阻塞 ack / continue。
+                # 不动 Bug 2 修法的 continue 跳 task 调度逻辑。
+                await _persist_current_character(user_id, new_char)
                 try:
                     await websocket.send_json({
                         "type": "character_switch_ack",

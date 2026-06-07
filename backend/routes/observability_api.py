@@ -3,6 +3,7 @@
 GET /api/observability/tts/usage[?range=today|month]
 GET /api/observability/tts/recent_calls[?limit=20]
 GET /api/observability/system/resources
+GET /api/observability/boot-summary   (第三刀 · 进入动画喂数据 · BootTracker 真实 snapshot)
 """
 from __future__ import annotations
 
@@ -114,3 +115,15 @@ async def get_system_resources() -> Any:
     from backend.observability import system as sys_mod
     snapshot = sys_mod.collect()
     return sys_mod.to_dict(snapshot)
+
+
+@router.get("/observability/boot-summary")
+async def get_boot_summary() -> Any:
+    """第三刀 · 进入动画喂数据 · 返回 BootTracker 真实 snapshot。
+
+    marks 顺序 = mark 调用顺序 = 真实 eager 阶段顺序(给 loading sequence 按
+    序 reveal)。bg = 背景 warmup 完成耗时(embedding / whisper · 完成前为 [])。
+    total_ms = eager 总时(yield 之前)。
+    """
+    from backend.utils.boot_tracker import get_tracker
+    return get_tracker().get_snapshot()

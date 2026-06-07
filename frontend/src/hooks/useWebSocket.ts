@@ -432,6 +432,8 @@ export function useWebSocket(): UseWebSocketReturn {
       console.log('[WS] connected');
       reconnectAttemptsRef.current = 0;
       store.getState().setConnection('connected');
+      // 第三刀 · 喂 appReady 第 4 路 · WS onopen 即翻 true · disconnected 翻回 false
+      store.getState().setWsReady(true);
     };
 
     ws.onmessage = (ev) => {
@@ -450,6 +452,7 @@ export function useWebSocket(): UseWebSocketReturn {
     ws.onclose = () => {
       console.log('[WS] disconnected');
       store.getState().setConnection('disconnected');
+      store.getState().setWsReady(false);
       wsRef.current = null;
       const delay = Math.min(
         RECONNECT_BASE_MS * Math.pow(2, reconnectAttemptsRef.current),

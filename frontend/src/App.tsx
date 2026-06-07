@@ -7,7 +7,7 @@ import Panel from './modes/Panel';
 import NotificationToast from './components/NotificationToast';
 import CharacterStatePanel from './components/CharacterStatePanel';
 import ActivityPermissionModal from './components/ActivityPermissionModal';
-import SplashOverlay from './components/SplashOverlay';
+import LoadingScreen from './components/loading/LoadingScreen';
 import CharacterGallery from './components/character/CharacterGallery';
 import { AppApiContext, AppApi } from './contexts/appApi';
 import { applyModeWindowProps, fetchConfig } from './lib/window';
@@ -16,6 +16,7 @@ import {
   fetchConversations,
   fetchHealth,
   fetchMessages,
+  fetchUserProfile,
 } from './lib/config';
 import { fetchLive2DModels } from './lib/live2d';
 import { fetchTtsVoices } from './lib/tts';
@@ -37,11 +38,12 @@ function MainApp() {
   // 自身的 close / CTA 三处翻动。
   const galleryOpen = useAppStore((s) => s.galleryOpen);
 
-  const [warming, setWarming] = useState(true);
-  // v3.5 chunk 5b：splash 完成前主视图 opacity=0；splash silent-skip 时
-  // SplashOverlay 内部立即 onFinished()，所以这里默认 false（"未完成"）但
-  // 几乎不会被用户察觉。
-  const [splashDone, setSplashDone] = useState(false);
+  // 进入动画 LoadingScreen 挂载 · cut4 修法:
+  //   - 每次启动都挂(不依赖 warming / 后端是否在暖)
+  //   - engine 跑 max(7s 地板, appReady) · done 时回调 setLoadingDone(true) → unmount
+  //   - appReady 4 路(embedding/whisper/ws/live2d)只喂闸 · 不决定挂不挂
+  //   - 旧 splash 视频(SplashOverlay + /splash/intro.mp4)已删 · LoadingScreen 顶位
+  const [loadingDone, setLoadingDone] = useState(false);
 
   // V2.5-D — sync the Tauri window size to the persisted mode on first paint.
   // The store's `mode` is hydrated from localStorage at module init, but
@@ -73,7 +75,24 @@ function MainApp() {
           if (cancelled) return;
           useAppStore.getState().setCharacters(chars);
           if (chars.length > 0) {
-            useAppStore.getState().setCurrentCharacterId(chars[0].id);
+            // V4 持久化:优先用 users.current_character_id(上次选的角色)·
+            // 拉 user profile · 校验 id 在 chars 里存在(防指向已删角色)·
+            // 任一步失败/没值 → fallback chars[0](保持老行为)。
+            let pickedId: number = chars[0].id;
+            try {
+              const profile = await fetchUserProfile(userId);
+              if (cancelled) return;
+              const persisted = profile.current_character_id;
+              if (
+                persisted !== null && persisted !== undefined &&
+                chars.some((c) => c.id === persisted)
+              ) {
+                pickedId = persisted;
+              }
+            } catch (e) {
+              console.warn('[App] fetchUserProfile failed · fallback chars[0]:', e);
+            }
+            useAppStore.getState().setCurrentCharacterId(pickedId);
           }
         } catch (e) {
           console.error('[App] fetchCharacters failed:', e);
@@ -147,28 +166,37 @@ function MainApp() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // Poll /api/health every 500ms, capped at 60s (120 attempts).
-      for (let i = 0; i < 120; i++) {
-        if (cancelled) return;
+      // 第三刀 · health poll 只负责写 per-model ready 进 store,**不再翻
+      // warming**(否则后端已 ready 时 LoadingScreen 引擎还没起就被 unmount,
+      // 进入动画完全看不到)。warming 由 LoadingScreen engine onDone 翻 ·
+      // 60s 安全网 timeout 兜底防 engine 永远 done 不了。
+      const setE = useAppStore.getState().setEmbeddingReady;
+      const setW = useAppStore.getState().setWhisperReady;
+      // 继续 poll · 直到组件 unmount(给 LoadingScreen 实时喂 ready 状态)
+      while (!cancelled) {
         try {
           const h = await fetchHealth();
-          if (h.status === 'ready') {
-            if (!cancelled) setWarming(false);
-            return;
+          if (!cancelled) {
+            setE(h.models?.embedding === 'ready');
+            setW(h.models?.whisper === 'ready');
           }
         } catch {
           // backend not up yet — keep polling
         }
         await new Promise((r) => setTimeout(r, 500));
       }
-      // Timeout — drop the overlay so the user can at least try to use it.
-      if (!cancelled) {
-        console.warn('[App] /api/health did not return ready within 60s');
-        setWarming(false);
-      }
     })();
+    // 60s 安全网:engine 永远没 done(比如 live2d 加载失败 / appReady 某路卡住)
+    // 也别永远卡 loading · 强制 unmount 主 UI 露出。
+    const safetyTimer = window.setTimeout(() => {
+      if (!cancelled) {
+        console.warn('[App] LoadingScreen safety net 60s · force unmount');
+        setLoadingDone(true);
+      }
+    }, 60_000);
     return () => {
       cancelled = true;
+      window.clearTimeout(safetyTimer);
     };
   }, []);
 
@@ -194,12 +222,6 @@ function MainApp() {
     <AppApiContext.Provider value={api}>
       <div
         className="w-screen h-screen bg-transparent overflow-hidden relative"
-        style={{
-          // v3.5 chunk 5b：splash 期间主视图 fade-out；splash 跳过后 300ms 内
-          // fade-in。silent-skip 时几乎无感（splashDone 在 mount 同 tick 翻 true）。
-          opacity: splashDone ? 1 : 0,
-          transition: 'opacity 300ms ease-out',
-        }}
       >
         {/* Widget-only top drag strip. Panel mode has its own TopBar (with
             data-tauri-drag-region) flush to the window top, so a global strip
@@ -225,34 +247,15 @@ function MainApp() {
         {mode === 'widget' && <CharacterStatePanel position="widget" />}
         <ActivityPermissionModal />
         <NotificationToast />
-        {warming && (
-          <div
-            className="fixed inset-0 z-[9999] backdrop-blur-sm flex items-center justify-center"
-            style={{ background: 'color-mix(in srgb, var(--color-bg-base) 80%, transparent)' }}
-          >
-            <div
-              className="flex flex-col items-center gap-3"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
-              <div
-                className="w-10 h-10 border-4 rounded-full animate-spin"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  borderTopColor: 'var(--color-accent)',
-                }}
-              />
-              <div className="text-sm">正在启动模型...</div>
-            </div>
-          </div>
-        )}
       </div>
       {/* v4-fan chunk 4: Character Gallery overlay。store.galleryOpen 由
           TopBar GalleryThumbnails 按钮翻动;Gallery 自身管 close/Esc/CTA
-          复位。z=990 压在主 UI 上方,SplashOverlay (z 10000) 之下。 */}
+          复位。z=990 压在主 UI 上方,LoadingScreen (z 9999) 之下。 */}
       {galleryOpen && <CharacterGallery />}
-      {/* v3.5 chunk 5b：splash overlay。z-index 高于一切（10000），自己管
-          自己的存在感（disabled / 404 → mount 同 tick 立即 onFinished）。 */}
-      {!splashDone && <SplashOverlay onFinished={() => setSplashDone(true)} />}
+      {/* 进入动画 · 每次启动无条件挂 · engine 跑 max(7s, appReady) · done 后
+          自 fade 400ms · onDone() → setLoadingDone(true) → 本块 unmount。
+          挂在 AppApiContext 下 + 主 UI div 兄弟,层级 z-9999 全屏盖。 */}
+      {!loadingDone && <LoadingScreen onDone={() => setLoadingDone(true)} />}
     </AppApiContext.Provider>
   );
 }

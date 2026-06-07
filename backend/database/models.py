@@ -33,6 +33,11 @@ class User(Base):
     profile_data = Column(Text, nullable=True)
     nickname = Column(Text, nullable=True)
     language = Column(Text, nullable=True, default="zh-CN")
+    # V4 持久化"上次选的角色" · 软引用 characters.id · 不设 FK 约束(SQLite FK
+    # 默认不强制 · 且需求"指向已删角色 → 静默回落 Momo 别崩"应用层校验更直接)。
+    # 写入点:ws.py character_switch handler;读取点:ws.py _resolve_conv_char +
+    # users_api GET /profile + 前端 App.tsx mount(后两者一起喂前端启动角色决策)。
+    current_character_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     memories = relationship("Memory", back_populates="user")
