@@ -6,13 +6,25 @@ Mounted at /api in main.py.  Full URL map:
 v3-G' chunk 1 — 让 CharacterPanel 拿到一份"当前可用 TTS provider + 音色"
 清单，替代之前 voice_model 字段裸 JSON 文本框。后端从 ``config.yaml``
 ``tts.available_voices`` 读，加新音色不动代码。
+
+2026-06-06 · 能力页 GSV/Fish 卡补全 · 加 2 个支撑 endpoint:
+  POST /api/tts/gsv/ping       — GSV server 连通性探测(轻量 GET / + 3s timeout)
+  GET  /api/tts/fish/key_status — Fish API key 是否已配置 + 来源(env / file)
 """
+import logging
+import os
+import time
+from pathlib import Path
 from typing import List, Optional
 
+import httpx
 from fastapi import APIRouter
+from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 from backend.config import get_available_voices
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -383,3 +395,113 @@ async def delete_voice_alias(voice_id: str) -> None:
     """删 alias;下次显示走 fallback (character.name + ' voice' 或截断 id)。"""
     from backend.database import voice_aliases as svc
     await svc.delete_alias(voice_id)
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-06 · 能力页 GSV/Fish 卡支撑 endpoint
+# ---------------------------------------------------------------------------
+
+
+class GsvPingRequest(BaseModel):
+    server_url: str
+
+
+class GsvPingResponse(BaseModel):
+    ok: bool
+    latency_ms: int
+    status_code: Optional[int] = None
+    error: Optional[str] = None
+
+
+@router.post("/tts/gsv/ping", response_model=GsvPingResponse)
+async def gsv_ping(body: GsvPingRequest) -> GsvPingResponse:
+    """GSV server 连通性探测 · 轻量 GET / 探活 + 3s timeout · 不动 server state。
+
+    GPT-SoVITS 官方 API 无显式 health endpoint(`/tts` `/set_gpt_weights`
+    `/set_sovits_weights` 等都会动 state)· 这里走 HTTP GET / + 短超时:
+      - 任何 2xx/3xx/4xx → ok=True(server 在线 · 404 也算通,说明 server
+        进程在响应,只是没 `/` 路由)
+      - 5xx / 超时 / 连接错误 / 协议错误 → ok=False
+    走后端 proxy 是 CORS 必要(GSV server 通常不开 CORS,前端直 fetch 会 block)。
+
+    2026-06-07 · ok=True 时 re-arm:清掉 `_MODEL_LOAD_FAILED_KEYS` 里以该
+    server_url 开头的所有 key,让下次 synthesize 重跑 `_ensure_model_loaded`
+    重试 weights set,不用再 restart backend。只在真 ok 时清,失败别清(失败
+    时合成会自己重新 mark FAILED,无死循环)。
+    """
+    url = body.server_url.strip().rstrip("/") + "/"
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(url)
+        latency_ms = int((time.monotonic() - started) * 1000)
+        ok = resp.status_code < 500
+        if ok:
+            _rearm_gsv_failed_keys(body.server_url)
+        return GsvPingResponse(
+            ok=ok,
+            latency_ms=latency_ms,
+            status_code=resp.status_code,
+            error=None if ok else f"HTTP {resp.status_code}",
+        )
+    except httpx.TimeoutException:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return GsvPingResponse(
+            ok=False, latency_ms=latency_ms,
+            error=f"timeout after {latency_ms}ms",
+        )
+    except Exception as exc:  # 连接 / DNS / 协议错
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return GsvPingResponse(
+            ok=False, latency_ms=latency_ms,
+            error=f"{type(exc).__name__}: {exc}"[:200],
+        )
+
+
+def _rearm_gsv_failed_keys(server_url: str) -> None:
+    """ping 成功时清掉该 server 对应的 _MODEL_LOAD_FAILED_KEYS 标记。
+
+    GSV key 构造(`backend/tts/gsv.py::_ensure_model_loaded`):
+      key = f"{server_url}|{gpt_weights}|{sovits_weights}"
+    每个 server 可能有多个 weights 组合(实际场景通常 1 个,但 schema 允许)·
+    匹配第一段(split('|',1)[0])规范化后等于本次 ping 的 server_url 的所有
+    keys,全清。规范化用 rstrip('/') 容忍 tts_models.json 写带/不带 trailing /。
+    """
+    from backend.tts.gsv import _MODEL_LOAD_FAILED_KEYS  # type: ignore[attr-defined]
+    server_norm = server_url.strip().rstrip("/")
+    to_remove = {
+        k for k in _MODEL_LOAD_FAILED_KEYS
+        if k.split("|", 1)[0].rstrip("/") == server_norm
+    }
+    if to_remove:
+        _MODEL_LOAD_FAILED_KEYS.difference_update(to_remove)
+        logger.info(
+            "[gsv.ping] re-arm · ok ping for %s · cleared %d FAILED key(s) · "
+            "下次 synthesize 将重跑 _ensure_model_loaded 重试 weights set",
+            server_url, len(to_remove),
+        )
+
+
+class FishKeyStatusResponse(BaseModel):
+    configured: bool
+    source: Optional[str] = None  # 'env' / 'file' / None
+
+
+@router.get("/tts/fish/key_status", response_model=FishKeyStatusResponse)
+async def fish_key_status() -> FishKeyStatusResponse:
+    """Fish API key 是否已配置 + 来源 · 不返 key 内容(只 bool + source 标签)。
+
+    跟 `backend/tts/fish.py::_resolve_fish_api_key` 同优先级:
+      env FISH_API_KEY > <repo_root>/api_key.txt > 未配置
+    """
+    if os.environ.get("FISH_API_KEY", "").strip():
+        return FishKeyStatusResponse(configured=True, source="env")
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    key_file = repo_root / "api_key.txt"
+    if key_file.exists():
+        try:
+            if key_file.read_text(encoding="utf-8").strip():
+                return FishKeyStatusResponse(configured=True, source="file")
+        except OSError:
+            pass
+    return FishKeyStatusResponse(configured=False, source=None)

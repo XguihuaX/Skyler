@@ -2,12 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   Circle,
+  Cloud,
   KeyRound,
   Mic,
   Plus,
+  Server,
   Trash2,
   Volume2,
+  type LucideIcon,
 } from 'lucide-react';
 import { setConfigField } from '../../lib/window';
 import { fetchVoiceAliases, setVoiceAlias, resolveVoiceName } from '../../lib/voiceAliases';
@@ -230,12 +234,16 @@ export default function AIProvidersSection({ showToast }: AIProvidersSectionProp
         </div>
       ) : tab === 'tts' ? (
         // bugfix-3.3 (light): CosyVoice 卡 (绑 Qwen vendor 凭证) + voice 下拉 +
-        // TTS 总开关。Edge / SoVITS 不占位 — 用户拍板 v4.1+ 再加。
+        // TTS 总开关。2026-06-06:加 GSV + Fish 卡(方案 A · hardcoded JSX 同款,
+        // 不动 DB ai_providers)· 数据走 GET /api/tts/providers · 绑定到角色仍
+        // 走 CharacterPanel VoicePicker(voice_model JSON per-character)。
         <div className="space-y-3">
           <CosyVoiceTTSCard
             showToast={showToast}
             onConfigureQwenCred={(qwenVendor) => setCredentialsForVendor(qwenVendor)}
           />
+          <GsvTTSCard />
+          <FishTTSCard />
           <TtsSection showToast={showToast} />
         </div>
       ) : (
@@ -1048,85 +1056,83 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
   // fallback 字段 tts.cosyvoice.default_voice 仍保留 yaml 兜底,只是不暴露 UI
   // 控件 (用户拍板:per-character 都配后,全局无人改)。
 
+  // 2026-06-07 · 改用 TtsCardShell · 外框 + header 抽到 shell · 凭证 ✓/⚠ 徽标
+  // 进 statusBadge · 配置凭证 + 刷新复刻两个按钮进 headerActions(shell 内已
+  // stopPropagation 防点击 toggle expand)· body 完全不动(系统/复刻/用量/modal)。
+  const statusBadge = (
+    <>
+      <span
+        className="text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0"
+        style={{
+          background: 'var(--color-bg-elevated)',
+          color: 'var(--color-text-secondary)',
+        }}
+      >
+        builtin
+      </span>
+      {qwenVendor?.has_credential ? (
+        <span
+          className="text-[11px] flex items-center gap-1 shrink-0"
+          style={{ color: 'var(--color-text-accent)' }}
+          title={
+            qwenVendor.credential_source === 'env'
+              ? '复用 Qwen vendor .env 凭证 (DASHSCOPE_API_KEY)'
+              : '复用 Qwen vendor DB 凭证'
+          }
+        >
+          <CheckCircle2 size={12} /> 凭证已配置 (复用 Qwen)
+        </span>
+      ) : (
+        <span
+          className="text-[11px] flex items-center gap-1 shrink-0"
+          style={{ color: 'rgb(245,158,11)' }}
+        >
+          <AlertTriangle size={12} /> 未配置 (需 Qwen 凭证)
+        </span>
+      )}
+    </>
+  );
+
+  const headerActions = (
+    <>
+      {qwenVendor && !qwenVendor.has_credential && (
+        <button
+          type="button"
+          onClick={() => onConfigureQwenCred(qwenVendor)}
+          className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded transition"
+          style={{
+            background: 'var(--color-bg-input)',
+            border: '1px solid var(--color-border)',
+            color: 'var(--color-text-primary)',
+          }}
+        >
+          <KeyRound size={12} /> 配置 Qwen 凭证
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => void refreshCloned(true)}
+        disabled={loadingCloned}
+        className="flex items-center gap-1 text-[11px] px-2 py-1 rounded transition disabled:opacity-50"
+        style={{
+          background: 'transparent',
+          border: '1px solid var(--color-border)',
+          color: 'var(--color-text-secondary)',
+        }}
+        title="强制刷新 DashScope 复刻列表 (跳过 5min 缓存)"
+      >
+        🔄 刷新复刻列表
+      </button>
+    </>
+  );
+
   return (
-    <div
-      className="rounded-lg p-4"
-      style={{
-        background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
-        border: '1px solid var(--color-border-subtle)',
-      }}
+    <TtsCardShell
+      icon={Volume2}
+      title="CosyVoice (DashScope)"
+      statusBadge={statusBadge}
+      headerActions={headerActions}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <Volume2 size={16} style={{ color: 'var(--color-text-accent)' }} />
-          <span
-            className="text-sm font-medium truncate"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
-            CosyVoice (DashScope)
-          </span>
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0"
-            style={{
-              background: 'var(--color-bg-elevated)',
-              color: 'var(--color-text-secondary)',
-            }}
-          >
-            builtin
-          </span>
-          {qwenVendor?.has_credential ? (
-            <span
-              className="text-[11px] flex items-center gap-1 shrink-0"
-              style={{ color: 'var(--color-text-accent)' }}
-              title={
-                qwenVendor.credential_source === 'env'
-                  ? '复用 Qwen vendor .env 凭证 (DASHSCOPE_API_KEY)'
-                  : '复用 Qwen vendor DB 凭证'
-              }
-            >
-              <CheckCircle2 size={12} /> 凭证已配置 (复用 Qwen)
-            </span>
-          ) : (
-            <span
-              className="text-[11px] flex items-center gap-1 shrink-0"
-              style={{ color: 'rgb(245,158,11)' }}
-            >
-              <AlertTriangle size={12} /> 未配置 (需 Qwen 凭证)
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {qwenVendor && !qwenVendor.has_credential && (
-            <button
-              type="button"
-              onClick={() => onConfigureQwenCred(qwenVendor)}
-              className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded transition"
-              style={{
-                background: 'var(--color-bg-input)',
-                border: '1px solid var(--color-border)',
-                color: 'var(--color-text-primary)',
-              }}
-            >
-              <KeyRound size={12} /> 配置 Qwen 凭证
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => void refreshCloned(true)}
-            disabled={loadingCloned}
-            className="flex items-center gap-1 text-[11px] px-2 py-1 rounded transition disabled:opacity-50"
-            style={{
-              background: 'transparent',
-              border: '1px solid var(--color-border)',
-              color: 'var(--color-text-secondary)',
-            }}
-            title="强制刷新 DashScope 复刻列表 (跳过 5min 缓存)"
-          >
-            🔄 刷新复刻列表
-          </button>
-        </div>
-      </div>
 
       {/* 系统 voice */}
       <div className="mb-4">
@@ -1230,7 +1236,7 @@ function CosyVoiceTTSCard({ showToast, onConfigureQwenCred }: CosyVoiceTTSCardPr
           showToast={showToast}
         />
       )}
-    </div>
+    </TtsCardShell>
   );
 }
 
@@ -1660,5 +1666,455 @@ function TtsGalleryRow({
         </div>
       )}
     </li>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// 2026-06-06 · GsvTTSCard + FishTTSCard
+// 跟 CosyVoiceTTSCard 同款 layout(标题 + 状态徽标 + 只读字段 + 操作)·
+// 数据走 GET /api/tts/providers(共用 registry)· 不动 DB ai_providers ·
+// 不碰 CosyVoice 流。绑定到角色仍走 CharacterPanel 的 VoicePicker
+// (voice_model JSON per-character)· 本卡仅暴露 provider × model 元信息
+// + 连通性 / 凭证状态。
+// ---------------------------------------------------------------------------
+
+interface ProviderTreeModel {
+  id: string;
+  label: string;
+  tts_language?: string;
+  // gsv-only:
+  server_url?: string;
+  default_emotion?: string;
+  gpt_weights?: string;
+  sovits_weights?: string;
+  emotion_bank_dir?: string;
+  // fish-only:
+  fish_latency?: string;
+}
+
+interface ProviderTreeProvider {
+  id: string;
+  label: string;
+  models: ProviderTreeModel[];
+}
+
+interface ProviderTreeResponse {
+  providers: ProviderTreeProvider[];
+}
+
+// 2026-06-07 · 共用可折叠外壳 · 以 CosyVoiceTTSCard 的卡片外观为基准
+// (rounded-lg p-4 + bg-surface 60% + border-subtle + header flex layout)。
+// 三 TTS 卡(Cosy/GSV/Fish)共用 · 默认收起 · header 点击 toggle · body 条件渲染。
+//
+// statusBadge / headerActions 是 Fragment 容器 · 调用方塞任意 React 节点。
+// header 用 div role=button 而非 <button> 是因为 headerActions 内可能含 button
+// (CosyVoice「配置 Qwen 凭证」/「刷新复刻列表」),嵌套 <button> 是 invalid HTML。
+function TtsCardShell({
+  icon: Icon, title, statusBadge, headerActions, children, defaultExpanded = false,
+}: {
+  icon: LucideIcon;
+  title: string;
+  statusBadge?: React.ReactNode;
+  headerActions?: React.ReactNode;
+  children: React.ReactNode;
+  defaultExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const toggle = () => setExpanded((e) => !e);
+  return (
+    <div className="rounded-lg p-4"
+      style={{
+        background: 'color-mix(in srgb, var(--color-bg-surface) 60%, transparent)',
+        border: '1px solid var(--color-border-subtle)',
+      }}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+        className="flex items-center justify-between flex-wrap gap-2 cursor-pointer select-none"
+        style={{ marginBottom: expanded ? '0.75rem' : 0 }}
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Icon size={16} style={{ color: 'var(--color-text-accent)' }} />
+          <span className="text-sm font-medium truncate"
+            style={{ color: 'var(--color-text-primary)' }}>
+            {title}
+          </span>
+          {statusBadge}
+        </div>
+        <div
+          className="flex items-center gap-2 shrink-0"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {headerActions}
+          <button
+            type="button"
+            onClick={toggle}
+            className="rounded p-0.5 transition"
+            style={{ color: 'var(--color-text-secondary)' }}
+            aria-label={expanded ? '收起' : '展开'}
+          >
+            <ChevronDown
+              size={16}
+              style={{
+                transform: expanded ? 'rotate(180deg)' : 'none',
+                transition: 'transform 150ms ease',
+              }}
+            />
+          </button>
+        </div>
+      </div>
+      {expanded && children}
+    </div>
+  );
+}
+
+// label 走 muted uppercase 跟 CosyVoice body 的 section h5 同款字号字重 ·
+// value 走 primary 强调 · mono 给 URL / 路径类(server)开启,人话值不开启。
+// 2026-06-07 · 加 chip 盒子(rounded-md px-3 py-2 + bg-input + border-subtle)
+// 照搬 CosyVoice TtsGalleryRow 的 per-item 容器 token(line 1556-1561 同源) ·
+// 每条 FieldRow 各自一盒,行间 space-y-1.5 由调用方维持。
+function FieldRow({ label, value, mono = false }: {
+  label: string;
+  value: React.ReactNode;
+  mono?: boolean;
+}) {
+  return (
+    <div
+      className="rounded-md px-3 py-2 flex items-baseline gap-3"
+      style={{
+        background: 'var(--color-bg-input)',
+        border: '1px solid var(--color-border-subtle)',
+      }}
+    >
+      <span
+        className="text-[11px] font-medium uppercase tracking-wide w-20 shrink-0"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        {label}
+      </span>
+      <span
+        className={mono ? 'text-xs font-mono break-all' : 'text-xs'}
+        style={{ color: 'var(--color-text-primary)' }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+// 复用 GET /api/tts/providers · 父 hook 跑一次 · 两卡共用 reference。
+function useTtsProviderTree(): {
+  tree: ProviderTreeResponse | null;
+  err: string | null;
+} {
+  const [tree, setTree] = useState<ProviderTreeResponse | null>(null);
+  const [err, setErr]   = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${_BACKEND_BASE}/api/tts/providers`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as ProviderTreeResponse;
+        if (!cancelled) setTree(j);
+      } catch (e) {
+        if (!cancelled) setErr((e as Error).message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  return { tree, err };
+}
+
+
+// ---------- GsvTTSCard ----------
+
+interface GsvPingResult {
+  ok: boolean;
+  latency_ms: number;
+  status_code?: number;
+  error?: string;
+}
+
+function GsvTTSCard() {
+  const { tree, err: treeErr } = useTtsProviderTree();
+  const gsvProvider = tree?.providers.find((p) => p.id === 'gsv') ?? null;
+  const models = gsvProvider?.models ?? [];
+
+  // 2026-06-07 · 改 per-model 行列表(对齐 CosyVoice TtsGalleryRow 结构) ·
+  // 测试连接 state per-server_url 标记 · 结果就近显示在该 row 内(server_url
+  // 匹配最近一次 ping 的目标才渲染),为未来多 model 留口。
+  const [pingingFor, setPingingFor] = useState<string | null>(null);
+  const [pingResult, setPingResult] = useState<(GsvPingResult & { server_url: string }) | null>(null);
+
+  const doPing = async (serverUrl: string) => {
+    if (!serverUrl) return;
+    setPingingFor(serverUrl);
+    setPingResult(null);
+    try {
+      const r = await fetch(`${_BACKEND_BASE}/api/tts/gsv/ping`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server_url: serverUrl }),
+      });
+      const j = (await r.json()) as GsvPingResult;
+      setPingResult({ ...j, server_url: serverUrl });
+    } catch (e) {
+      setPingResult({
+        ok: false, latency_ms: 0,
+        error: (e as Error).message,
+        server_url: serverUrl,
+      });
+    } finally {
+      setPingingFor(null);
+    }
+  };
+
+  // 静态分类徽标(self-hosted)· 跟 Cosy 卡的 builtin 徽标同款 layout · 内容固定。
+  // 动态连接状态(测试结果)留 body 不进 header,避免 header 频繁变更。
+  const statusBadge = (
+    <span
+      className="text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0"
+      style={{
+        background: 'var(--color-bg-elevated)',
+        color: 'var(--color-text-secondary)',
+      }}
+    >
+      self-hosted
+    </span>
+  );
+
+  return (
+    <TtsCardShell
+      icon={Server}
+      title="GPT-SoVITS(ja)"
+      statusBadge={statusBadge}
+    >
+      {treeErr ? (
+        <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+          加载失败:{treeErr}
+        </p>
+      ) : !gsvProvider ? (
+        <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+          还没注册 GSV 模型。
+        </p>
+      ) : (
+        <>
+          {/* 2026-06-07 · per-model 行列表(对齐 CosyVoice TtsGalleryRow 结构) ·
+              chip 容器 token 全部照搬 TtsGalleryRow:rounded-md px-3 py-2 +
+              bg-input + border-subtle · 左 model 名 + 副信息 / 右测试连接按钮 /
+              结果就近显示 row 内底部。多 model 时自然多条。 */}
+          <ul className="space-y-1.5 mb-3">
+            {models.map((m) => {
+              const isPinging = pingingFor === m.server_url;
+              const myResult =
+                pingResult && pingResult.server_url === m.server_url
+                  ? pingResult : null;
+              const subParts = [
+                m.server_url,
+                m.default_emotion ? `默认 ${m.default_emotion}` : null,
+                m.tts_language,
+              ].filter(Boolean);
+              return (
+                <li
+                  key={m.id}
+                  className="rounded-md px-3 py-2 flex flex-col gap-1"
+                  style={{
+                    background: 'var(--color-bg-input)',
+                    border: '1px solid var(--color-border-subtle)',
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm truncate"
+                        style={{ color: 'var(--color-text-primary)' }}>
+                        {m.label}
+                      </div>
+                      <div className="text-[10px] truncate"
+                        style={{ color: 'var(--color-text-secondary)' }}
+                        title={subParts.join(' · ')}>
+                        {subParts.join(' · ') || '—'}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void doPing(m.server_url ?? '')}
+                      disabled={isPinging || !m.server_url}
+                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded transition disabled:opacity-50 shrink-0"
+                      style={{
+                        background: 'var(--color-bg-input)',
+                        border: '1px solid var(--color-border)',
+                        color: 'var(--color-text-primary)',
+                      }}
+                    >
+                      {isPinging ? '测试中…' : '测试连接'}
+                    </button>
+                  </div>
+                  {myResult && (
+                    <div className="text-[10px]"
+                      style={{
+                        color: myResult.ok
+                          ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)',
+                      }}>
+                      {myResult.ok
+                        ? `✓ 通 (${myResult.latency_ms}ms${myResult.status_code ? ` · HTTP ${myResult.status_code}` : ''})`
+                        : `✗ 不通:${myResult.error ?? '?'}`}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          <p className="text-[10px]"
+            style={{ color: 'var(--color-text-secondary)' }}>
+            在 ⚙ 设置 → 角色管理 给单个角色选用 GSV 音色。
+          </p>
+        </>
+      )}
+    </TtsCardShell>
+  );
+}
+
+
+// ---------- FishTTSCard ----------
+
+interface FishKeyStatus {
+  configured: boolean;
+  source: string | null;
+}
+
+function FishTTSCard() {
+  const { tree, err: treeErr } = useTtsProviderTree();
+  const fishProvider = tree?.providers.find((p) => p.id === 'fish') ?? null;
+  const models = fishProvider?.models ?? [];
+
+  const [keyStatus, setKeyStatus] = useState<FishKeyStatus | null>(null);
+  const [keyErr, setKeyErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${_BACKEND_BASE}/api/tts/fish/key_status`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as FishKeyStatus;
+        if (!cancelled) setKeyStatus(j);
+      } catch (e) {
+        if (!cancelled) setKeyErr((e as Error).message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // 静态分类徽标(未就绪 / 待配置)· 跟 Cosy/GSV 同款 layout · 内容固定。
+  // 动态 key 状态(✓ env / ⚠ 未配)留 body 顶部 alert 显示,见下方。
+  const statusBadge = (
+    <span
+      className="text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0"
+      style={{
+        background: 'var(--color-bg-elevated)',
+        color: 'var(--color-text-secondary)',
+      }}
+    >
+      未就绪 / 待配置
+    </span>
+  );
+
+  return (
+    <TtsCardShell icon={Cloud} title="Fish Audio(cloud · zh/ja)" statusBadge={statusBadge}>
+      {treeErr ? (
+        <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+          加载失败:{treeErr}
+        </p>
+      ) : !fishProvider ? (
+        <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+          还没注册 Fish 模型。
+        </p>
+      ) : (
+        <>
+          {/* 2026-06-07 · per-model 行列表 · 跟 GSV / CosyVoice 同款 chip 结构 ·
+              右侧动作:key 状态徽标(动态)取代原顶部 alert + select。 */}
+          <ul className="space-y-1.5 mb-3">
+            {models.map((m) => {
+              const subParts = [
+                'cloud',
+                'reference upload',
+                m.tts_language,
+                m.fish_latency,
+              ].filter(Boolean);
+              return (
+                <li
+                  key={m.id}
+                  className="rounded-md px-3 py-2 flex items-center gap-3"
+                  style={{
+                    background: 'var(--color-bg-input)',
+                    border: '1px solid var(--color-border-subtle)',
+                  }}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm truncate"
+                      style={{ color: 'var(--color-text-primary)' }}>
+                      {m.label}
+                    </div>
+                    <div className="text-[10px] truncate"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                      title={subParts.join(' · ')}>
+                      {subParts.join(' · ') || '—'}
+                    </div>
+                  </div>
+                  {/* key 徽标 · 状态 ✓ 已配 / ⚠ 未就绪 / 检查中… */}
+                  {keyStatus === null ? (
+                    <span className="text-[11px] shrink-0"
+                      style={{ color: 'var(--color-text-secondary)' }}>
+                      检查中…
+                    </span>
+                  ) : keyStatus.configured ? (
+                    <span
+                      className="text-[11px] inline-flex items-center gap-1 shrink-0"
+                      style={{ color: 'rgb(34, 197, 94)' }}
+                      title={`来源:${keyStatus.source}`}
+                    >
+                      <CheckCircle2 size={12} /> 已配
+                    </span>
+                  ) : (
+                    <span
+                      className="text-[11px] inline-flex items-center gap-1 shrink-0"
+                      style={{ color: 'rgb(245, 158, 11)' }}
+                      title="设 env FISH_API_KEY 后 restart backend"
+                    >
+                      <AlertTriangle size={12} /> 未就绪
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          {keyErr && (
+            <p className="text-[11px] mb-2" style={{ color: 'rgb(239, 68, 68)' }}>
+              凭证状态拉取失败:{keyErr}
+            </p>
+          )}
+
+          <p className="text-[10px]"
+            style={{ color: 'var(--color-text-secondary)' }}>
+            用前先在环境变量里设好 <span className="font-mono">FISH_API_KEY</span>
+            (dev 也可放 repo 根 <span className="font-mono">api_key.txt</span>),
+            然后启动后端。
+          </p>
+        </>
+      )}
+    </TtsCardShell>
   );
 }
