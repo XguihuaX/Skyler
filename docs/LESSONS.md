@@ -98,6 +98,9 @@
 ### subprocess 启动 + arg 兼容(INV-16 mpv subprocess 2026-05-31)
 #35 subprocess 启动失败第一反应 repro + stderr / #36 binary 升版本 args compat 必查 · rename 老 arg 可能 fatal / #37 stderr=DEVNULL 启动那段必 capture 防黑盒
 
+### React useEffect 死锁(进入动画 · 2026-06-08)
+#38 setState 在 useEffect 内 + 该 state 进 deps + cleanup 清 timer = 死锁(`setX(true)` → re-render → effect 重跑前先 cleanup → timer 被砍 → 永不 fire)· 修法:state 改 ref 守一次性 + deps 砍掉该 state + 不返 cleanup(让 timer 自然 fire)· 实测卡 `> SYSTEM READY ✓` 永不进 Beat2
+
 ---
 
 ## 与 ROADMAP / DESIGN_LITE 的关系

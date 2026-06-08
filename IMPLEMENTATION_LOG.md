@@ -1556,3 +1556,26 @@ v3-G 全部 + v4 主动屏幕感知。从剪贴板助手开始（最简单），
 
 ---
 
+### 进入动画 + 持久角色 + 立绘馆发牌入场批次(2026-06-07~08 · UI 入场新范式)
+
+| Status | Item | Goal / Notes |
+|---|---|---|
+| ✅ | **进入动画 LoadingScreen Beat 0/1/2 + appReady 4 路 gate**(commits `f4fe120` / `3068849`)| 新目录 `frontend/src/components/loading/`(LoadingScreen.tsx + loading.css)+ `frontend/src/lib/loading/`(engine.ts SequenceEngine + types.ts + configs/companionLoading.ts)+ `frontend/src/hooks/useLoadingSequence.ts` · 后端 `backend/utils/boot_tracker.py` BootTracker(start/mark/mark_bg/dump_summary/get_snapshot · 17 mark)+ `GET /api/observability/boot-summary` 返 snapshot · main.py lifespan 17 处 `_boot.mark()` + 2 处 `mark_bg`(embedding/whisper warmup)· companionLoading 21 行真 ms 派生 · cubic-bezier(.42,.04,.2,1) · engine 起步晚 3s · 60s 安全网 · reduce-motion 跳。**已 ship 三轮微调**:① 750ms dark hold(后调 0.3s→0.5s)② 加载完成 latch + 600ms 桥(`completionLatched`)③ engine start delay 0→500→1500→3000ms(为 0% 起爬) |
+| ✅ | **`main.tsx` 预 resize 修小窗→大窗闪**(commit `3068849`)| `bootstrap()` async 包 `createRoot` · React render 前 `await applyModeWindowProps(persistedMode)`(从 localStorage 读)· Tauri 不可用 try/catch 吞 · App.tsx mount useEffect 同套作 safety net 保留(幂等) |
+| ✅ | **持久 `users.current_character_id`**(commit `f4fe120`)| DB migration `backend/database/migrations/v4_users_current_character.py`(ALTER TABLE users ADD COLUMN INTEGER NULL · PRAGMA 幂等)· `backend/database/models.py` User 加列 · `backend/routes/ws.py:_persist_current_character` helper · `character_switch` endpoint loop 真 handler(`ws.py:1235`)+ `_handle_message:643` dead branch 同调作保险(bisect 实证 dead · 防新入口漏)· `_resolve_conv_char` 三级兜底链 · `backend/routes/users_api.py` GET `/users/{id}/profile` 返新字段 · `frontend/src/lib/config.ts` 加 `fetchUserProfile` · App.tsx mount 优先用持久 id |
+| ✅ | **立绘馆发牌入场 三态机**(commit `3068849`)| 新文件 `frontend/src/components/character/galleryIntro.css` · `CharacterGallery.tsx` 加 `introStage` + `introNonce` state · 650ms timer 切 stage-up · gate useEffect 听 `characters.length > 0` 切 reveal · `data-preamble` 模式 class · replay 按钮 · 删底部 hint motion.div · **FanLayout.tsx 一字未改**(per-card stagger 跟 framer-motion inline transform 冲突 · 入 Tech Debt TD-B) |
+| ✅ | **删旧视频 splash**(commit `3068849`)| `frontend/public/splash/intro.mp4` 物理删 · `frontend/public/splash/README.md` + `.gitkeep` 删 · 目录删 · `frontend/src/components/SplashOverlay.tsx` 整文件删 · App.tsx 删 `splashDone` state + `<SplashOverlay/>` 用法 · 旧的"小窗 → 视频 → 主 UI"流程退役 |
+| ✅ | **能力页 GSV / Fish provider 卡 · 测试连接 re-arm**(commit `18453e8`) | 后端新 endpoints `gsv/ping` + `fish/key_status`· 前端能力页 provider 卡(行列表 + 可折叠)· "测试连接" 按钮 + result re-arm 状态机 |
+| ✅ | **小窗打字输入 + 心情标右上裸显**(commit `aa2050a`)| widget 模式 chat 输入丸支持打字 · 心情标右上对齐裸显(不撑卡) |
+| ✅ | **手动态 VAD 三道闸 + manual→vad 重入修**(commit `729cd9f`)| 三道闸 = ① 手动态 silero callbacks early-return ② useEffect 自愈翻 sleep ③ `recoverStream` 兜底 pause · 配合 manual→vad 重入修(切回 vad 自动 `toggleVad()`)· 已修 5 个根因 · **仍有手动模式偶发"麦还在听"间歇 bug 未根治**(P1 known issue · 待 🎙 VoiceCard 现场抓) |
+
+> **下一步**:5 项 doc-only 决策(MCP marketplace / 窗口自动切换 / sigil / Hermes 缓存 / 事实有效期)· 详 [ROADMAP §决策记录](ROADMAP.md#决策记录2026-06-08-doc-治理批次--5-项-doc-only)。
+
+> **Tech debt 入册** TD-A 至 TD-I 共 9 条(进入动画衍生 + config.yaml workaround)· 详 ROADMAP Tech Debt 表"进入动画衍生"段。
+
+> **教训沉淀** Lesson #38 (React useEffect 死锁 · setState in effect + 该 state 进 deps + cleanup 清 timer = 死锁 · 修法用 ref 守 + 不返 cleanup)· 详 `docs/LESSONS.md`。
+
+> **Hermes 缓存补强**(决策 #4):本 v4.1 子轨 A prompt caching 之后 · 加注入记忆冻结快照层(会话开始时摘要 + 事实 + profile 冻结 · 会话内改动写盘下次生效)· 抬升当前 ~12.5% 命中率。详 [ROADMAP 决策 #4](ROADMAP.md#决策记录2026-06-08-doc-治理批次--5-项-doc-only)。
+
+---
+

@@ -198,6 +198,25 @@ python -m tools.check_moc3_version frontend/public/live2d/yae/
 
 下面列的是 Skyler 当前能做的事。每一层都是设计成可以拆开来换的,没有锁死的。
 
+### 🎬 进入动画(2026-06-07~08 · commits `f4fe120` + `3068849`)
+
+- **Beat 0 上电预补**(~2.36s)— dark hold 0.5s → 双线 ±55° pivot 1.3s → flare → 0.76s 门式拉开 · cubic-bezier(.42,.04,.2,1)· 中性暖白线(独立 token · 不跟角色色)· reduce-motion 跳
+- **Beat 1 boot-log** — 等宽 mono · 真实 `BootTracker` snapshot 21 行(真 ms / 真名)· 顶 telemetry strip · 右锚 SVG wireframe + 弧 HUD · 行 ●/○ glyph + 距离分层 · engine 起步晚 3s 让进度从 0% 起爬
+- **appReady 4 路 gate** — embedding + whisper + ws + live2d(无 VAD)· 没就绪停在真实 warming 态 · 绝不假 100%
+- **加载完成 latch** — engine done 真触发 → `> SYSTEM READY ✓` 玫瑰 glow 脉冲 + 600ms 桥 → Beat 2 暖揭幕(crossfade 2.8s)
+- **Beat 2 暖揭幕** — 当前角色 splash · 标题级联(SKYLER · 角色名 · EN · 寄语「」)· 14 花瓣落 · 「輕觸進入」呼吸 · **dismiss = Enter / Space / 鼠标 click**(Meta/Shift/Ctrl/Alt/Esc/方向/F* 全拒 · bisect 实证 Cmd 修饰键误触修)
+- **小窗→大窗闪修** — `main.tsx::bootstrap` 在 React render 前 await Tauri `applyModeWindowProps` · 窗口直接以正确 mode 大小起
+- **持久"上次选的角色"** — `users.current_character_id`(v4 migration)· `ws.character_switch` 真 handler 持久 · 启动读 profile fallback `chars[0]`
+- 60s 安全网兜底 engine 真死;reduce-motion / 非 Tauri / DB 失败全有兜底链
+- 详 DESIGN_LITE §11 进入动画 + §12 持久角色
+
+### 🎴 立绘馆发牌入场
+
+- `CharacterGallery` `introStage: 'stack' | 'stage-up' | 'reveal'` 三态机 · 650ms stack(bg/HUD/fan 全收)→ stage-up(bg/HUD 升起 0.9s · fan 仍收)→ reveal(fan 0.6s 升起)
+- Gate:roster 没就绪(`characters.length === 0`)停 stage-up 等 · 不假展开
+- Replay 按钮(右下 ↻)· FanLayout 一字未改(framer-motion vs 外部 stagger 冲突 · per-card 错峰甩入 Tech Debt TD-B)
+- 详 DESIGN_LITE §13
+
 ### 🎙 输入与输出
 - **语音输入**两种模式:
   - **手动模式** —— 点击开始录音,再点击发送

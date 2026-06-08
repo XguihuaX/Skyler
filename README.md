@@ -171,6 +171,23 @@ Only **Cubism 4** is supported in the current pixi-cubism4 runtime (`frontend/sr
 
 Here's what Skyler currently does. None of these are locked — every layer is built to be swapped out, extended, or replaced.
 
+### 🎬 Entry animation(2026-06-07~08 · commits `f4fe120` + `3068849`)
+
+- **Beat 0 power-on preamble**(~2.36s)— dark hold 0.5s → 双线 ±55° pivot 1.3s → flare → 0.76s 门式拉开 · cubic-bezier(.42,.04,.2,1)· 中性暖白线(独立 token · 不跟角色色)· reduce-motion 跳
+- **Beat 1 boot-log** — 等宽 mono · 真实 `BootTracker` snapshot 21 行(真 ms / 真名) · 顶 telemetry strip · 右锚 SVG wireframe + 弧 HUD · per-line ●/○ glyph + 距离分层 · engine 起步晚 3s 让进度 0% 起爬
+- **appReady 4 路 gate** — embedding + whisper + ws + live2d(无 VAD)· 没就绪停在真实 warming 态 · 永不假 100%
+- **加载完成 latch** — engine done 真触发 → `> SYSTEM READY ✓` accent glow 脉冲 + 600ms 桥 → Beat 2 暖揭幕(crossfade 2.8s)
+- **Beat 2 暖揭幕** — 当前角色 splash · 标题级联(SKYLER · 角色名 · EN · 寄语「」)· 14 花瓣落 · 「輕觸進入」呼吸 · **dismiss = Enter / Space / window click**(Meta/Shift/Ctrl/Alt/Esc/方向/F* 全拒,bisect 实证 Cmd 修饰键误触 cut)
+- **小窗→大窗闪修** — `main.tsx::bootstrap` 在 React render 前 await Tauri `applyModeWindowProps` · 直接以正确 mode 大小起
+- **持久"上次选的角色"** — `users.current_character_id`(v4 migration)· `ws.character_switch` 真 handler 持久 · App 启动读 profile fallback chars[0]
+- 60s safety net 兜底 engine 真死;reduce-motion / 非 Tauri / DB 失败全有兜底链
+
+### 🎴 Character Gallery deal animation(立绘馆发牌入场)
+
+- `CharacterGallery` `introStage: 'stack' | 'stage-up' | 'reveal'` 三态机 · 650ms stack(bg/HUD/fan 全收) → stage-up(bg/HUD 升起 0.9s · fan 仍收) → reveal(fan wrapper 0.6s 升起)
+- Gate:roster 没就绪(`characters.length === 0`)停 stage-up 等 · 不假展开
+- Replay 按钮(右下 ↻)· FanLayout 一字未改(framer-motion vs 外部 stagger 冲突 · per-card 错峰甩入 Tech Debt TD-B)
+
 ### 🎙 Input & Output
 - **Voice input** with two modes:
   - **Manual mode** — click to start recording, click again to send
@@ -179,7 +196,7 @@ Here's what Skyler currently does. None of these are locked — every layer is b
 - **Mic button** state-aware (2026-06-05): icon switches by mode (Mic / AudioWaveform), highlight = actually listening (manual: `recording`; VAD: `vadState ∈ {active, recording}`)
 - **ASR result preview** — recognized text shown above input box in real time via `asr_result` WS message; persists into chat history
 - **Streaming output** — text and audio arrive sentence by sentence
-- **TTS** — 3 provider paradigm (INV-11 Stage 1.5, 2026-05-26): CosyVoice (DashScope, default + cloned voice 双轨) · Fish Audio (cloud, reference upload per-character) · GSV (GPT-SoVITS, self-hosted). Edge-TTS legacy fallback. Per-character `voice_model` JSON resolves provider × model × voice; registry in `backend/config/tts_models.json`. Mai (`cid=1`) currently runs GSV `mai_v4` with 16-emotion bank (ja TTS). VoicePicker UI is inline (paradigm B) with auto-save (debounce 300ms). Add new models via `docs/adding-new-tts-model.md`.
+- **TTS** — 3 provider paradigm (INV-11 Stage 1.5, 2026-05-26): CosyVoice (DashScope, default + cloned voice 双轨) · Fish Audio (cloud, reference upload per-character) · GSV (GPT-SoVITS, self-hosted). Edge-TTS legacy fallback. Per-character `voice_model` JSON resolves provider × model × voice; registry in `backend/config/tts_models.json`. **Mai 双 cid** (commit `1b25881`): cid=1 = name=Momo + persona 内核=Mai + GSV `mai_v4` ja(16-emotion bank) / cid=101 = name=樱岛麻衣 + 同 Mai persona + **Fish `s2-pro` ja**(reference upload) — two TTS-provider A/B routes for same character. VoicePicker UI is inline (paradigm B) with auto-save (debounce 300ms). Add new models via `docs/adding-new-tts-model.md`. See DESIGN_LITE §14 character truth table.
 - **Auto-mute mic** when the assistant is speaking (prevents feedback loop)
 - **Tool-call transition** — when the agent calls a tool, it first emits a short transition line ("let me check…") and the input area shows a contextual loading pill ("checking calendar…") so you're never left wondering whether it's frozen. chunk 14 producer/consumer + chunk 6b TTS pipeline implement sentence-by-sentence streaming, verified smooth on-device in chunk 15.
 
@@ -402,13 +419,15 @@ See [Live2D Asset Management](#live2d-asset-management) above. The frontend's `l
 
 ### 4. Replacing the LLM provider
 
-Skyler uses LiteLLM, so any provider LiteLLM supports works with a `config.yaml` edit:
+Skyler uses LiteLLM. **Two paths** — DB-driven is primary, `config.yaml` is fallback (since `bugfix-3.1`):
+
+**Path A (recommended) · DB ai_providers row** — Settings → 能力 → AI Providers: pick from 6 enabled models (currently `deepseek/deepseek-v4-pro` active · Qwen 3.6 Max preview / Plus / Flash · Qwen 3.5 Plus · deepseek-v4-flash inactive but enabled). DB row toggle. Effective immediately, no restart. See DESIGN_LITE §15 LLM truth table.
+
+**Path B (fallback only) · `config.yaml`** — only kicks in when no DB ai_providers row is active. Edit:
 
 ```yaml
-llm:
-  provider: openai          # or 'anthropic' / 'deepseek' / 'ollama' / etc.
-  model: gpt-4o
-  api_key_env: OPENAI_API_KEY
+default_model: dashscope/qwen3.6-max-preview   # LiteLLM model string with provider prefix
+planner_model: dashscope/qwen-turbo             # planner/activity_judge (not in ai_providers table)
 ```
 
 Local Ollama models, on-prem deployments, custom endpoints — all one config field away. No code changes.

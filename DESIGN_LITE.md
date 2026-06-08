@@ -1,4 +1,4 @@
-# Skyler 技术设计速览(DESIGN_LITE)v4.0.0 记忆线收口(2026-05-17)
+# Skyler 技术设计速览(DESIGN_LITE)v4.0.0 收口 + 进入动画 ship(2026-06-08)
 
 > **当前设计真源**:2026-05-19 docs 第二刀起,本文件(DESIGN_LITE.md)为 Skyler 当前设计的单一真源。
 > 完整 5,206 行 DESIGN.md 已归档至 `docs/archive/DESIGN.md` 作为历史机构记忆档案(含每个 chunk / hotfix 的根因分析、testing 覆盖、实施细节);DESIGN.md 不再维护,仅作追溯参考。
@@ -12,11 +12,12 @@
 > - **v4-beta 收口批次** shipped 并真机验证 2026-05-16(回退纯中文 / short_term 三级隔离 / conversation 锚定绑定语义 / character_switch 不杀 in-flight turn / 对话 UI 统一 / token 成本治理)
 > - 下一站:文档纠真 ✅ → 长期记忆链路 audit ✅(修复链 ship,代码核验,待真机回归)→ Stage 3 v4.0.0 MVP 封装(TTS cap/throttle **移出 v4.0 范围,deferred** 至多人测试再议;当前仅 `tts_call_log` 监控,无强制闸)
 
-> ⚠️ **接管必读(4 个 red flag,新 Claude 先看这个)**:
-> 1. **Mai ja TTS 已活路径 via GSV mai_v4**(2026-05-26 INV-11 Stage 1 ship,**取代** v4-beta "回退纯中文" 旧状态)—— `cid=1` voice_model 切到 `provider=gsv` `model=mai_v4` `tts_language=ja` 完整 schema · GPT-SoVITS 自托管 server(`106.75.224.167:9880`)+ 16 emotion bank LLM 路由 · 人格不动 · 旧 ja 中日交替链(§6.5)仍 deprecated · F0 后处理翻译路径也已 deprecated(因 GSV 直接日语原声达成同目标)。新加 model 走 `backend/config/tts_models.json` + `docs/adding-new-tts-model.md` playbook。
+> ⚠️ **接管必读(5 个 red flag,新 Claude 先看这个)**:
+> 1. **Mai ja TTS 已活路径 via GSV mai_v4**(2026-05-26 INV-11 Stage 1 ship,**取代** v4-beta "回退纯中文" 旧状态)—— `cid=1` voice_model 切到 `provider=gsv` `model=mai_v4` `tts_language=ja` 完整 schema · GPT-SoVITS 自托管 server(`106.75.224.167:9880`)+ 16 emotion bank LLM 路由 · 人格不动 · 旧 ja 中日交替链(§6.5)仍 deprecated · F0 后处理翻译路径也已 deprecated(因 GSV 直接日语原声达成同目标)。新加 model 走 `backend/config/tts_models.json` + `docs/adding-new-tts-model.md` playbook。**Mai 双 cid 现状**(commit `1b25881`):cid=1 = 显示名 Momo + persona 内核 Mai + GSV ja;cid=101 = 显示名 樱岛麻衣 + 同 Mai 内核(11 字段 byte-identical 覆盖) + **Fish s2-pro ja**。两份并行 = 双 TTS provider A/B。详 §角色映射真值表。
 > 2. **TTS provider × model × voice paradigm**(INV-11 Stage 1.5)—— 三级解耦 · `backend/tts/registry.py` + `backend/config/tts_models.json`(pydantic + fail-fast + missing-file fallback)· VoicePicker inline paradigm B(原 modal 已删)· 详 §5.8.5。改 TTS 链前必读。
 > 3. **长期记忆链路 audit 完结、修复链已 ship** —— 根因=抽取 prompt 偏 fact-only + 闲聊→合法 [];子 bug=purge 不重置指针。修复链(滚动摘要层 + 指针自愈/reconcile + prompt 重平衡 + 墓碑)已 ship 且代码核验;**陪伴质量待真机回归(验收门)**。§4 声明已更新;详 DESIGN §五·补 + §十五之 Z.5.1。
 > 4. **conversation 锚定绑定语义已上线(§5.9)** —— 切角色/串台/回复被吃全靠这套规则 A/B。改对话/角色/proactive 投递相关代码前必读 §5.9,别破坏绑定。
+> 5. **进入动画 + 持久"上次选的角色" + 立绘馆发牌入场 ship**(2026-06-07~08,commits `f4fe120` + `3068849`)—— LoadingScreen Beat 0/1/2 + appReady 4 路 gate(embedding + whisper + ws + live2d · 无 VAD)+ engine 起步晚 3s 让 boot-log 0% 起爬 + 加载完成 latch + Enter/Space/click dismiss(Cmd 修饰键拒,bisect 实证);`users.current_character_id` DB 列(v4 migration)+ ws character_switch 真 handler 持久 + 三级兜底链;立绘馆 stack→stage-up→reveal 三态机 + replay。改 LoadingScreen / Gallery intro / `_resolve_conv_char` / `main.tsx` bootstrap 前必读 §11/§12/§13。
 
 ---
 
@@ -243,6 +244,16 @@ profession / current_projects / interests / recurring_topics /
 communication_style / active_hours / language_preferences
 profile_summary 列保留为空列([RETIRED 2026-05-19],fallback 已退役于 commit c1d65ff;
 未 DROP COLUMN,留作后续单独小刀)
+```
+
+### users.current_character_id(v4 commit `f4fe120` · 2026-06-07)
+```
+INTEGER NULL · 软引用 characters.id · 不设 FK 约束
+写入:ws.py:_persist_current_character(由 character_switch endpoint loop 真 handler 调)
+读取:ws.py:_resolve_conv_char 三级兜底链 incoming → persisted → Momo by name
+       users_api.GET /users/{id}/profile 返新字段
+指向已删角色 → 静默回落 Momo · 应用层校验 · DB 不级联
+v4 migration: backend/database/migrations/v4_users_current_character.py(幂等 PRAGMA)
 ```
 
 ---
@@ -762,7 +773,7 @@ backend/routes/backgrounds_api.py                   upload/delete endpoint + san
 15. characters.yaml vs DB:当前 Plan B(DB 主源 + YAML fallback);yaml 仅含 5 个内建角色(八重神子 / 默认 / 荧 / 凝光 / 神里绫华),非 DB 全集 — `cid=99/100/101` 等不在 yaml,仅 DB seed;Plan C(删 yaml DB 单源)deferred
 16. config.yaml 双写源拆分
 17. MCP 凭证升级 OS keyring
-18. LLM 慢(qwen3.6-plus + 网络;绑定锁死后纯性能问题,独立优化不混功能修复)
+18. LLM 慢(**deepseek/deepseek-v4-pro** 现役 + 网络;绑定锁死后纯性能问题,独立优化不混功能修复)· config.yaml `default_model: dashscope/qwen3.6-max-preview` 仅 fallback,DB `ai_providers is_active=1` 优先(`bugfix-3.1`)· 详 §LLM 全集真值表
 19. CosyVoice WS 建链 5s 超时(SDK 写死,弱网失败)
 20. **`character.background_path` dormant 字段待清**(Round 5 step 1 衍生)—— 解耦后 view 层不再消费,DB 列 + Pydantic 模型 + frontend form 字段保留 round-trip 透传。未来若做"每角色默认壁纸 + 全局覆盖"混合档可启用,否则按 chore 清(form 字段删 + Pydantic 移除 + DROP COLUMN migration)。详 §7.5.3
 21. **`SystemStatusSection` 旧 export 死代码**(Round 5 ② 衍生)—— `SettingsPanelLegacy.tsx:1155` 函数仍在但 caller 已删(`chore: drop dead SettingsPanel default`),Round 5 ② `ResourcesCard.tsx` 已重做同款渲染。顺手 chore 删整个函数 export
@@ -842,7 +853,177 @@ Tests:
 
 ---
 
-## §11 与归档 DESIGN.md 的指针
+## §11 进入动画 LoadingScreen(Beat 0/1/2 + appReady 4 路 gate)
+
+> commits `f4fe120`(2026-06-07)+ `3068849`(2026-06-08)· 文件:`frontend/src/components/loading/`(LoadingScreen.tsx + loading.css)+ `frontend/src/lib/loading/`(engine.ts + types.ts + configs/companionLoading.ts)+ `frontend/src/hooks/useLoadingSequence.ts`
+
+### 三拍架构
+
+```
+mount
+  │
+  ├─ Beat 0(0..2.36s)power-on preamble
+  │   dark hold 0.5s · 双线 ±55° pivot 1.3s(cubic-bezier(.42,.04,.2,1) · 中性暖白)
+  │   convergence 1.6s + flare 0.55s + door 0.76s
+  │
+  ├─ Beat 1(2.36s..engine done)boot-log
+  │   等宽 mono · 真实 BootTracker snapshot 21 行 · 顶 telemetry · 右锚 SVG wireframe
+  │   + 弧 HUD · per-line ●/○ glyph + 距离分层(0.28/0.55/0.85/1)
+  │   engine 起步晚 3s · 让 boot-log 从 0% 起爬(否则门一开就 ~33%)
+  │   appReady 4 路 gate:embedding + whisper + ws + live2d(无 VAD)
+  │
+  ├─ engine done 真触发 → 加载完成 latch
+  │   `> SYSTEM READY ✓` glow 脉冲 0.55s · 600ms 桥
+  │
+  ├─ Beat 2(crossfade 2.8s)暖揭幕
+  │   warm 1.4s · charzone 1.3s/0.5s + transform 1.5s · title 1.3s/0.7s
+  │   · enter 0.8s/1.6s · petals 1.3s
+  │
+  └─ 「輕觸進入」 hold(等用户)· dismiss = Enter / Space / window click
+      (Meta/Shift/Ctrl/Alt/Esc/方向/F* 全拒 · bisect 实证 cut)
+```
+
+### appReady 4 路接线(只喂 gate · 不决定挂)
+
+| 路 | 写入点 | 真值条件 |
+|---|---|---|
+| `embeddingReady` | `App.tsx:155` health poll 每 500ms 写 store | `/api/health` 返 `models.embedding == 'ready'` |
+| `whisperReady` | 同上 | 同 whisper |
+| `wsReady` | `useWebSocket.ts:436/455` onopen/onclose | WS handshake 成功 |
+| `live2dReady` | `Live2DCanvas.tsx:177` resolveModel 成功后(静态 import store · race-free) | `runtime.loadModel(...)` resolved · 未 cancel |
+
+engine `is_ready = e && w && ws && live2d` · `missing_ready` 返还缺哪几个 · 进 gate-wait 后 UI 红黄字示真态(`还缺: live2d` 等) · **永不假 100%**。
+
+### 真值数据源(铁律)
+
+- boot-log content 全部来自 `GET /api/observability/boot-summary`(BootTracker 真实 17 mark · `total_ms`)+ companionLoading.ts 兜底真名
+- telemetry 6 段(EAGER / BG / MEM / MIG / CAP / MCP)派生 snapshot · 没回落 `—` / `warming` 不造假
+- 真角色名 / live2d_model / splash 来自 store characters(DB)· 详 §角色映射真值表
+
+### 关键 React 坑(Lesson #38)
+
+`completionLatched` 早期版本死锁过:`setState(true)` in effect + 该 state 进 deps + cleanup 清 timer → re-render 触发 cleanup 砍 timer → 永不 fire。**修法**:state 改 ref 守一次性 + deps 砍 + 不返 cleanup(让 timer 自然 fire)。详 `docs/LESSONS.md #38`。
+
+### 魔数集中表(调参前看这)
+
+| 参数 | 值 | 改之前看什么 |
+|---|---:|---|
+| Beat 0 dark hold | 0.5s | `loading.css::.poweron-line` delay |
+| Beat 0 pivot duration | 1.3s | `loading.css::.poweron-line.top/bottom` |
+| Beat 0 door duration | 0.76s | `loading.css::.poweron-half` |
+| Beat 0 total | ~2.36s | preamble 全段 |
+| engine start delay | 3000ms | `LoadingScreen.tsx::engineStartDelayMs` · 让 boot 0% 起 |
+| floor (engine 9s 时钟) | 9000ms | `companionLoading.ts::FLOOR_MS` · 从 engine.start() 算 |
+| 加载完成 latch hold(桥)| 600ms | `LoadingScreen.tsx` `if (!done \|\| latchedRef.current) ...` 后的 setTimeout |
+| Beat 2 crossfade ~ | 2.8s | 各 transition delay 累加 |
+| App.tsx safety net | 60_000ms | engine 真死兜底 force unmount |
+
+### reduce-motion
+
+`@media (prefers-reduced-motion: reduce)` + React 侧 init `preamble = 'done'` · 不挂任何 preamble timer · 直接进 Beat 1。
+
+---
+
+## §12 持久"上次选的角色"链(`users.current_character_id`)
+
+> commit `f4fe120` · 详 §4 schema 新加段。
+
+### 决策链(write → read)
+
+```
+1. 用户点角色 → frontend setCurrentCharacterId + sendCharacterSwitch
+2. ws.py endpoint loop(真 handler · :1235)收 `character_switch`:
+   - connection_manager.set_current(in-memory)
+   - **_persist_current_character(user_id, char_id)** ← UPDATE users
+   - send ack · continue
+3. _handle_message:643 内同名分支 = dead code(endpoint loop continue 跳过)
+   保留并同样调 helper 作保险防新入口漏(bisect 验证)
+4. DB 持久 → 重启不丢
+5. 启动:App.tsx mount fetchUserProfile() · 优先 `current_character_id`
+   校 chars 有效 → use it · 否则 fallback chars[0]
+6. ws _resolve_conv_char 三级兜底链:
+   incoming → users.current_character_id(校角色存在) → Momo by name
+```
+
+### 安全(指向已删角色)
+
+- 不设 DB FK · 不级联
+- 应用层校验:`SELECT FROM characters WHERE id = persisted` · 不存在 → 静默回落 Momo · log warn
+- frontend `chars.some(c => c.id === persisted)` · false → fallback chars[0]
+- 不崩 · 不卡
+
+---
+
+## §13 立绘馆发牌入场(三态机)
+
+> commit `3068849` · 文件:`CharacterGallery.tsx` + `galleryIntro.css`(新)· FanLayout 一字未改。
+
+### 状态机
+
+```
+open=true / replay
+   │
+   ▼
+stack  ─── 650ms ───►  stage-up  ─── characters.length > 0 ───►  reveal
+(全收住          (bg/HUD 升起 .9s            (fan wrapper .6s 从下方升起到位)
+ transition:none) fan 仍 translateY+40
+                  scale .82 opacity 0)
+
+没就绪 → 死在 stage-up · 不假展开(铁律:不假数据)
+replay → stage 回 stack(snap · transition:none)· 重跑
+```
+
+### FanLayout 0 改动 · 决策记
+
+per-card 错峰甩(spec 原意的"发牌")需要 FanLayout 配合 — framer-motion inline transform vs 外部 CSS stagger 冲突,inline 总赢。当前实现"整扇升起"是 PM 接受的最小侵入版。要做 per-card stagger 需给 FanLayout 加 `introStaggerDelay` 单 prop。**入 Tech Debt TD-B**。
+
+---
+
+## §14 角色映射真值表(2026-06-08 audit · DB 现值)
+
+| cid | name(显示) | Live2D 模型(DB) | TTS provider / 音色 / lang | character_personas active identity | 进入动画 accent / EN |
+|---:|---|---|---|---|---|
+| **1** | **Momo**(壳)| `hiyori` ✅ | **GSV** `mai_v4` `ja` · 自托管 `106.75.224.167:9880` + 16 emotion bank | **`name="樱岛麻衣"`** · aliases [麻衣 / 麻衣学姐 / Mai] | `#c97b8e` / `MOMO` |
+| 2 | 八重神子 | `yae` ✅ | **CosyVoice** `cosyvoice-v3.5-plus` 克隆 `...bailian-a61e...` instruct | `name="八重神子"` | `#c97b8e` / `YAE MIKO` |
+| 3 | 荧 | (空 → fallback hiyori)| **CosyVoice** `cosyvoice-v3.5-plus` 克隆 `...bailian-ec26...` instruct+ssml | `name="荧"` | `#d4b96e` / `LUMINE` |
+| 4 | 凝光 | (空 → fallback hiyori)| (空 · 全局 fallback `cosyvoice-v3-flash` / `longyumi_v3`)| `name="凝光"` | `#c6a86b` / `NINGGUANG` |
+| 5 | 神里绫华 | (空 → fallback hiyori)| **CosyVoice** `cosyvoice-v3.5-plus` 克隆 `...bailian-7c61...` instruct+ssml | `name="神里绫华"` | `#88aac4` / `KAMISATO AYAKA` |
+| 99 | 一般路过猫娘 | (空) | (空 · 全局 fallback)| `name="一般路过猫娘"` | `#d489a0` / `NEKO` |
+| 100 | 祥子-test | (空) | (空 · 全局 fallback)| `name="祥子-test"` | `#9b7bb5` / `SHOKO TEST` |
+| **101** | **樱岛麻衣**(正名)| `hiyori` ✅(借)| **Fish** `s2-pro` `ja` · `reference_audio=tts/fish/参考音频/mai/reference.wav` · `temp=0.2` | **`name="樱岛麻衣"`** · 同 cid=1(commit `1b25881` byte-identical 覆盖) | `#b08a4a` / `SAKURAJIMA MAI` |
+| 102 | 流萤 | (空) | (空 · `characters.persona` 写"v4 placeholder")| `name="流萤"` | `#3f9e96` / `FIREFLY` |
+
+**Mai 双胞胎钉死**(commit `1b25881` · 2026-05-22 PM dispatch):
+- cid=1 = 壳 Momo + 内核 Mai + Hiyori + GSV ja
+- cid=101 = 壳 麻衣 + 内核 Mai(同 cid=1)+ Hiyori(共享) + Fish ja
+- 两份并存 = Phase 2 §8 "cid=1→cid=101 数据迁移取消" + 真机验收前 cid=101 需要正确 Mai persona → 11 字段覆盖。**两条 Mai 路径并行 = GSV 全栈自托管 vs Fish 云 reference**。
+
+**Live2D 资源真值**:`/frontend/public/live2d/` = `hiyori + yae`(+ `core/` runtime)· 7/9 角色 fallback hiyori · `live2dModelEntry` hardcode dict 仅含 `hiyori`(`yae` 缺登记 · scanner 拾到)· 入 Tech Debt TD-E。
+
+---
+
+## §15 LLM 全集真值表(2026-06-08 audit · DB ai_providers + config.yaml)
+
+| id | name | model 字符串(LiteLLM 路由用) | is_active | enabled |
+|---:|---|---|:---:|:---:|
+| **19** | **deepseek-v4-pro** | **`deepseek/deepseek-v4-pro`** | ✅ **现役** | ✅ |
+| 2 | Qwen 3.6 Max preview | `openai/qwen3.6-max-preview` | — | ✅ |
+| 8 | Qwen 3.6 Plus | `openai/qwen3.6-plus` | — | ✅ |
+| 16 | qwen3.5-plus | `dashscope/qwen3.5-plus` | — | ✅ |
+| 17 | qwen3.6-flash | `openai/qwen3.6-flash` | — | ✅ |
+| 18 | deepseek-v4-flash | `deepseek/deepseek-v4-flash` | — | ✅ |
+
+**调度优先**(`bugfix-3.1` 起):DB `is_active=1` > config.yaml `default_model` > `.env` API_KEY。当前 active = `deepseek/deepseek-v4-pro` · yaml `default_model: dashscope/qwen3.6-max-preview` 仅 fallback(实际不命中)。
+
+**副 LLM**(non-main-chat · 不在 ai_providers 表 · 走 yaml 直配):
+- Planner / activity_judge: `dashscope/qwen-turbo`
+- Memory summary 折叠:`dashscope/qwen3.5-flash`
+
+**前缀双 path 注意**:Qwen 系列 DB 多用 `openai/`(走 DashScope OpenAI-compat)· yaml 用 `dashscope/`(LiteLLM native)· 同模型两条 routing · `bugfix-3.2.7` 修补遗产。
+
+---
+
+## §16 与归档 DESIGN.md 的指针
 
 本 LITE 涵盖 v4-beta 当前架构的关键点。归档版 `docs/archive/DESIGN.md`(5,206 行,2026-05-19 docs 第二刀冻结)含:
 
@@ -856,5 +1037,5 @@ Tests:
 
 ---
 
-**文档版本**:LITE 1.1(2026-05-16,v4-beta 收口批次更新);**2026-05-19 升为当前设计真源**(docs 第二刀)
+**文档版本**:LITE 1.2(2026-06-08,进入动画 + 持久角色 + 立绘馆发牌 ship 批次更新 · 新 §11/§12/§13/§14/§15)· LITE 1.1(2026-05-16,v4-beta 收口批次)· **2026-05-19 升为当前设计真源**(docs 第二刀)
 **归档版**:`docs/archive/DESIGN.md` 5,206 行 + `docs/archive/DESIGN_patch.md` 477 行(均冻结,不再维护)
