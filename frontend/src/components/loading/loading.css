@@ -36,6 +36,9 @@
   --ink: #4a3340;
   --ink-soft: #9a8693;
   --petal: #f3c6d0;
+  /* Beat 0 preamble 双线 · 中性暖白 · 不跟角色 accent 走(避免不同角色配色看着像紫) */
+  --poweron-line: rgba(232, 226, 214, 0.95);
+  --poweron-line-glow: rgba(232, 226, 214, 0.32);
   --mono: 'JetBrains Mono', monospace;
   --ui: 'Zen Kaku Gothic New', sans-serif;
   --serif: 'Shippori Mincho', serif;
@@ -46,10 +49,10 @@
 .loading-win.fading { opacity: 0; }
 .loading-win.resolve { cursor: pointer; }
 
-/* ===== 暖光底(Beat 2 升起) ===== */
+/* ===== 暖光底(Beat 2 升起 · 过渡拉长) ===== */
 .loading-warm {
   position: absolute; inset: 0; opacity: 0;
-  transition: opacity 1.1s ease;
+  transition: opacity 1.4s ease;
   background:
     radial-gradient(70% 90% at 68% 55%, var(--accent-glow), transparent 55%),
     radial-gradient(120% 80% at 50% 12%, rgba(255, 255, 255, .4), transparent 60%),
@@ -133,7 +136,7 @@
   font-size: clamp(8px, 1.1vh, 11px);
   letter-spacing: .22em;
   color: var(--boot-dim);
-  transition: opacity .6s;
+  transition: opacity 1.0s;
 }
 .loading-telemetry .tg {
   display: inline-flex; align-items: baseline; gap: 6px;
@@ -148,7 +151,7 @@
 /* ===== HUD 4 角 · cut7 描线 draw-in (.4s) + edge tick ===== */
 .loading-cyberhud {
   position: absolute; inset: 0; pointer-events: none;
-  transition: opacity .7s ease;
+  transition: opacity 1.1s ease;
 }
 .loading-win.resolve .loading-cyberhud { opacity: 0; }
 
@@ -233,7 +236,7 @@
   height: clamp(180px, 22vw, 320px);
   pointer-events: none;
   z-index: 4;
-  transition: opacity .9s ease, transform .9s ease;
+  transition: opacity 1.2s ease, transform 1.2s ease;
 }
 .loading-win.resolve .loading-anchor {
   opacity: 0;
@@ -303,7 +306,7 @@
   color: var(--boot-dim);
   letter-spacing: .18em;
   pointer-events: none;
-  transition: opacity .6s;
+  transition: opacity 1.0s;
 }
 .loading-anchor-tel .row {
   display: flex; justify-content: space-between;
@@ -325,7 +328,7 @@
   font-size: clamp(10px, 1.45vh, 14px);
   line-height: 1.65;
   text-align: left; color: var(--boot-ink);
-  transition: opacity .7s ease, transform .7s ease;
+  transition: opacity 1.1s ease, transform 1.1s ease;
   max-width: 56%;
   max-height: 70%;
   overflow: hidden;
@@ -389,7 +392,7 @@
   transition: width .3s linear;
   pointer-events: none;
 }
-.loading-win.resolve .loading-hair { opacity: 0; transition: opacity .5s; }
+.loading-win.resolve .loading-hair { opacity: 0; transition: opacity .9s; }
 
 /* 进度条(底部) · cut7 满 100% label 翻 SYSTEM READY */
 .loading-pbar {
@@ -397,7 +400,7 @@
   z-index: 6;
   display: flex; align-items: center; gap: 12px;
   font-family: var(--mono);
-  transition: opacity .6s ease;
+  transition: opacity 1.0s ease;
   pointer-events: none;
 }
 .loading-win.resolve .loading-pbar { opacity: 0; }
@@ -408,6 +411,24 @@
   transition: color .4s;
 }
 .loading-pbar .plbl.ready { color: var(--accent); }
+
+/* "加载完成"加重 · 在 engine done 真触发的瞬间加 .latched ·
+   字大 + glow 脉一下 · 持续 ~0.5s 然后稳在 1.03 + 静态 glow ·
+   保持到 .resolve 切 Beat2 时整 pbar 才淡出。 */
+.loading-pbar .plbl.latched {
+  color: var(--accent);
+  font-weight: 500;
+  letter-spacing: .15em;
+  text-shadow: 0 0 10px var(--accent-glow);
+  animation: loading-ready-latch 0.55s ease forwards;
+  display: inline-block;
+  transform-origin: left center;
+}
+@keyframes loading-ready-latch {
+  0%   { transform: scale(1);    text-shadow: 0 0 0 transparent; }
+  35%  { transform: scale(1.10); text-shadow: 0 0 20px var(--accent-glow); }
+  100% { transform: scale(1.04); text-shadow: 0 0 10px var(--accent-glow); }
+}
 .loading-ptrack {
   flex: 1; height: 4px; border-radius: 3px;
   background: rgba(217, 207, 198, .14);
@@ -441,7 +462,7 @@
   width: 34%; height: 86%;
   opacity: 0;
   transform: translateY(24px);
-  transition: opacity 1s .3s ease, transform 1.1s .3s cubic-bezier(.2, .7, .2, 1);
+  transition: opacity 1.3s .5s ease, transform 1.5s .5s cubic-bezier(.2, .7, .2, 1);
   display: flex; align-items: flex-end; justify-content: center;
   pointer-events: none;
 }
@@ -478,7 +499,7 @@
   position: absolute; left: 11%; top: 50%;
   transform: translateY(-50%);
   opacity: 0;
-  transition: opacity 1s .5s ease, transform 1s .5s ease;
+  transition: opacity 1.3s .7s ease, transform 1.3s .7s ease;
   max-width: 45%;
   pointer-events: none;
 }
@@ -515,7 +536,7 @@
 .loading-enter {
   position: absolute; left: 11%; bottom: 9%;
   opacity: 0; pointer-events: none;
-  transition: opacity .6s 1.2s ease;
+  transition: opacity .8s 1.6s ease;
 }
 .loading-win.resolve .loading-enter {
   opacity: 1;
@@ -536,7 +557,7 @@
 .loading-petals {
   position: absolute; inset: 0; overflow: hidden;
   pointer-events: none; opacity: 0;
-  transition: opacity 1s ease;
+  transition: opacity 1.3s ease;
 }
 .loading-win.resolve .loading-petals { opacity: 1; }
 .loading-petal {
@@ -551,4 +572,124 @@
   0%   { transform: translateY(-10%) rotate(0); opacity: 0; }
   12%  { opacity: .8; }
   100% { transform: translateY(120vh) translateX(30px) rotate(400deg); opacity: 0; }
+}
+
+/* =========================================================================
+ * Beat 0 · power-on preamble · 节奏:
+ *   0..500ms     dark hold(纯黑底 · 给眼睛/窗口稳一下再起势)
+ *   500..1800ms  双线 ±55° 转进 → 0°(pivot · 1.3s · 交汇)
+ *   1600..2150ms flare 短爆(交汇前后的暖光)
+ *   1800..2560ms 上下门式拉开(0.76s)
+ *   收尾 ~2560ms · 总进 9s floor 不变(engine 仍从 t=0 算)
+ *
+ * 锁参:angle=±55° / pivot=1.3s / door=0.76s / easing=cubic-bezier(.42,.04,.2,1)
+ * "展开不炸开" · 不带回弹 / 不 overshoot
+ * 注:pivot 用 fill-mode=both(0..300ms backwards fill 让线先 hold 在 ±55° · 不是 0°)
+ * z=10000 高于一切 Beat1 HUD · React 在 preamble='done' 时整层 unmount
+ * ========================================================================= */
+
+.loading-poweron {
+  position: fixed; inset: 0;
+  z-index: 10000;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* 两扇 "门" — 全屏初态遮住下层 HUD/boot-log · 940ms 后各自滑出 */
+.poweron-half {
+  position: absolute; left: 0; right: 0;
+  height: 50%;
+  background: var(--boot-bg);
+  will-change: transform;
+}
+.poweron-half.top {
+  top: 0;
+  /* 内沿描 1px 中性线 · 跟 pivot 线收尾对齐(同一根 token) */
+  box-shadow: 0 1px 0 var(--poweron-line), 0 2px 18px var(--poweron-line-glow);
+  animation: poweron-door-top 0.76s cubic-bezier(.42, .04, .2, 1) 1.8s forwards;
+}
+.poweron-half.bottom {
+  bottom: 0;
+  box-shadow: 0 -1px 0 var(--poweron-line), 0 -2px 18px var(--poweron-line-glow);
+  animation: poweron-door-bot 0.76s cubic-bezier(.42, .04, .2, 1) 1.8s forwards;
+}
+@keyframes poweron-door-top { to { transform: translateY(-100%); } }
+@keyframes poweron-door-bot { to { transform: translateY(100%);  } }
+
+/* 双线 ±55° pivot · 0..940ms · 940ms 接力到门内沿后淡出 */
+.poweron-line {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 220vmax;
+  height: 1.5px;
+  margin-left: -110vmax;
+  margin-top: -0.75px;
+  background: linear-gradient(90deg, transparent 0%, var(--poweron-line) 22%, var(--poweron-line) 78%, transparent 100%);
+  box-shadow: 0 0 12px var(--poweron-line-glow);
+  transform-origin: center center;
+  will-change: transform, opacity;
+}
+.poweron-line.top {
+  animation:
+    poweron-pivot-top 1.3s cubic-bezier(.42, .04, .2, 1) 0.5s both,
+    poweron-line-fade 0.12s ease 1.8s forwards;
+}
+.poweron-line.bottom {
+  animation:
+    poweron-pivot-bot 1.3s cubic-bezier(.42, .04, .2, 1) 0.5s both,
+    poweron-line-fade 0.12s ease 1.8s forwards;
+}
+@keyframes poweron-pivot-top { from { transform: rotate(-55deg); } to { transform: rotate(0); } }
+@keyframes poweron-pivot-bot { from { transform: rotate( 55deg); } to { transform: rotate(0); } }
+@keyframes poweron-line-fade { to { opacity: 0; } }
+
+/* flare · 交汇瞬间(~1600..2150ms · 跨在 pivot 末→door 起的接缝)轻爆 · 不眩晕 */
+.poweron-flare {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 60vw; height: 40vh;
+  transform: translate(-50%, -50%) scale(0.5);
+  background: radial-gradient(closest-side, var(--accent-glow), transparent 70%);
+  opacity: 0;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  animation: poweron-flare 0.55s ease 1.6s forwards;
+}
+@keyframes poweron-flare {
+  0%   { opacity: 0;   transform: translate(-50%, -50%) scale(0.5); }
+  40%  { opacity: .65; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0;   transform: translate(-50%, -50%) scale(1.5); }
+}
+
+/* ===== preamble 收 Beat1 可见性(用 data-preamble 翻)=====
+ * curtain    (0..1450ms):全 Beat1 隐藏 · 门完全合住
+ * hud-rising (1450..1900ms):HUD 边框 / 网格 / 锚 / 顶部 telemetry / brand 默 transition 淡入 ·
+ *                            boot-log + 进度条 + hair 仍隐
+ * done       (>=1900ms):无 suppressor · 走默认 · 门已开
+ */
+.loading-win[data-preamble="curtain"] .loading-boot,
+.loading-win[data-preamble="curtain"] .loading-cyberhud,
+.loading-win[data-preamble="curtain"] .loading-ticks,
+.loading-win[data-preamble="curtain"] .loading-telemetry,
+.loading-win[data-preamble="curtain"] .loading-anchor,
+.loading-win[data-preamble="curtain"] .loading-anchor-tel,
+.loading-win[data-preamble="curtain"] .loading-pbar,
+.loading-win[data-preamble="curtain"] .loading-hair,
+.loading-win[data-preamble="curtain"] .loading-brand,
+.loading-win[data-preamble="curtain"] .loading-scan,
+.loading-win[data-preamble="curtain"] .loading-sweep {
+  opacity: 0 !important;
+  transition: none !important;
+}
+
+.loading-win[data-preamble="hud-rising"] .loading-boot,
+.loading-win[data-preamble="hud-rising"] .loading-pbar,
+.loading-win[data-preamble="hud-rising"] .loading-hair {
+  opacity: 0 !important;
+  transition: opacity .45s ease;
+}
+
+/* reduce-motion · 整段 preamble 不演 · React 直接落 'done' · 这里二保险 */
+@media (prefers-reduced-motion: reduce) {
+  .loading-poweron { display: none; }
 }

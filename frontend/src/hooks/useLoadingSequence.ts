@@ -30,7 +30,15 @@ export interface LoadingSequenceState {
   snapshot: BootSnapshot | null;
 }
 
-export function useLoadingSequence(): LoadingSequenceState {
+export interface LoadingSequenceOpts {
+  /** engine.start() 延迟 ms · 跟 preamble 节奏对齐 · 让 boot 行不在 preamble
+   *  期间默默 emit(否则门一开就堆 5-7 行 ≈ 25-33% 进度 · 不像"在 load") ·
+   *  默认 0(向后兼容)· LoadingScreen 传 500ms(对应"晚 0.5s"指令) */
+  startDelayMs?: number;
+}
+
+export function useLoadingSequence(opts?: LoadingSequenceOpts): LoadingSequenceState {
+  const startDelayMs = opts?.startDelayMs ?? 0;
   const embeddingReady = useAppStore((s) => s.embeddingReady);
   const whisperReady = useAppStore((s) => s.whisperReady);
   const wsReady = useAppStore((s) => s.wsReady);
@@ -120,13 +128,22 @@ export function useLoadingSequence(): LoadingSequenceState {
           break;
       }
     });
-    eng.start();
+    // cut · 延迟 engine.start() · 让 boot 行不在 preamble 期间默默累积 ·
+    // 门开时进度更接近 0%(0 延迟 ~33% · 500ms ~24% · 2700ms ~0%) ·
+    // floor 9s 从 eng.start() 算 · 总时相应 +startDelayMs。
+    let startTimer: number | null = null;
+    if (startDelayMs > 0) {
+      startTimer = window.setTimeout(() => eng.start(), startDelayMs);
+    } else {
+      eng.start();
+    }
     return () => {
+      if (startTimer !== null) window.clearTimeout(startTimer);
       off();
       eng.stop();
     };
-    // snapshot / live2dModelName / characterName 设一次后稳定 · 不反复重建 engine
-  }, [snapshot, live2dModelName, characterName]);
+    // snapshot / live2dModelName / characterName / startDelayMs 设一次后稳定
+  }, [snapshot, live2dModelName, characterName, startDelayMs]);
 
   return { phase, token, logs, missingReady, done, totalSteps, snapshot };
 }

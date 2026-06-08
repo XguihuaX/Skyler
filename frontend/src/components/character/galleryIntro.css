@@ -1,0 +1,76 @@
+/* spec §3 · 立绘馆发牌入场动画 · CharacterGallery 三态 stage 机 ·
+ * 不动 FanLayout / cards / scrim / bg img motion / HUD 现有视觉,
+ * 只加一层"开馆从牌堆升起来"的 stage 节奏。
+ *
+ * 状态(由 React introStage 翻 .gallery-stage--{phase} class):
+ *   stack    = 初始 · 一切收住(bg/HUD opacity 0 · fan wrapper translateY+40 scale.82 opacity 0)
+ *              transition: none → 进 stack 即 snap(replay 时不反向动)
+ *   stage-up = 灯光台面 HUD 升起(.9s) · fan wrapper 仍收着 · roster 没就绪就停这
+ *   reveal   = 默认终态 · fan wrapper 升上来到位(.6s) · bg/HUD 已亮
+ *
+ * gate:stack→stage-up 固定 650ms 后跳 · stage-up→reveal 由 characters.length>0 触发
+ *      没就绪绝不假展开,死在 stage-up 等。
+ */
+
+/* 默认 transition(reveal 态用) */
+.gallery-bg-layer,
+.gallery-chip,
+.gallery-close {
+  transition: opacity .9s ease;
+}
+.gallery-fan-wrap {
+  transition: opacity .6s ease,
+              transform .6s cubic-bezier(.2, .7, .2, 1);
+  transform-origin: center bottom;
+  will-change: transform, opacity;
+}
+
+/* ===== stack:全收住 · 无过渡(replay 时 snap) ===== */
+.gallery-stage--stack .gallery-bg-layer,
+.gallery-stage--stack .gallery-chip,
+.gallery-stage--stack .gallery-close {
+  opacity: 0;
+  transition: none;
+}
+.gallery-stage--stack .gallery-fan-wrap {
+  opacity: 0;
+  transform: translateY(40px) scale(.82);
+  transition: none;
+}
+
+/* ===== stage-up:bg + HUD 升起(走默认 .9s transition) · fan 仍收着 ===== */
+.gallery-stage--stage-up .gallery-fan-wrap {
+  opacity: 0;
+  transform: translateY(40px) scale(.82);
+}
+
+/* reveal 态:无额外规则 · 默认 transition 把 fan 从 stage-up 的 stacked 推到位 */
+
+/* ===== Replay 按钮 ===== */
+.gallery-replay {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 4;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--color-bg-elevated) 85%, transparent);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  transition: opacity .2s, background .2s, color .2s;
+  opacity: .65;
+}
+.gallery-replay:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--color-text-primary);
+}
+.gallery-replay:disabled {
+  opacity: .25;
+  cursor: default;
+}

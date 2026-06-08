@@ -15,7 +15,7 @@
 //   - appReady 4 路接线不变 · 只喂 engine 闸
 //   - per-character theme tokens(accent / petal / 寄语)切换 · 不动数据
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useAppStore } from '../../store';
 import {
   useLoadingSequence,
@@ -211,7 +211,15 @@ export default function LoadingScreen({ onDone }: Props) {
   const whisperReady   = useAppStore((s) => s.whisperReady);
   const wsReady        = useAppStore((s) => s.wsReady);
   const live2dReady    = useAppStore((s) => s.live2dReady);
-  const { phase, logs, missingReady, done, totalSteps, snapshot } = useLoadingSequence();
+  // cut · engine 起步晚 3000ms · 让 boot 行 0% 起(>2.7s 门开 = preamble 已结)
+  //       (0 延迟门开时 ~33% · 500 ~24% · 1500 ~14% · 3000 = 0% 起);reduce-motion 不延
+  const engineStartDelayMs = useMemo(() => {
+    if (typeof window === 'undefined') return 0;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return 0;
+    return 3000;
+  }, []);
+  const { phase, logs, missingReady, done, totalSteps, snapshot } =
+    useLoadingSequence({ startDelayMs: engineStartDelayMs });
 
   const character = useMemo(
     () => characters.find((c) => c.id === currentCharacterId),
@@ -223,9 +231,42 @@ export default function LoadingScreen({ onDone }: Props) {
 
   const [resolveActive, setResolveActive] = useState(false);
   const [fading, setFading] = useState(false);
+  // engine done 真触发那一刻 latch 一下"加载完成"显式提示 · 然后 hold 600ms
+  // 当作 Beat1→Beat2 的衔接桥 · 桥结束后 setResolveActive(true) 启动暖揭幕
+  // (resolveActive 才是 Beat2 起点 · latched 只是"完成"那一帧的视觉笃定)
+  const [completionLatched, setCompletionLatched] = useState(false);
 
+  // Beat 0 · power-on preamble · 2.56s 门式揭幕(吸收进 9s floor · engine 仍从 t=0 算)
+  //   curtain    0..2200ms : 全 Beat1 隐 · 0..500 dark hold / 500..1800 pivot / 1800..2560 door
+  //   hud-rising 2200..2650: HUD 边框/网格/锚/顶 telemetry/brand 淡入(门正开过半)
+  //   done       >=2650    : 全 Beat1 normal · 门已开 · poweron 整层 unmount
+  // reduce-motion 直接落 'done' · 不演不挂 timer
+  type PreambleState = 'curtain' | 'hud-rising' | 'done';
+  const [preamble, setPreamble] = useState<PreambleState>(() => {
+    if (typeof window === 'undefined') return 'done';
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return 'done';
+    return 'curtain';
+  });
   useEffect(() => {
-    if (done) setResolveActive(true);
+    if (preamble === 'done') return;
+    const t1 = window.setTimeout(() => setPreamble('hud-rising'), 2200);
+    const t2 = window.setTimeout(() => setPreamble('done'),       2650);
+    return () => { window.clearTimeout(t1); window.clearTimeout(t2); };
+    // 只 mount 跑一次 · preamble 自驱
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 用 ref 守一次性进入 · deps 只看 done · 不在 cleanup 里 clearTimeout —
+  // 否则会触发"setCompletionLatched(true) 引发 re-render → cleanup → timer 被砍 →
+  // resolveActive 永不 set"的死锁(上刀实测卡在 SYSTEM READY ✓ · regression 锁定)
+  const latchedRef = useRef(false);
+  useEffect(() => {
+    if (!done || latchedRef.current) return;
+    // engine done = 真完成(gate 通过:floor 满足 + appReady 4 路全到) · 不假完成
+    // latch 笃定提示 + 600ms 桥 · 然后 resolveActive 切 Beat2
+    latchedRef.current = true;
+    setCompletionLatched(true);
+    window.setTimeout(() => setResolveActive(true), 600);
   }, [done]);
 
   const dismiss = useCallback(() => {
@@ -238,7 +279,9 @@ export default function LoadingScreen({ onDone }: Props) {
     if (!resolveActive || fading) return;
     const onClick = (): void => dismiss();
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') return;
+      // 只接"明确确认"键 Enter / Space · 排除 Meta/Shift/Ctrl/Alt/Caps/方向/F* 等
+      // (cut · 实测 bisect:Meta 单按曾误触 dismiss · 落地页一闪)
+      if (e.key !== 'Enter' && e.key !== ' ') return;
       dismiss();
     };
     window.addEventListener('click', onClick);
@@ -271,10 +314,23 @@ export default function LoadingScreen({ onDone }: Props) {
     fading ? 'fading' : '',
   ].filter(Boolean).join(' ');
 
-  const systemReady = progressPct >= 100;
+  // (cut · "完成"语义改挂 completionLatched · 即 engine done 真触发 ·
+  //  不再用 progressPct>=100 假完成 · 那个只是 boot-log 行数全 emit 完,
+  //  跟 9s floor / appReady gate 无关。)
 
   return (
-    <div className={winClasses} style={themeStyle}>
+    <div className={winClasses} style={themeStyle} data-preamble={preamble}>
+      {/* Beat 0 · power-on preamble · 双线 ±55°→交汇→门式拉开 · 1.7s · 1900ms 整层 unmount */}
+      {preamble !== 'done' && (
+        <div className="loading-poweron">
+          <div className="poweron-half top" />
+          <div className="poweron-half bottom" />
+          <div className="poweron-flare" />
+          <div className="poweron-line top" />
+          <div className="poweron-line bottom" />
+        </div>
+      )}
+
       <div className="loading-warm" />
       <div className="loading-scan" />
       <div className="loading-sweep" />
@@ -330,8 +386,8 @@ export default function LoadingScreen({ onDone }: Props) {
 
       {/* Beat 1 · 进度条 + hair line(cut7 满 100% label 翻 SYSTEM READY) */}
       <div className="loading-pbar">
-        <span className={`plbl ${systemReady ? 'ready' : ''}`}>
-          {systemReady ? '> SYSTEM READY' : '> SYSTEM INITIALIZING'}
+        <span className={`plbl ${completionLatched ? 'latched' : ''}`}>
+          {completionLatched ? '> SYSTEM READY ✓' : '> SYSTEM INITIALIZING'}
         </span>
         <div className="loading-ptrack">
           <div className="loading-pfill" style={{ width: `${progressPct}%` }} />

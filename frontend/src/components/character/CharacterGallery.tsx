@@ -38,6 +38,11 @@ import { X } from 'lucide-react';
 import { useAppStore } from '../../store';
 import FanLayout from './FanLayout';
 import CharacterDetailModal from './CharacterDetailModal';
+import './galleryIntro.css';
+
+// spec §3 · 入场动画三态(stack 650ms → stage-up → reveal 当 roster ready)
+type IntroStage = 'stack' | 'stage-up' | 'reveal';
+const INTRO_STACK_MS = 650;        // 牌堆停留时长 → bg/HUD 升起触发点
 
 type GalleryMode = 'browse' | 'detail';
 
@@ -97,6 +102,10 @@ export default function CharacterGallery() {
   const [mode, setMode] = useState<GalleryMode>('browse');
   const [detailForId, setDetailForId] = useState<number | null>(null);
 
+  // spec §3 入场状态机 · introNonce 增 1 = replay(重跑 stack → stage-up → reveal)
+  const [introStage, setIntroStage] = useState<IntroStage>('stack');
+  const [introNonce, setIntroNonce] = useState(0);
+
   // bugfix-2.3: Gallery 浏览态不再自动选中当前角色,改为本地 "centerCharId"
   // 跟踪 fan 中心卡。打开 Gallery 时重置为 characters[0],不读 currentCharacterId
   // (即"我现在用的角色"在 Gallery 内部毫无视觉地位,Gallery 是中性浏览)。
@@ -110,6 +119,7 @@ export default function CharacterGallery() {
       setMode('browse');
       setDetailForId(null);
       setCenterCharId(null);
+      setIntroStage('stack');
     } else {
       // On every open transition, force-reset center to first card. 故意不
       // 把 ``characters`` 加进 deps —— Gallery 开启中 characters 列表变化
@@ -118,6 +128,25 @@ export default function CharacterGallery() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // 入场动画驱动 · open=true 或 replay(introNonce++)时:stack → 650ms → stage-up
+  useEffect(() => {
+    if (!open) return;
+    setIntroStage('stack');
+    const t = window.setTimeout(() => {
+      setIntroStage('stage-up');  // gate useEffect 会接到 reveal 当 chars ready
+    }, INTRO_STACK_MS);
+    return () => window.clearTimeout(t);
+  }, [open, introNonce]);
+
+  // gate · stage-up → reveal:roster 数据就绪(characters.length > 0)才发牌 ·
+  // 没就绪停在 stage-up(bg/HUD 已升 · 牌堆未展开)· 绝不假展开。
+  // 已 reveal 后 characters 变(后台 polling 新增 / 删除)不再回退。
+  useEffect(() => {
+    if (introStage === 'stage-up' && characters.length > 0) {
+      setIntroStage('reveal');
+    }
+  }, [introStage, characters.length]);
 
   // ESC handler:browse → close gallery;detail → back to browse(交给 modal)
   useEffect(() => {
@@ -177,11 +206,18 @@ export default function CharacterGallery() {
 
   return (
     <div
-      className="fixed inset-0 z-[990] overflow-hidden"
+      className={`fixed inset-0 z-[990] overflow-hidden gallery-stage gallery-stage--${introStage}`}
       // 兜底 base 色:bg img 加载失败极端 case 下不漏 OS 透明窗口
       style={{ background: 'var(--color-bg-base)' }}
     >
       {/* z=0:动态背景层 — splash art 模糊放大版 + 交叉淡化。
+          spec §3 入场:外层 .gallery-bg-layer 由 .gallery-stage--{phase} 控
+          opacity(stack=0 / 其它=1 · .9s ease)· 内层 AnimatePresence+motion.img
+          cross-fade 一字未动(用户实测淡入 · 不改回硬切)。复合 opacity 叠乘 ·
+          stack 时 wrapper 0 整层不可见 / stage-up & reveal 时 wrapper 1 内层
+          motion.img 自管 0.6s 切焦点 cross-fade。
+
+          内层 motion.img 历史细节(沿用):
           - filter: blur(14px) brightness(0.4) saturate(1.05)
             Fan-5.2 微调:blur 22 → 14(角色主体微清, "哦这是某个角色"的
             认知钩子);brightness 0.35 → 0.4(blur 减弱后亮度略提补回);
@@ -193,12 +229,13 @@ export default function CharacterGallery() {
           - transform: scale(1.0) — Fan-5.1 的 scale(1.1) 防 22px halo
             漏底; blur 14px halo 同步缩小, scale 1.0 也够用, 而且能少
             裁掉一点立绘内容。
-          - AnimatePresence + motion.img key={src} → 切角色时老 img exit
-            opacity 1→0 / 新 img enter 0→1, 同时存在 0.6s = 交叉淡化。
+          - AnimatePresence + motion.img key=src → 切角色时老 img exit
+            opacity 1->0 / 新 img enter 0->1, 同时存在 0.6s = 交叉淡化。
             framer-motion 自动 mount/unmount + cleanup。
           - onError: 单图加载失败 → 兜底 _placeholder.png(继承 CharacterCard
             pattern,bg src 已 placeholder 时也不会进死循环 src ===)
           - loading=eager:首屏立即加载,不等 lazy 触发(背景需要立即可见) */}
+      <div className="gallery-bg-layer" style={{ position: 'absolute', inset: 0, zIndex: 0 }}>
       <AnimatePresence>
         <motion.img
           key={bgSrc}
@@ -232,10 +269,15 @@ export default function CharacterGallery() {
           }}
         />
       </AnimatePresence>
+      </div>
 
       {/* z=1:Fan layout(永远渲染,即使 detail open;hero 共享 layoutId
-          需要 source 元素仍在树里) */}
-      <div className="absolute inset-0" style={{ zIndex: 1 }}>
+          需要 source 元素仍在树里)。spec §3 · wrapper .gallery-fan-wrap 受
+          .gallery-stage--{phase} 控:stack/stage-up 时 translateY+40 scale.82
+          opacity 0 收住;reveal 时 .6s 升起到位。**FanLayout 内部 0 改动**
+          (framer-motion inline transform 跟外部 stagger 打架,per-card 错峰
+          甩"发牌"需要 FanLayout 配合;本刀只做整扇升起 + bg/HUD 阶) */}
+      <div className="absolute inset-0 gallery-fan-wrap" style={{ zIndex: 1 }}>
         <FanLayout
           characters={characters}
           selectedCharId={centerCharId}
@@ -246,9 +288,9 @@ export default function CharacterGallery() {
         />
       </div>
 
-      {/* z=2:top label */}
+      {/* z=2:top label(spec §3 入场受 .gallery-stage--{phase} 控 opacity) */}
       <div
-        className="fixed top-3 left-1/2 -translate-x-1/2 px-4 py-1.5 text-xs rounded-full font-medium pointer-events-none"
+        className="fixed top-3 left-1/2 -translate-x-1/2 px-4 py-1.5 text-xs rounded-full font-medium pointer-events-none gallery-chip"
         style={{
           background:  'color-mix(in srgb, var(--color-bg-surface) 70%, transparent)',
           color:       'var(--color-text-secondary)',
@@ -267,7 +309,7 @@ export default function CharacterGallery() {
       <button
         type="button"
         onClick={() => setOpen(false)}
-        className="fixed top-3 right-3 w-9 h-9 rounded-full flex items-center justify-center transition shadow-lg"
+        className="fixed top-3 right-3 w-9 h-9 rounded-full flex items-center justify-center transition shadow-lg gallery-close"
         style={{
           background: 'color-mix(in srgb, var(--color-bg-elevated) 85%, transparent)',
           color:      'var(--color-text-primary)',
@@ -279,24 +321,18 @@ export default function CharacterGallery() {
         <X size={16} />
       </button>
 
-      {/* z=2:hint(只 browse 态显示) */}
+      {/* spec §3 replay 按钮 · 真机反复看 / 调参用 · 只 browse 态且 reveal 完毕显
+          (intro 进行中 disabled · 防点出二态干扰) */}
       {mode === 'browse' && (
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2, duration: 0.35 }}
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 text-xs px-3 py-1.5 rounded-full pointer-events-none"
-          style={{
-            background:  'color-mix(in srgb, var(--color-bg-surface) 70%, transparent)',
-            color:       'var(--color-text-secondary)',
-            border:      '1px solid var(--color-border-subtle)',
-            backdropFilter:       'blur(6px)',
-            WebkitBackdropFilter: 'blur(6px)',
-            zIndex: 2,
-          }}
+        <button
+          type="button"
+          onClick={() => setIntroNonce((n) => n + 1)}
+          disabled={introStage !== 'reveal'}
+          className="gallery-replay"
+          title="重播入场动画"
         >
-          点边卡切换 · 点中心卡查看详情
-        </motion.div>
+          ↻
+        </button>
       )}
 
       {/* z=1000+:Detail modal(modal 内部已设 z=1000/1001;不冲突 Gallery 内 z 栈) */}
