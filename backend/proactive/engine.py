@@ -393,13 +393,10 @@ async def run_trigger(
     voice_model: Optional[str] = character.voice_model
     tts_engine = get_tts_engine(voice_model)
     # v4 segment 2 §2.5:解析 voice_model.tts_language(ja/en/zh)给 extract_tts_text
-    tts_language = "zh"
-    if voice_model:
-        try:
-            _vm_obj = json.loads(voice_model)
-            tts_language = (_vm_obj or {}).get("tts_language", "zh") or "zh"
-        except (json.JSONDecodeError, TypeError):
-            tts_language = "zh"
+    # 2026-06-15 SPEC:silent default "zh" → resolve_tts_language(共享) ·
+    # 缺省时按注册表音色原生语种兜底 · 同 ws.py / chat.py renderer 路径。
+    from backend.tts.voice_config import _resolve_lang_from_voice_model_json
+    tts_language = _resolve_lang_from_voice_model_json(voice_model)
     tts_enabled = get_tts_enabled()
 
     # bugfix-4: 设 TTS source — activity_smart 单独标记,其他 proactive trigger
@@ -812,13 +809,10 @@ async def run_wake_call_trigger(
     voice_model: Optional[str] = character.voice_model
     tts_engine = get_tts_engine(voice_model)
     # v4 segment 2 §2.5:解析 voice_model.tts_language(ja/en/zh)给 extract_tts_text
-    tts_language = "zh"
-    if voice_model:
-        try:
-            _vm_obj = json.loads(voice_model)
-            tts_language = (_vm_obj or {}).get("tts_language", "zh") or "zh"
-        except (json.JSONDecodeError, TypeError):
-            tts_language = "zh"
+    # 2026-06-15 SPEC:silent default "zh" → resolve_tts_language(共享) ·
+    # 缺省时按注册表音色原生语种兜底 · 同 ws.py / chat.py renderer 路径。
+    from backend.tts.voice_config import _resolve_lang_from_voice_model_json
+    tts_language = _resolve_lang_from_voice_model_json(voice_model)
     tts_enabled = get_tts_enabled()
 
     # bugfix-4: 同 upper proactive path — 设 TTS source for log

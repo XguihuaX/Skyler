@@ -847,13 +847,13 @@ async def _handle_message(
         # v4 segment 2 §2.5:解析 voice_model.tts_language,日语 / 英语 voice
         # 角色需要在 sentence 层走 extract_tts_text(ja/en 分离),否则 TTS 拿到
         # 中文正文音色合成会很差(Mai 复刻日语 sample 念中文不自然)。
-        tts_language = "zh"
-        if voice_model:
-            try:
-                _vm_obj = json.loads(voice_model)
-                tts_language = (_vm_obj or {}).get("tts_language", "zh") or "zh"
-            except (json.JSONDecodeError, TypeError):
-                tts_language = "zh"
+        # 2026-06-15 SPEC:silent default "zh" → resolve_tts_language(共享) ·
+        # 缺省时按注册表音色原生语种兜底 · 跟 chat.py renderer 路径同语义。
+        # 必要:chat.py 那侧只决定 layer_a.j2 directive 注不注入 <ja> · 本路径
+        # 给 extract_tts_text 喂 lang · 两条 lang 必须一致,否则 LLM 出 <ja>
+        # 但 extract 走 zh 分支剥光 → 没 ja 段送 TTS → 静音。
+        from backend.tts.voice_config import _resolve_lang_from_voice_model_json
+        tts_language = _resolve_lang_from_voice_model_json(voice_model)
         # bugfix-4: 设 TTS context — 主聊天 source='chat',让 tts_call_log 能
         # 区分用量来源 (chat / proactive / activity / preview)。ContextVar 在
         # asyncio task 内 propagate, _tts_synth_with_timeout / engine.synthesize

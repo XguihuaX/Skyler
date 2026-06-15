@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from backend.tts.base import TTSBase
+from backend.tts.gsv_settings import get_global_gsv_server_url
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,9 @@ _FALLBACK_STUB_WAV = (
     / "tts" / "fish" / "参考音频" / "mai" / "mai5min_0033.wav"
 )
 
-# V2'' 16 emotion ref bank 集合(per PM §3.1 lock · "平静" → "日常")
-_GSV_MAI_V4_EMOTIONS: frozenset[str] = frozenset({
-    "日常", "温柔", "傲娇", "吃醋", "严厉", "慌乱", "害羞", "调皮",
-    "安慰", "伤感", "真挚", "幸福", "感谢", "放松", "叙事", "感动",
-})
-
+# 2026-06-11 · 删 V2'' _GSV_MAI_V4_EMOTIONS frozenset · emotion 集合从
+# self._lab_cache.keys() 派生(每 model 自然成立 · 无 hardcoded)。default
+# 走 model spec 的 default_emotion 字段 / fallback 常量 _DEFAULT_FALLBACK_EMOTION。
 _DEFAULT_FALLBACK_EMOTION = "日常"
 
 # 默认值(per PM §2.3 SQL schema · voice_model 若缺字段则用此 default)
@@ -59,6 +57,33 @@ _DEFAULT_LOCAL_BANK = "tts/gsv/mai_v4"
 _DEFAULT_INFERENCE_PARAMS: Dict[str, Any] = {
     "top_k": 15, "top_p": 1.0, "temperature": 1.0, "speed_factor": 1.0,
 }
+
+
+def _get_model_spec(model_id: Optional[str]) -> Dict[str, Any]:
+    """拿 provider='gsv' + model_id 对应的 spec dict · 跟 tts_models_cache 同步。
+
+    PM SPEC-LOCK §5 渐进:阶段 ① 用 registry.list_models("gsv") 读 tts_models.json,
+    现切到 tts_models_cache.get_gsv_model_spec() · 后者 sync 读 DB tts_models 表 ·
+    cache 整体加载失败时回落 tts_models.json(per LOCK §3 仅整体 fallback,不补
+    个别)。三 tier helper 与外部接口签名不变。
+
+    返空 dict 时 6 字段全走 _DEFAULT 常量兜底。fail-safe:cache 异常 / model id
+    缺失 / spec 缺字段都不 raise · 让 _DEFAULT 兜住。
+
+    model 字段已存在 voice_model 但 cache 没注册 → __init__ 内 warn(model 被
+    DELETE 后 character 仍指向它的典型场景)· 本函数仅返 {} 不打 warn。
+    """
+    if not model_id:
+        return {}
+    try:
+        from backend.tts.tts_models_cache import get_gsv_model_spec  # noqa: PLC0415
+        return get_gsv_model_spec(model_id)
+    except Exception as exc:
+        logger.warning(
+            "[gsv] _get_model_spec(%r) failed: %s · falling back to _DEFAULT",
+            model_id, exc,
+        )
+    return {}
 _TTS_TIMEOUT_S = 30.0       # INV-11 Stage 1 (2026-05-25 PM lock): 90s → 30s · GPU 模式 ~5s 6x buffer 充足 · CPU 模式 50s 会 timeout → 直接 fallback stub(比 user 静默等 90s 强 · early signal 更可接受)
 _WEIGHTS_TIMEOUT_S = 30.0   # set_*_weights 轻量切换
 
@@ -129,48 +154,102 @@ class GSVTTS(TTSBase):
                     "[gsv] voice_model_json parse failed: %s · fallback defaults",
                     exc,
                 )
-        self.server_url: str = raw.get("server_url") or _DEFAULT_SERVER_URL
+        # A-ii thin reference + § 1 spec(2026-06-11):三 tier 优先级
+        #   server_url:  DB > global ai_providers > _DEFAULT
+        #   其它 6 字段: DB > registry model spec > _DEFAULT(model 字段缺失才回 _DEFAULT)
+        # spread 副本(DB 已存的 cid=1 等历史快照)仍优先于 model 级,保留 per-char
+        # override 语义;阶段 ② migration json_remove 之后副本消失 → 全走 model 级。
+        model_id = raw.get("model") if isinstance(raw.get("model"), str) else None
+        spec = _get_model_spec(model_id)
+        # PM SPEC-LOCK:model 字段在 voice_model 已选但 cache 没注册 → warn
+        # (典型场景:用户选了 model_X · 后来 PM 把 model_X DELETE 了 ·
+        #  character.voice_model 副本仍指向 model_X · 此时 spec 是 {} ·
+        #  __init__ 全 6 字段会兜 _DEFAULT 常量 = mai_v4 隐藏耦合)
+        if model_id and not spec:
+            try:
+                from backend.tts.tts_models_cache import is_model_registered  # noqa: PLC0415
+                if not is_model_registered(model_id):
+                    logger.warning(
+                        "[gsv] voice_model.model=%r 未在 tts_models cache 注册 · "
+                        "6 字段全走 _DEFAULT(可能是 model 被 DELETE 后 character "
+                        "副本未更新)· character_id=%s",
+                        model_id, getattr(self._cfg, "character_id", "<unknown>"),
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
+        self.server_url: str = (
+            raw.get("server_url")
+            or get_global_gsv_server_url()
+            or _DEFAULT_SERVER_URL
+        )
         # hotfix (2026-05-25):向后兼容 V2'' 旧字段名(gpt_path/sovits_path · 值为
-        # "placeholder")· 跳过 placeholder fallback default(真路径)。
+        # "placeholder")· 跳过 placeholder fallback default(真路径)。model spec 同名字段
+        # 当作 fallback default 传入 · DB 命中 placeholder 时跳到 spec / 再到常量。
         self.gpt_weights: str = _resolve_weights_field(
-            raw, "gpt_weights", "gpt_path", _DEFAULT_GPT_WEIGHTS,
+            raw, "gpt_weights", "gpt_path",
+            spec.get("gpt_weights") or _DEFAULT_GPT_WEIGHTS,
         )
         self.sovits_weights: str = _resolve_weights_field(
-            raw, "sovits_weights", "sovits_path", _DEFAULT_SOVITS_WEIGHTS,
+            raw, "sovits_weights", "sovits_path",
+            spec.get("sovits_weights") or _DEFAULT_SOVITS_WEIGHTS,
         )
         self.remote_emotion_bank: str = (
-            raw.get("remote_emotion_bank_dir") or _DEFAULT_REMOTE_BANK
+            raw.get("remote_emotion_bank_dir")
+            or spec.get("remote_emotion_bank_dir")
+            or _DEFAULT_REMOTE_BANK
         )
         self.local_emotion_bank: str = (
-            raw.get("emotion_bank_dir") or _DEFAULT_LOCAL_BANK
+            raw.get("emotion_bank_dir")
+            or spec.get("emotion_bank_dir")
+            or _DEFAULT_LOCAL_BANK
         )
         self.default_emotion: str = (
-            raw.get("default_emotion") or _DEFAULT_FALLBACK_EMOTION
+            raw.get("default_emotion")
+            or spec.get("default_emotion")
+            or _DEFAULT_FALLBACK_EMOTION
         )
         # ensure remote_emotion_bank trailing slash · 避免 path join 错
         if not self.remote_emotion_bank.endswith("/"):
             self.remote_emotion_bank += "/"
-        # inference_params 合并 default + raw overrides
-        _ip = raw.get("inference_params") or {}
+        # inference_params 合并三 tier(_DEFAULT < spec < raw)
         self.inference_params: Dict[str, Any] = dict(_DEFAULT_INFERENCE_PARAMS)
+        _spec_ip = spec.get("inference_params") or {}
+        if isinstance(_spec_ip, dict):
+            self.inference_params.update(_spec_ip)
+        _ip = raw.get("inference_params") or {}
         if isinstance(_ip, dict):
             self.inference_params.update(_ip)
-        # tts_language from cfg (parsed at voice_config layer)
-        self.tts_language: str = (
-            getattr(self._cfg, "tts_language", None) or "ja"
-        )
+        # tts_language from cfg(由 voice_config.resolve_tts_language 解析 ·
+        # 2026-06-15 SPEC 收口)。cfg.tts_language dataclass field 默认 "zh" ·
+        # 永远是 truthy str · 原 `or "ja"` dead fallback 删掉(误导且永不触发)。
+        self.tts_language: str = getattr(self._cfg, "tts_language", None) or "zh"
 
-        # 启动时 lazy 读 16 个 .lab 进 in-memory cache
+        # 启动时 lazy 读 <local_emotion_bank>/*.lab 进 in-memory cache
+        # 集合 = cache.keys() · 见 _resolve_ref_wav · per-model 自然成立
         self._lab_cache: Dict[str, str] = self._load_lab_cache()
+        # § 4 spec:启动校验 default_emotion 是否在 cache,不在则 warn(否则
+        # fallback 自己又缺 ref → server 拿不到 ref_audio_path → stub)
+        if self.default_emotion not in self._lab_cache:
+            logger.warning(
+                "[gsv] default_emotion=%r NOT in lab_cache (%d entries) · "
+                "fallback 自身缺 ref,server 端 ref_audio_path 也可能缺 wav · "
+                "用户 LLM 输出未命中集合的 emotion 时会 stub-mode 兜底",
+                self.default_emotion, len(self._lab_cache),
+            )
         # fallback stub bytes(reused per V2'' · GSV unreachable 时返这个)
         self._fallback_stub_bytes: Optional[bytes] = _load_fallback_stub_bytes()
 
+        # PM SPEC-LOCK:init log 打全 6 resolved 字段(weights / lab_dir /
+        # remote_bank / default_emotion / inference_params)+ server_url + lang
+        # · 真机调试时一行看清当前 tier 解析结果(DB vs spec vs _DEFAULT)
         logger.info(
-            "[gsv] init server=%s gpt=%s sovits=%s lab_cache=%d files "
-            "remote_bank=%s lang=%s · fallback_stub=%s",
-            self.server_url, self.gpt_weights, self.sovits_weights,
-            len(self._lab_cache), self.remote_emotion_bank,
-            self.tts_language,
+            "[gsv] init model=%s server=%s gpt=%s sovits=%s lab_dir=%s "
+            "lab_cache=%d remote_bank=%s default_emotion=%s ip=%s lang=%s · "
+            "fallback_stub=%s",
+            model_id, self.server_url, self.gpt_weights, self.sovits_weights,
+            self.local_emotion_bank, len(self._lab_cache), self.remote_emotion_bank,
+            self.default_emotion, self.inference_params, self.tts_language,
             "loaded" if self._fallback_stub_bytes else "MISSING",
         )
 
@@ -202,10 +281,11 @@ class GSVTTS(TTSBase):
     def _resolve_ref_wav(self, emotion: str) -> str:
         """emotion → wav 文件名(不含 .wav 后缀)· 带 fallback。
 
-        per V2'' (2026-05-25):
-          - emotion ∈ ("默认", "", None) → "日常"
-          - emotion ∈ 16 集合 → emotion 本身
-          - 其它(LLM 自创 X)→ "日常" + log warn
+        2026-06-11 · § 4 spec:集合改 self._lab_cache.keys() 派生(per-model
+        自然成立 · 删 V2'' hardcoded _GSV_MAI_V4_EMOTIONS frozenset)。
+          - emotion ∈ ("默认", "", None) → default_emotion
+          - emotion ∈ lab_cache.keys() → emotion 本身
+          - 其它(LLM 自创 X / 集合外) → default_emotion + log warn
         """
         if not emotion or emotion in ("默认", "<NULL>"):
             logger.info(
@@ -213,11 +293,12 @@ class GSVTTS(TTSBase):
                 emotion, self.default_emotion,
             )
             return self.default_emotion
-        if emotion in _GSV_MAI_V4_EMOTIONS:
+        if emotion in self._lab_cache:
             return emotion
         logger.warning(
-            "[gsv] _resolve_ref_wav emotion=%r 不在 16 集合 · fallback → %s",
-            emotion, self.default_emotion,
+            "[gsv] _resolve_ref_wav emotion=%r 不在 lab_cache (%d entries) · "
+            "fallback → %s",
+            emotion, len(self._lab_cache), self.default_emotion,
         )
         return self.default_emotion
 
@@ -248,7 +329,12 @@ class GSVTTS(TTSBase):
             if key in _MODEL_LOAD_FAILED_KEYS:
                 return False
             try:
-                async with httpx.AsyncClient(timeout=_WEIGHTS_TIMEOUT_S) as client:
+                # 2026-06-14 · trust_env=False 显式绕过 shell HTTP(S)_PROXY ·
+                # 局域网 GSV server(eg 192.168.x.x:9880)调用 · 不依赖
+                # NO_PROXY 环境变量 · 详见同 client 在 synthesize / gsv_ping 同款。
+                async with httpx.AsyncClient(
+                    timeout=_WEIGHTS_TIMEOUT_S, trust_env=False,
+                ) as client:
                     r_gpt = await client.get(
                         f"{self.server_url}/set_gpt_weights",
                         params={"weights_path": self.gpt_weights},
@@ -343,7 +429,11 @@ class GSVTTS(TTSBase):
         audio: Optional[bytes] = None
         error_msg: Optional[str] = None
         try:
-            async with httpx.AsyncClient(timeout=_TTS_TIMEOUT_S) as client:
+            # 2026-06-14 · trust_env=False 绕过 shell HTTP(S)_PROXY · 局域网
+            # GSV server 调用不依赖 NO_PROXY · 同 _ensure_model_loaded / ping。
+            async with httpx.AsyncClient(
+                timeout=_TTS_TIMEOUT_S, trust_env=False,
+            ) as client:
                 resp = await client.get(f"{self.server_url}/tts", params=params)
             if resp.status_code != 200:
                 error_msg = (
@@ -395,3 +485,95 @@ class GSVTTS(TTSBase):
             return None
 
         return audio
+
+
+# ---------------------------------------------------------------------------
+# Module-level ref management(per SPEC-LOCK · #2 · 2026-06-11)
+# 单独函数 · 不挂 GSVTTS 实例(实例 per-turn 重建 · CRUD 路径不该现造实例)。
+# 跟覆盖视图(routes/tts_api.py::emotion_coverage)同源:fs glob lab_dir/*.lab。
+# 远程 wav 上传留 stub NotImplementedError(本轮 SSH 范畴 defer)。
+# ---------------------------------------------------------------------------
+
+
+def list_refs(local_bank_dir: str) -> List[Dict[str, Any]]:
+    """fs glob 本地 lab_dir/*.lab · 返每条 emotion 状态。
+
+    Args:
+        local_bank_dir: 本地 .lab 缓存目录(repo 相对路径或绝对路径)
+
+    Returns:
+        [{"name": <emotion stem>, "has_local_lab": True,
+          "lab_size": <int bytes>, "lab_preview": <str 前 60 字符>}, ...]
+        目录不存在 / 0 个 .lab → 返 [](调用方决定如何展示)。
+
+    跟 GSVTTS._load_lab_cache 同 glob pattern · 但本函数无实例 cache · 每次
+    fresh fs read(ms 级,适合 endpoint per-request 触发)。
+    """
+    p = Path(local_bank_dir)
+    if not p.is_dir():
+        return []
+    out: List[Dict[str, Any]] = []
+    for lab_path in sorted(p.glob("*.lab")):
+        try:
+            text_content = lab_path.read_text(encoding="utf-8").strip()
+            size = lab_path.stat().st_size
+        except OSError as exc:
+            logger.warning("[gsv.list_refs] read %s failed: %s", lab_path, exc)
+            continue
+        out.append({
+            "name": lab_path.stem,
+            "has_local_lab": True,
+            "lab_size": size,
+            "lab_preview": text_content[:60],
+        })
+    return out
+
+
+def upload_ref_local(
+    local_bank_dir: str, emotion: str, prompt_text: str,
+) -> Path:
+    """写 <local_bank_dir>/<emotion>.lab(UTF-8 文本一行)· 返写入路径。
+
+    PM SPEC-LOCK §#2:本轮只本地落 .lab · server 端 wav 仍手动放(SSH 范畴)。
+
+    安全:
+      - emotion 不允许含 path separator(./.. / / \\)避免 path traversal
+      - 目录不存在 → mkdir parents=True(允许新 model 的新 lab_dir 首次写)
+      - 已存在 .lab 直接 overwrite(类比"编辑 emotion 提示词")
+
+    Args:
+        local_bank_dir: 本地 .lab 缓存目录
+        emotion: emotion 名(将作 stem · 不含 .lab 后缀)
+        prompt_text: .lab 文件内容(ja prompt text · 通常一行)
+
+    Returns:
+        实际写入文件的 Path。
+
+    Raises:
+        ValueError: emotion 含非法字符
+        OSError: 文件 IO 失败
+    """
+    if not emotion or any(c in emotion for c in ("/", "\\", "..", ":")):
+        raise ValueError(
+            f"emotion contains path separator / unsafe chars: {emotion!r}"
+        )
+    bank = Path(local_bank_dir)
+    bank.mkdir(parents=True, exist_ok=True)
+    target = bank / f"{emotion}.lab"
+    target.write_text(prompt_text.strip(), encoding="utf-8")
+    logger.info(
+        "[gsv.upload_ref_local] wrote %s (%d bytes)",
+        target, target.stat().st_size,
+    )
+    return target
+
+
+def upload_ref_remote(
+    server_url: str, wav_remote_dir: str,
+    emotion: str, wav_bytes: bytes,
+) -> None:
+    """远程 wav 上传 · 本轮 stub · server 端推送走 SSH 范畴 · defer。"""
+    raise NotImplementedError(
+        "upload_ref_remote: 远程 wav 上传未实现 · 本轮 PM SPEC-LOCK 范围外 · "
+        "请 SSH server 手动放到 wav_remote_dir 下"
+    )
