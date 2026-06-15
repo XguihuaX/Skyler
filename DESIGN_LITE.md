@@ -748,6 +748,64 @@ backend/routes/backgrounds_api.py                   upload/delete endpoint + san
 
 ---
 
+## §7.6 Live2D 表演层(pixiCubism4 runtime · 2026-06-14 commit `c14065b`)
+
+### 7.6.1 设计
+
+SDK 自动跑的:`breath`(BodyAngleX/AngleY/Breath sin)、`eyeBlink`(model3.json Groups[EyeBlink].Ids 非空时自动周期)、`physics`、`pose`、`expression / motion` 经用户触发。SDK 没自动跑的"角色像活物"的小细节(转头幅度收紧 / 身体微晃 / per-model 水印关)走**单一 hook 复用 = `internalModel.on('beforeModelUpdate', ...)`**。
+
+`beforeModelUpdate` emit 时机(`pixi-live2d-display` cubism4 SDK):
+
+```
+motion.update → saveParameters → expression.update → eyeBlink → focus → breath
+              → physics → pose → emit('beforeModelUpdate') → model.update() → loadParameters
+```
+
+= SDK 所有 system 累加完之后 / 渲染前 · 用户钩子标准接口 · 改 codebase 仅 `frontend/src/lib/live2d/runtimes/pixiCubism4.ts` 一个文件。
+
+### 7.6.2 三件事(commit `c14065b`)
+
+| 项 | 实现 | 缺参数模型行为 |
+|---|---|---|
+| **转头 GAIN ±15°** | `Live2DModel.from(autoFocus: false)` + 自接 `window.mousemove` → 算 canvas-normalized `(x, y) ∈ [-1, 1]` → `internalModel.focusController.focus(x * FOCUS_GAIN, -y * FOCUS_GAIN)` · **`FOCUS_GAIN = 0.5`** → SDK `updateFocus` 内 ×30 倍率 → ParamAngleX/Y 满偏 **±15°**(SDK 原 ±30° 过头);Y 取负 = web 向下正 ↔ Live2D 向上正;复用现有 4 通道 gaze reset(mouseleave / blur / mouseout / mousemove 越界 clamp · 都调 `focusController.focus(0, 0)` 复位)| 全模型适用(标准 `ParamAngleX/Y/Z + EyeBallX/Y` 都在)|
+| **身体微晃 BodyAngle Y/Z** | hook 内每帧 `addParameterValueById('ParamBodyAngleY', sin(t/5400 ms))` + `('ParamBodyAngleZ', sin(t/7300 ms + 1.7))` · 振幅 `±1.5°` 错相周期慢速避免规则摇头 · **BodyAngleX 不动**(SDK breath 已经在 BodyAngleX 上跑 ±4° / 15.5s,叠加会过头) | 缺 `ParamBodyAngle*` 的模型(神宫白子 / 秧秧 / 妮可)`addParameterValueById` 对 unknown ID **silent no-op** → 自动跳过 |
+| **per-model 水印关**(冰糖)| 每帧 `addParameterValueById('Paramheadxy', 30)` + `('Paramheadxy3', 30)` 复刻冰糖模型自带的 `shuiyin1.exp3.json` / `shuiyin2.exp3.json`(原作者机制 = "按 1 / 2 键去水印" = 应用这俩表情)· 用 `add` 不 `set` → 跟 `red.exp3` 共用 `Paramheadxy` 时叠加 SDK 按 .moc3 烤入的 Min/Max 夹值,不破 red 几何 | 其它模型没这俩 ID → silent no-op,无副作用。**per-model 水印列表配置化**留后(若多 model 都有不同水印 ID 时重构) |
+
+### 7.6.3 反义命名陷阱(冰糖水印)
+
+冰糖 `cdi3.json` 把 6 个 `Paramheadxy*` 的 Name 字段标为"水印开关 / 立绘:神宫凉子 / 建模:杨小唸 / 发布者哔哩哔哩账号 …" — 字面像"水印 ON 控制器"。但真源是模型作者机制 "**按 1/2 键去水印**" = 应用 `shuiyin1/2.exp3.json`(+30 Add)→ `30 = 水印**关** / 0 = 水印**开**`(Name 反义,大概率指代"启用水印控制器"而非"开水印")。
+
+前两版按字面"30 ON / 0 OFF" set 0 全帧强制,等于**把水印死按在开**,真机两次没用。c14065b 是第 3 版方向修正(add 30 复刻 shuiyin 表情)。
+
+### 7.6.4 阿芙洛狄忒 fense(2026-06-14 上线)
+
+- `frontend/public/live2d/阿芙洛狄忒/fense/` · `.moc3 v4`(2.22 MB · 当前 Cubism 4 Core 渲得出)· 6 motion(`jingya / kaixin / shengqi / shuijiao / wink / yaotou`)+ 5 expression(`axy / heilian / kuku / lianhong / shengqi`)
+- **lipsync 零代码**:`coreModel` 含标准 `ParamMouthOpenY` · `pixiCubism4.ts:88 LIPSYNC_PARAM_ID = 'ParamMouthOpenY'` hardcode 兜底直接命中 · TTS amplitude 喂入即开合(不读 model3.json Groups[LipSync].Ids · 该字段空也无碍)
+- **2 处数据级 patch** 在 `model3.json`(在 `.gitignore` 排除目录内 · 本地生效不入 git):
+  - `Groups[EyeBlink].Ids: [] → ["ParamEyeLOpen","ParamEyeROpen"]` → SDK `CubismEyeBlink.create()` 自动周期 4~6s 眨眼
+  - `Motions group key: "" → "Idle"` → SDK 找 `groups.idle = "Idle"` 命中 · 6 motion 进入随机 idle 循环
+- `ParamBodyAngleX/Y/Z` 3/3 全在 · 7.6.2 身体微晃直接工作
+- License(`使用注意事项.txt`):灵境 Sanctuary · 免费使用 · 个人 / 企业 / 公会均可 · 允许直播 · 严禁二次修改 / 销售 / 出租
+
+### 7.6.5 关键路径速查
+
+```
+frontend/src/lib/live2d/runtimes/pixiCubism4.ts    全部表演层 · onBeforeModelUpdate hook(L271+)
+  · const FOCUS_GAIN = 0.5                         L103
+  · const SWAY_BODY_Y_AMP_DEG / Z_AMP_DEG = 1.5    L118-119
+  · const SWAY_BODY_Y_PERIOD_MS / Z = 5400 / 7300  L120-121
+  · const SWAY_BODY_Z_PHASE_RAD = 1.7              L122
+  · const BINGTANG_WATERMARK_OFF_PARAM_IDS         L150 (Paramheadxy / Paramheadxy3)
+  · const BINGTANG_WATERMARK_OFF_VALUE = 30        L154
+frontend/src/lib/live2d/runtime.ts                  Live2DRuntime interface(组件层调用 abstract)
+frontend/src/lib/live2d/registry.ts                 getRuntime() 工厂 · moc3 v5 warn 分支
+frontend/public/live2d/<slug>/<file>.model3.json    scanner 真源(一层深 glob)
+backend/services/live2d_scanner.py                  scanner + moc3 binary header parser
+backend/routes/live2d_api.py                        GET /api/live2d/models + POST /api/live2d/upload
+```
+
+---
+
 ## §8 当前 Tech Debt 优先级速览
 
 ### 🔴 v4.0.0 critical(ship 前必处理,按序)
