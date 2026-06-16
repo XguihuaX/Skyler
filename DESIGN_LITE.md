@@ -806,6 +806,166 @@ backend/routes/live2d_api.py                        GET /api/live2d/models + POS
 
 ---
 
+## §7.7 MCP 能力层(2026-06-15~16 batch · 已建 · HOLD 待真机验收 + 提交)
+
+> 状态分层(2026-06-16):
+> - **已真机验**:xhs 换包 rednote-mcp(只读 · cookie ready · 4 个 tool 拉通 · 唯一已真机端到端跑过的卡)
+> - **已建 / HOLD 待 PM 全链路真机 + 4 logical commit + push**:holder-task 模型 / SSE transport / 配置分文件 / per-tool confirm gate / browser_login 流 / batch2 自校验+45s 超时+confirm 队列+deny_all_pending+登录子进程
+> - **未做(deferred)**:auto-reconnect / health probe / TaskGroup 异常解包 / stdio install-once
+
+### 7.7.1 配置分层 + loader
+
+```
+config.yaml             (本地)主配置 · 不再放 mcp 段(④ 拆走)
+mcp.config.yaml         (本地·gitignored)真名单 + ${VAR} 占位
+mcp.config.example.yaml (入库)模板 + 4 范式注释 + 范式 6 browser_login
+DB mcp_credentials      真凭证(${VAR} 解析时拉)· 凭证 modal 写盘
+DB mcp_client_state     server enabled 持久态
+DB mcp_tool_state       tool enabled + require_confirmation(⑤ 新增列)
+```
+
+`backend/config/__init__.py:40 load_config_yaml()` merge 语义:`mcp.config.yaml > mcp.config.example.yaml > none` · 整段替换 `mcp_clients` / `mcp_server` 两 key,不深合并(L74)。
+
+### 7.7.2 transport 三种(`backend/mcp/client.py:177-211`)
+
+| transport_kind | SDK | conf 字段 |
+|---|---|---|
+| `stdio` | `mcp.client.stdio.stdio_client` | `command` + `args` + `env` · `shutil.which` 早 fail |
+| `http` (streamable) | `mcp.client.streamable_http.streamablehttp_client` | `url` + `headers` |
+| `sse` | `mcp.client.sse.sse_client` | `url`(支持 `${VAR}` 展开 · cred-aware 临时 patch `os.environ`) |
+
+`_CALL_TOOL_TIMEOUT_SECONDS = 45.0`(client.py:62)· 包 `asyncio.wait_for` 防慢 server / 死循环卡 capability handler 永等。
+
+### 7.7.3 client 生命周期 · holder-task 模型
+
+每条 client 一个**后台 holder task** = `_holder_task()`(client.py:142),`async with AsyncExitStack` 的 enter + exit **全在同一 task 内完成**,绕开 anyio cancel-scope 跨 task 报错。
+
+```
+_start_holder()  (client.py:400)
+  └─ create_task(_holder_task)
+       └─ async with stack:
+            stack.enter_async_context(stdio_client / streamable / sse)
+            stack.enter_async_context(ClientSession)
+            session.initialize()
+            list_tools → seed mcp_tool_state + seed_require_confirmation
+            handle.connected = True
+            ready_event.set()              ← _start_holder 此时返回
+            await stop_event.wait()         ← HOLD · 等外部
+       (退栈 · 自动 aclose · 同一 task)
+       holder_task = None
+
+_stop_holder()   (client.py:427)
+  └─ stop_event.set()  +  await holder_task
+```
+
+字段(`_ClientHandle` L69-94):`stop_event` / `ready_event` / `holder_task` / `connect_error` · 每次 `_start_holder` 重置 · holder 不复用。
+
+### 7.7.4 auth 两类
+
+| 类别 | 标识 | 凭证位置 | UI 入口 | enable 前置 |
+|---|---|---|---|---|
+| `env_required` | conf `env_required: [...]` | DB `mcp_credentials` | 凭证 modal(password input) | `missing_credentials` 空 |
+| `browser_login` | conf `auth: browser_login` | 子进程写 cookie 文件 | 「登录 / 重新登录」按钮(扫码) | `cookie_ready()` 真 |
+
+**browser_login 流**(`backend/mcp/browser_login.py`):
+- `start_login()` L89:`asyncio.create_subprocess_exec(login_command, *login_args)` + `asyncio.create_task(_watch_login_proc)` background watcher · HTTP endpoint 立即返,不 hang(10 分钟扫码窗)
+- `_watch_login_proc()` L165:子进程 `proc.communicate()` 退出后判 cookie 文件存在 → status 翻 `cookie_ready` / `error`
+- `cookie_ready()` L75 = 文件 exists + 非空 · `_holder_task` enter 时 L168 调,**没 cookie 直接 raise FileNotFoundError**,不开浏览器、不卡 holder
+- `is_browser_login_entry()` L236:`conf.get("auth") == "browser_login"` · 给 `list_status()` 决定按钮类型
+- 状态机 4 态(枚举与 `mcp_api.py:71 MCPLoginStatusItem` 必须同步,否则 response_model 序列化 500 全表):`no_task` / `running` / `cookie_ready` / `error`
+
+### 7.7.5 per-tool confirm gate(⑤)
+
+dangerous_tools 链路:
+
+```
+mcp.config.yaml entry · dangerous_tools: [tool, ...]
+            ↓ _holder_task ENTER(client.py 内)
+seed_require_confirmation(server, tool_names)
+   ─ tool_state.py:81 · INSERT OR IGNORE · 不覆盖用户 override
+            ↓ runtime call_tool
+is_confirmation_required(server, tool)   tool_state.py:37
+            ↓ True
+request_confirmation()   confirm_gate.py:111
+   ─ push WS event 'mcp_tool_confirm_request' via register_push_callback
+   ─ await asyncio.Event(120s timeout)
+   ─ accept   → 返回(handler 跑真 call_tool)
+   ─ reject   → raise ToolConfirmationRejected(非 CancelledError · handler 捕获返"已取消"给 LLM)
+   ─ timeout  → 同 reject
+   ─ no-callback (WS 未连) → 同 reject
+```
+
+WS 边界(`backend/routes/ws.py`):
+- 连上时 `register_push_callback(send_json)` · 断开时 `deny_all_pending()`(confirm_gate.py:218 · set Event accept=False · 防 holder task 永等)+ `register_push_callback(None)`
+- 入口 `mcp_tool_confirm_response` 早路由 → `resolve_confirmation(request_id, accept)`
+
+**零改 prompt**:dangerous tool 跟其它 tool 同走 `ToolRegistry` 注册 · LLM 看见的 schema 没变 · 是否拦在 call 边界判;tool 关 = 不 spawn / 不注册进 prompt / 零 token 负担。
+
+### 7.7.6 batch 2 自校验 + 边界
+
+| 项 | 位置 | 行为 |
+|---|---|---|
+| dangerous_tools 名对账 | `client.py` ENTER list_tools 之后 | `stale_dangerous`(配置里有 / 真 tool list 没)+ `possibly_naked`(真 list 像写操作但配置没列)各打一行 WARN · 不阻断启动 |
+| 45s call_tool 超时 | `client.py:62` `_CALL_TOOL_TIMEOUT_SECONDS = 45.0` | `asyncio.wait_for` 包 session.call_tool · 慢 server / 死循环不卡死 capability 永等 |
+| confirm 队列(并发) | `frontend/src/store/index.ts` | 单 confirm state → 数组 `mcpConfirmQueue` · `Modal` 渲队首 + "队列 +N" 角标 · `enqueueMcpConfirm` 按 request_id dedup |
+| WS 断开清理 | `confirm_gate.py:218` `deny_all_pending()` + `ws.py` finally | 断线前所有 pending confirm 自动 deny · holder 不挂 · LLM 看到"已取消"工具结果 |
+| 浏览器扫码登录 | `browser_login.py` 全文件 + `mcp_api.py:130-170` 两 endpoint | 见 §7.7.4 |
+
+### 7.7.7 已接 server 现状(`mcp.config.yaml`,16 entries)
+
+| 类别 | 名 | 凭证 | dangerous | 状态 |
+|---|---|---|---|---|
+| 内置工具/示例 | filesystem / filesystem-skyler / filesystem-test / everything / fetch | 无 / 路径 | — | enabled |
+| 搜索 / 笔记 | brave-search / notion | env_required | — | 凭证可填即用 |
+| 地图 / 天气 | amap(SSE) / amap-stdio(兜底) | `AMAP_MAPS_API_KEY` | — | SSE 主路径 |
+| 行情 / 阅读 | akshare / rss-reader / xmind | 无 | — | 现 npx/uvx 现拉 · 见 §8 stdio install-once 债 |
+| 邮箱 | email | 6 条 env | `send_email / reply_email / forward_email` | confirm 拦 |
+| 代码托管 | github | `GITHUB_PERSONAL_ACCESS_TOKEN` | 12 条(delete / push / merge / create_pr 等) | confirm 拦 |
+| 火车票 | trip12306 | 无 | — | **disabled** · 境外 IP 被 12306 TLS 重置,留 entry 不启用 |
+| 小红书 | xhs(rednote-mcp) | `auth: browser_login` · cookie `~/.mcp/rednote/cookies.json` | `[login]`(防 LLM 自调弹浏览器) | **已真机过**:扫码 OK · search_notes / get_note_content / get_note_comments 拉通 |
+
+### 7.7.8 关键路径速查
+
+```
+backend/mcp/client.py             holder-task / transport 三种 / call_tool 45s 超时
+  · _CALL_TOOL_TIMEOUT_SECONDS = 45.0    L62
+  · _ClientHandle stop/ready/holder      L69-94
+  · _holder_task                          L142
+  · transport stdio / http / sse          L177-211
+  · _start_holder / _stop_holder          L400 / L427
+  · list_status (auth + login 元数据)     L809-844
+backend/mcp/browser_login.py       扫码 login 子进程管理 · 状态机 4 态
+  · cookie_ready                          L75
+  · start_login + create_task watcher    L89
+  · _watch_login_proc(10min 扫码窗)     L165
+  · get_login_status / is_browser_login   L209 / L236
+backend/mcp/confirm_gate.py        WS push + asyncio.Event 拦截
+  · ToolConfirmationRejected              L43
+  · register_push_callback                L75
+  · request_confirmation(120s timeout)   L111
+  · resolve_confirmation                  L200
+  · deny_all_pending                      L218
+backend/mcp/tool_state.py          enabled + require_confirmation 持久态
+  · is_confirmation_required              L37
+  · seed_require_confirmation(幂等)      L81
+  · set_require_confirmation              L110
+backend/routes/mcp_api.py          REST 路由
+  · MCPLoginStatusItem(Literal 4 态)     L71
+  · MCPClientStatusItem(auth+login 字段) L78
+  · GET  /mcp/clients/status              L105
+  · POST /mcp/clients/{name}/login        L130
+  · GET  /mcp/clients/{name}/login        L154
+  · POST /mcp/clients/{name}/reconnect    L172
+backend/config/__init__.py         loader merge mcp.config.yaml > example
+  · load_config_yaml                      L40
+  · mcp_path / mcp_example_path           L59-65
+backend/database/migrations/inv_mcp_tool_confirmation.py  ⑤ 加 require_confirmation 列
+mcp.config.yaml                    本地真名单 · gitignored
+mcp.config.example.yaml            6 范式模板 · 入库
+```
+
+---
+
 ## §8 当前 Tech Debt 优先级速览
 
 ### 🔴 v4.0.0 critical(ship 前必处理,按序)
@@ -1092,6 +1252,63 @@ per-card 错峰甩(spec 原意的"发牌")需要 FanLayout 配合 — framer-mot
 - 每个 chunk 的 audit 决策记录 / 实测覆盖 / 风险评估
 
 追溯历史决策 / 查 chunk 详细 motivate 前可回查归档版。日常设计真源用本 LITE 即可。
+
+---
+
+## §17 Parked · 规划设计(未实现 · 不算当前架构正文)
+
+> 本区收录**规划级设计**:目标 + 模块拆解 + 关系图。**不锚现役代码**(因为还没写)。
+>
+> 当前架构正文(§1-§16)必须锚真实代码;本区放未实现 idea 的设计草图。任何 brick 上线时把对应行**转出** → 进 §7.x 当前段 + 用 `file:line` 锚改写。
+
+### 17.1 AI character director(Live2D × emotion × sticker)
+
+**目标**:VTuber 是被人操的;Skyler 要当**操偶人** —— LLM 在 curated 素材库上做导演。同一个 `<emotion>` 信号同时驱动 3 条输出通道,canvas 上的模型 + 聊天流里的图像协同表达。
+
+**输入信号**(已实现):
+- 主源:LLM 输出第一句 `<emotion>X</emotion>` 锁定本轮 emotion(sanitize chain 已提取 · 见 §3 数据流图 L121 + §5.6)
+- 兼用:`<motion>Y</motion>`(sanitize 已提取但 director 未消费)
+- 上下文:`character_states`(mood / attention / 当前 activity)
+
+**三个素材仓库**(规划 · 未实现):
+
+| 仓库 | 内容 | 已有原料 | 缺什么 |
+|---|---|---|---|
+| **motion bank**(在 Live2D 模型上) | 每角色 N 个 `.motion3.json` · 按 emotion 标 tag | 阿芙洛狄忒 fense 6 motion(jingya/kaixin/shengqi/shuijiao/wink/yaotou) · 冰糖 含一批 motion | tag schema · 选择策略(emotion → 候选 → cooldown / weighted random / 防过密) |
+| **expression bank**(在 Live2D 模型上) | 每角色 N 个 `.exp3.json` · 按 emotion 标 tag | 阿芙洛狄忒 fense 5 expression(axy/heilian/kuku/lianhong/shengqi) · 冰糖含 red + shuiyin1/2 等 | 同 motion · 注意 watermark 类 exp(冰糖 shuiyin1/2)标 system-only 不进 director 池 |
+| **sticker bank**(在聊天流图通道 · **非模型**) | 每角色 N 张 PNG/WebP · IP-clean 原创 · 按 emotion 标 tag | 暂无 · 设计目标:全角色等量补,自画 / 委托,不抓互联网 | 文件目录约定 · tag metadata · 聊天消息插图协议(WS push) · 每角色 license.txt |
+
+**三条输出通道**:
+
+| 通道 | 渲染层 | 关键差异 |
+|---|---|---|
+| ① **Live2D motion**(模型上) | canvas 内 pixi-live2d-display(`pixiCubism4.ts`)· SDK `model.motion(group, idx)` 或随机 idle | 模型动起来(挥手 / 摇头 / 翻身) |
+| ② **Live2D expression**(模型上) | 同上 · SDK `model.expression(name)` | 模型脸切换(脸红 / 黑脸 / 哭) |
+| ③ **sticker**(聊天流插图 · **非模型**) | 聊天气泡渲 `<img>` · WS push `sticker_chosen` 事件 → 前端拉本地图 | 模型完全不动 · 聊天流出一张图 |
+
+**关键设计纪律**:
+- ①② 在 **canvas 上的 Live2D 模型**(同一 `pixiCubism4.ts` runtime · 单 hook 接 SDK)
+- ③ 是 **聊天流图通道**(完全不动模型 · 类似 IM 发表情包)
+- 三者是**并行通道不是叠加** —— 同一 `<emotion>` 信号可同时触发多个 / 也可只触发某一条;director 决策"哪条 + 谁"
+- 三仓库共享同一 tag schema(emotion / valence / arousal / cooldown)· 目录/路径/管理 UI 独立
+- sticker 必须 **IP-clean 原创**(自画 / 委托;不抓互联网)· license 跟 Live2D 模型同纪律
+- director 选择策略不写死:每角色独立 weights · 未来可让 LLM 显式 override(如 `<sticker>name</sticker>` tag)
+
+**brick 顺序**(emergent 建,详 ROADMAP backlog):
+
+1. **brick #1**(✅ done · §7.6)`pixiCubism4` 表演层 = idle sway(BodyAngleY/Z ±1.5°)+ head-turn(focus GAIN ±15°)+ 眨眼 + 呼吸 + 物理/姿态 SDK 自动 idle = "活物"基线
+2. **brick #2** `<emotion>` → expression 切换(最小可见 · 单角色试 · 单仓库)
+3. **brick #3** motion bank + 选择策略(cooldown / weighted / 防过密)
+4. **brick #4** sticker bank + 聊天流通道 + tag schema
+5. **brick #5** 跨仓库 director(同一 emotion 协同三通道 · 防三通道同时炸)
+6. **brick #6** 管理 UI(每仓库 CRUD + tag 编辑 + 预览 + 角色级 weights)
+
+**关键路径占位**(实现时改 file:line):
+```
+brick #2 信号:                后端 ws.py 第一句 <emotion> 已 parse → 推 WS event
+brick #2 实现:                frontend/src/lib/live2d/runtimes/pixiCubism4.ts · 加 expression bank + SDK model.expression(name)
+brick #4 协议:                WS 新 event 'sticker_chosen' { url, alt } → 聊天气泡内联渲 <img>
+```
 
 ---
 

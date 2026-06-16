@@ -74,9 +74,23 @@ Adding a new skill is five lines. Adding an external MCP server is one config en
 
 ### 2. Bidirectional MCP
 
-Skyler is both an MCP **client** (consuming any MCP server: filesystem, brave-search, Notion, anything else you connect) **and** an MCP **server** (exposing its capability registry, character state, and memory to Claude Desktop, Cursor, Claude Code, or any other MCP client).
+Skyler is both an MCP **client** (consuming any MCP server) **and** an MCP **server** (exposing its capability registry, character state, and memory to Claude Desktop, Cursor, Claude Code, or any other MCP client).
 
-Your AI character becomes a node in the MCP ecosystem, not an island.
+The client side is config-driven (Notion-style): a `mcp.config.yaml` entry adds a server, the MCP panel toggles it on, and the LLM sees its tools the next turn. Supports **stdio / streamable HTTP / SSE** transports; per-server credentials live in a local DB and fill via a modal; servers that need a browser scan-code login (e.g. Xiaohongshu via `rednote-mcp`) get a "登录 / 重新登录" button that drives a subprocess instead of an env-var modal; tools marked `dangerous_tools` go through a per-call confirmation gate (you accept in the UI before the call executes — reject and the LLM sees a "canceled" tool result without breaking the stream).
+
+Currently wired servers (out of 16 entries):
+
+- 🗺 **amap** — Chinese map / weather (SSE, official + stdio fallback)
+- 📈 **akshare** — A/HK/US stock market data (read-only)
+- 📧 **email** — IMAP/SMTP (QQ auth code / Gmail app password), `send_email` gated
+- 🧠 **xmind** — mindmap generator
+- 📰 **rss-reader** — feed reader (self-hosted RSS, RSSHub for CN sites)
+- 🌐 **fetch** — web pages → markdown
+- 🐙 **github** — full API, 12 write/delete tools gated behind confirm
+- 📕 **xhs** (`rednote-mcp`, read-only) — Xiaohongshu search / note / comments via scan-code login
+- 🚂 **trip12306** — disabled by default (12306 geo-blocks non-CN IPs at TLS layer)
+
+Plus the built-in `filesystem` / `everything` examples. Your AI character becomes a node in the MCP ecosystem, not an island.
 
 ### 3. Persona-level state machine
 
