@@ -1324,3 +1324,17 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             if not t.done():
                 t.cancel()
         connection_manager.unregister(user_id)
+        # 2026-06-15 ⑤ · 解绑 MCP confirm push callback · 防旧 callback 试图
+        # send_json 到已关闭的 socket(会抛 RuntimeError)。注意:若有重连且
+        # 旧连接 finally 跑得比新连接 register 晚,会误清新 callback · 实际
+        # Skyler 单用户连接稳定 + 上方注册是覆盖语义 · 该 race 概率低且
+        # 影响仅"confirm 弹不出" · 安全侧 DENY 兜底。
+        # 2026-06-15 batch 2 [confirm 边界] · 同时 deny 所有挂起 confirm ·
+        # 防孤儿 task 永远 await 死(用户重连后看不到旧 modal · 旧 capability
+        # handler 接 DENY 返"已取消" · LLM 继续)。
+        try:
+            from backend.mcp import confirm_gate as _mcp_confirm_gate
+            _mcp_confirm_gate.deny_all_pending()
+            _mcp_confirm_gate.register_push_callback(None)
+        except Exception:  # noqa: BLE001
+            pass

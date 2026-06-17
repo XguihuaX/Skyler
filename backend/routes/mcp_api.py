@@ -63,6 +63,18 @@ class MCPToolItem(BaseModel):
     input_schema: Optional[dict[str, Any]] = None
 
 
+# 2026-06-16 batch 2 [browser_login] · login 元数据 schema
+# status 枚举必须跟 backend/mcp/browser_login.py 同步 · 多一个或漏一个 → FastAPI
+# response_model 序列化 500 全表(整 list_status 接口炸 · 前端 MCP 面板白屏)。
+# 现有 4 个穷尽点:_LoginTask 初始 "no_task" / start_login 失败分支 "error" /
+# 启动子进程后 "running" / _watch_login_proc cookie 就位 "cookie_ready"。
+class MCPLoginStatusItem(BaseModel):
+    status: Literal["no_task", "running", "cookie_ready", "error"]
+    cookie_path: Optional[str] = None
+    cookie_present: bool = False
+    error: Optional[str] = None
+
+
 class MCPClientStatusItem(BaseModel):
     name: str
     description: str
@@ -75,6 +87,13 @@ class MCPClientStatusItem(BaseModel):
     # v3.5 chunk 7：UI 凭证配置驱动
     env_required: list[str] = []
     missing_credentials: list[str] = []
+    # 2026-06-16 batch 2 [browser_login] · 前端面板按 auth 决定按钮类型
+    # ("配置凭证" vs "登录/重新登录")· null = 走 env_required 路径(github/notion 等)
+    # 字段 source:client.py::list_status L818-839 + browser_login.get_login_status
+    # 先前 schema 没声明 → FastAPI 静默剥字段 → 前端 client.auth=undefined →
+    # isBrowserLogin=false → xhs 卡按钮缺失。
+    auth: Optional[Literal["browser_login"]] = None
+    login: Optional[MCPLoginStatusItem] = None
     # UX-001：connected server 已注册的 tool 列表 + 单 tool enabled override
     tools: list[MCPToolItem] = []
 
@@ -93,6 +112,61 @@ async def clients_status() -> MCPClientsStatusResponse:
 class ReconnectResponse(BaseModel):
     status: str
     detail: str | None = None
+
+
+# 2026-06-15 batch 2 [browser_login] · browser_login 类 server 的扫码登录端点
+# - POST /api/mcp/clients/{name}/login   启动登录子进程 · 立即返 status
+# - GET  /api/mcp/clients/{name}/login   轮询 · 返 status + cookie_present
+
+
+class LoginStatusResponse(BaseModel):
+    server_name: str
+    status: Literal["no_task", "running", "cookie_ready", "error"]
+    cookie_path: Optional[str] = None
+    cookie_present: bool = False
+    error: Optional[str] = None
+
+
+@router.post(
+    "/mcp/clients/{name}/login", response_model=LoginStatusResponse,
+)
+async def start_browser_login(name: str) -> LoginStatusResponse:
+    """启动浏览器扫码登录子进程 · 立即返(不 hang 等扫码完成)。
+
+    前端轮询 GET /mcp/clients/{name}/login 等 status 翻 cookie_ready · 然后
+    才 enable server(holder 才能拿 cookie 起来)。
+    """
+    from backend.mcp import client as mcp_client
+    from backend.mcp import browser_login as _browser_login
+    if name not in mcp_client._clients:
+        raise HTTPException(status_code=404, detail=f"client {name!r} not found")
+    handle = mcp_client._clients[name]
+    if not _browser_login.is_browser_login_entry(handle.conf):
+        raise HTTPException(
+            status_code=400,
+            detail=f"client {name!r} entry not configured as auth: browser_login",
+        )
+    task = await _browser_login.start_login(name, handle.conf)
+    info = _browser_login.get_login_status(name, handle.conf)
+    return LoginStatusResponse(server_name=name, **info)
+
+
+@router.get(
+    "/mcp/clients/{name}/login", response_model=LoginStatusResponse,
+)
+async def get_browser_login_status(name: str) -> LoginStatusResponse:
+    from backend.mcp import client as mcp_client
+    from backend.mcp import browser_login as _browser_login
+    if name not in mcp_client._clients:
+        raise HTTPException(status_code=404, detail=f"client {name!r} not found")
+    handle = mcp_client._clients[name]
+    if not _browser_login.is_browser_login_entry(handle.conf):
+        raise HTTPException(
+            status_code=400,
+            detail=f"client {name!r} entry not configured as auth: browser_login",
+        )
+    info = _browser_login.get_login_status(name, handle.conf)
+    return LoginStatusResponse(server_name=name, **info)
 
 
 @router.post("/mcp/clients/{name}/reconnect", response_model=ReconnectResponse)

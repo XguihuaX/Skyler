@@ -638,6 +638,28 @@ export function useWebSocket(): UseWebSocketReturn {
     }));
   }, [store]);
 
+  // 2026-06-15 ⑤ · MCP tool 确认 modal 回应 · MCPConfirmModal accept/reject
+  // 按钮调它 · 发 mcp_tool_confirm_response 帧 + shift 队首 · 下一条自动弹。
+  const sendMcpToolConfirmResponse = useCallback(
+    (requestId: string, accept: boolean) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.warn('[WS] not connected, drop mcp confirm response');
+        // 即使 WS 断开也 shift 出队(防 UI 卡在已无效 modal)· 后端 deny_all_pending
+        // 已经处理孤儿。
+        store.getState().shiftMcpConfirm(requestId);
+        return;
+      }
+      ws.send(JSON.stringify({
+        type: 'mcp_tool_confirm_response',
+        request_id: requestId,
+        accept,
+      }));
+      store.getState().shiftMcpConfirm(requestId);
+    },
+    [store],
+  );
+
   const sendInterrupt = useCallback(() => {
     const ws = wsRef.current;
     const s = store.getState();

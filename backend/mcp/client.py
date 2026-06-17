@@ -807,11 +807,23 @@ async def list_status() -> list:
          用 toggle 并提示"先配置凭证"）
     """
     out = []
+    from backend.mcp import browser_login as _browser_login  # noqa: PLC0415
     for name, handle in _clients.items():
         configured = set((await _creds.get_env(name)).keys())
         required = handle.env_required()
         missing = [k for k in required if k not in configured]
         effective_enabled = await _effective_enabled(handle)
+        # 2026-06-15 batch 2 [browser_login] · auth 元数据给前端面板决定按钮类型
+        # ("配置凭证" vs "登录 / 重新登录")· 状态由 get_login_status 给。
+        auth_kind = (
+            "browser_login"
+            if _browser_login.is_browser_login_entry(handle.conf)
+            else None
+        )
+        login_info = (
+            _browser_login.get_login_status(name, handle.conf)
+            if auth_kind == "browser_login" else None
+        )
         out.append({
             "name": name,
             "description": handle.description(),
@@ -823,6 +835,8 @@ async def list_status() -> list:
             "last_error": handle.last_error,
             "env_required": required,
             "missing_credentials": missing,
+            "auth": auth_kind,
+            "login": login_info,
             # UX-001：per-server tool 列表 + 单 tool enabled 状态。
             # disconnected → []；UI 用 server enabled + tools 长度做"X cap"角标。
             "tools": list(handle.tools),

@@ -15,6 +15,18 @@ export interface MCPToolStatus {
   input_schema: Record<string, unknown> | null;
 }
 
+// 2026-06-15 batch 2 [browser_login] · 浏览器扫码登录元数据
+// auth: null = 走 env_required(凭证 modal)/ 无凭证 · "browser_login" = 走扫码
+// login.status: no_task / running / cookie_ready / error
+// login.cookie_present: 历史 cookie 是否还在(刷新后即使 status=no_task,只要
+// cookie_present=true 仍可 enable)
+export interface MCPLoginStatus {
+  status: 'no_task' | 'running' | 'cookie_ready' | 'error';
+  cookie_path: string | null;
+  cookie_present: boolean;
+  error: string | null;
+}
+
 export interface MCPClientStatus {
   name: string;
   description: string;
@@ -26,6 +38,8 @@ export interface MCPClientStatus {
   last_error: string | null;
   env_required: string[];
   missing_credentials: string[];
+  auth: 'browser_login' | null;
+  login: MCPLoginStatus | null;
   // UX-001：connected server 暴露的 tool 列表 + 单 tool enabled override。
   // disconnected → []。
   tools: MCPToolStatus[];
@@ -335,6 +349,59 @@ export async function invokeMCPTool(
  * - ``foo${A}bar${B}`` → ["A", "B"]
  * - ``literal value`` → []
  */
+// ---------------------------------------------------------------------------
+// 2026-06-15 batch 2 [browser_login] · 浏览器扫码登录端点
+// ---------------------------------------------------------------------------
+
+export interface MCPLoginStatusResponse {
+  server_name: string;
+  status: 'no_task' | 'running' | 'cookie_ready' | 'error';
+  cookie_path: string | null;
+  cookie_present: boolean;
+  error: string | null;
+}
+
+/** POST /api/mcp/clients/{name}/login — 启动浏览器扫码登录子进程。
+ *
+ * 立即返(不 hang 等扫码) · 前端轮询 getMCPLoginStatus 查 cookie_ready。
+ * 错误码:404 name 不存在 / 400 entry 非 browser_login。
+ */
+export async function startMCPBrowserLogin(
+  name: string,
+): Promise<MCPLoginStatusResponse> {
+  const res = await fetch(
+    `${BACKEND_BASE}/api/mcp/clients/${encodeURIComponent(name)}/login`,
+    { method: 'POST' },
+  );
+  if (!res.ok) {
+    let msg = `start login failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) msg = String(j.detail);
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return (await res.json()) as MCPLoginStatusResponse;
+}
+
+/** GET /api/mcp/clients/{name}/login — 轮询登录状态。 */
+export async function getMCPLoginStatus(
+  name: string,
+): Promise<MCPLoginStatusResponse> {
+  const res = await fetch(
+    `${BACKEND_BASE}/api/mcp/clients/${encodeURIComponent(name)}/login`,
+  );
+  if (!res.ok) {
+    let msg = `get login status failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) msg = String(j.detail);
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return (await res.json()) as MCPLoginStatusResponse;
+}
+
 export function extractEnvPlaceholders(
   env: Record<string, string> | undefined,
 ): string[] {
