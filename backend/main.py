@@ -86,6 +86,10 @@ from backend.database.migrations.v3_5_chunk5a_character_background import (
 from backend.database.migrations.v3_5_chunk7_mcp_credentials import (
     run_migration as migrate_v3_5_chunk7_mcp_credentials,
 )
+# 2026-06-15 ⑤ · mcp_tool_state 加 require_confirmation 列
+from backend.database.migrations.inv_mcp_tool_confirmation import (
+    run_migration as migrate_inv_mcp_tool_confirmation,
+)
 from backend.database.migrations.v3_5_chunk6b_hotfix3_clean_polluted_memories import (
     run_migration as migrate_v3_5_chunk6b_hotfix3,
 )
@@ -347,6 +351,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── 1b15. V3.5 chunk 7: mcp_credentials + mcp_client_state 表 ────────
     # 必须在 init_clients_from_config 之前（client.py 读 DB enabled override）
     await migrate_v3_5_chunk7_mcp_credentials()
+
+    # ── 1b15.5. INV (2026-06-15) ⑤: mcp_tool_state 加 require_confirmation
+    # 列。必须在 init_clients_from_config 之前(_holder_task ENTER 会 seed
+    # dangerous_tools 的 require_confirmation=1)。幂等。
+    await migrate_inv_mcp_tool_confirmation()
 
     # ── 1b16. V3.5 chunk 6b hotfix-3: 一次性清存量 SUSPICIOUS_TAG_RE 污染 ─
     # 跑前自动备份 momoos.db → .backup-before-hotfix3（已存在则跳过）。幂等

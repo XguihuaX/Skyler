@@ -13,6 +13,8 @@ export interface AppApi {
   sendCharacterSwitch: (
     characterId: number, conversationId: number | null,
   ) => void;
+  // 2026-06-15 ⑤ · MCP tool 调用前确认 modal 回应
+  sendMcpToolConfirmResponse: (requestId: string, accept: boolean) => void;
   startManual: () => Promise<void>;
   stopManualAndSend: () => Promise<void>;
   toggleVad: () => Promise<void>;

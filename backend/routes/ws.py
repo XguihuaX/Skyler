@@ -665,6 +665,21 @@ async def _handle_message(
     incoming_conv: Optional[int] = int(raw_conv) if raw_conv is not None else None
     incoming_char: Optional[int] = int(raw_char) if raw_char is not None else None
 
+    # 2026-06-15 ⑤ · MCP tool confirm response 路由 · 客户端 modal accept/reject
+    # 后回这一帧 · resolve confirm gate 内的 pending asyncio.Event。早出,不进
+    # 后续 conv/char 解析。
+    if msg_type == "mcp_tool_confirm_response":
+        request_id = (data.get("request_id") or "").strip()
+        accept = bool(data.get("accept"))
+        from backend.mcp.confirm_gate import resolve_confirmation
+        ok = resolve_confirmation(request_id, accept)
+        if not ok:
+            logger.warning(
+                "[ws] mcp_tool_confirm_response unknown request_id=%s",
+                request_id[:8] if request_id else "?",
+            )
+        return
+
     # 路径 7 / Rule B(绑定语义)— ``character_switch`` 是新 WS 帧 type:
     # 前端切角色时通知 backend 当前 UI 状态,不触发 LLM,仅更新连接状态。
     # 必须在 _resolve_conv_char 之前处理(避免反查 chat_history 干扰)。
@@ -1230,6 +1245,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     user_id = _default_user_id()
     connection_manager.register(user_id, websocket)
     state = _TurnState()
+    # 2026-06-15 ⑤ · MCP confirm gate push callback · 注册 ws.send_json wrapper ·
+    # capability handler 调 request_confirmation 时通过此 callback 推 modal 弹窗。
+    # 多 WS 连接场景(罕见 · Skyler 单用户)· 后注册覆盖先注册 · 单 callback ok。
+    from backend.mcp import confirm_gate as _mcp_confirm_gate
+    async def _confirm_push(payload: dict) -> None:
+        await websocket.send_json(payload)
+    _mcp_confirm_gate.register_push_callback(_confirm_push)
     logger.info("WebSocket connection opened")
     try:
         while True:

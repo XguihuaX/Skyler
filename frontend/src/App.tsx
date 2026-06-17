@@ -7,6 +7,7 @@ import Panel from './modes/Panel';
 import NotificationToast from './components/NotificationToast';
 import CharacterStatePanel from './components/CharacterStatePanel';
 import ActivityPermissionModal from './components/ActivityPermissionModal';
+import MCPConfirmModal from './components/MCPConfirmModal';
 import LoadingScreen from './components/loading/LoadingScreen';
 import CharacterGallery from './components/character/CharacterGallery';
 import { AppApiContext, AppApi } from './contexts/appApi';
@@ -202,6 +203,7 @@ function MainApp() {
 
   const {
     sendText, sendVoice, sendInterrupt, sendTouch, sendCharacterSwitch,
+    sendMcpToolConfirmResponse,
   } = useWebSocket();
   const { startManual, stopManualAndSend, toggleVad } = useAudio({
     sendVoice, sendInterrupt,
@@ -210,10 +212,12 @@ function MainApp() {
   const api: AppApi = useMemo(
     () => ({
       sendText, sendVoice, sendInterrupt, sendTouch, sendCharacterSwitch,
+      sendMcpToolConfirmResponse,
       startManual, stopManualAndSend, toggleVad,
     }),
     [
       sendText, sendVoice, sendInterrupt, sendTouch, sendCharacterSwitch,
+      sendMcpToolConfirmResponse,
       startManual, stopManualAndSend, toggleVad,
     ],
   );
@@ -247,6 +251,7 @@ function MainApp() {
         {mode === 'widget' && <CharacterStatePanel position="widget" />}
         <ActivityPermissionModal />
         <NotificationToast />
+        <MCPConfirmModal />
       </div>
       {/* v4-fan chunk 4: Character Gallery overlay。store.galleryOpen 由
           TopBar GalleryThumbnails 按钮翻动;Gallery 自身管 close/Esc/CTA

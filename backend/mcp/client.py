@@ -57,6 +57,10 @@ from backend.mcp import tool_state as _tool_state
 
 logger = logging.getLogger(__name__)
 
+# 2026-06-15 batch 2 [超时] · call_tool 包 wait_for · 防 MCP server 慢路径或
+# 网络挂导致 LLM stream 卡死。45s 覆盖大多数工具的真实慢路径。
+_CALL_TOOL_TIMEOUT_SECONDS = 45.0
+
 
 # ---------------------------------------------------------------------------
 # Client 状态对象
@@ -471,12 +475,71 @@ def _capability_from_external_tool(
 
     # closure 默认参数固化 tool.name + session reference —— 避免循环里
     # 闭包共享同一个变量
-    def _make_handler(_session: ClientSession, _tname: str = tool.name):
+    def _make_handler(
+        _session: ClientSession,
+        _tname: str = tool.name,
+        _sname: str = handle.name,
+        _cap_name: str = cap_name,
+    ):
         async def _handler(**kwargs) -> Any:
             # 屏蔽 ChatAgent 注入的 user_id（外部 MCP 不知道这个概念，传过去
             # 容易 schema validation 失败）
             kwargs.pop("user_id", None)
-            result = await _session.call_tool(_tname, kwargs)
+            # 2026-06-15 ⑤ · confirm gate · runtime 拦截:dangerous tool 调用
+            # 前 push WS event + await accept · reject/超时/WS 未连接 → 抛
+            # ToolConfirmationRejected · 这里捕获后返用户友好字符串给 LLM 当
+            # tool-result(不抛 CancelledError 防中断对话)。
+            try:
+                if await _tool_state.is_confirmation_required(_sname, _tname):
+                    from backend.mcp.confirm_gate import (  # noqa: PLC0415
+                        request_confirmation,
+                    )
+                    await request_confirmation(
+                        cap_name=_cap_name,
+                        server_name=_sname,
+                        tool_name=_tname,
+                        args=kwargs,
+                    )
+            except Exception as exc:  # noqa: BLE001 · 不让 confirm 错误炸主对话
+                from backend.mcp.confirm_gate import (  # noqa: PLC0415
+                    ToolConfirmationRejected,
+                )
+                if isinstance(exc, ToolConfirmationRejected):
+                    return {
+                        "isError": False,
+                        "text": f"⚠️ {exc}",
+                    }
+                # 非预期异常 · log + DENY · 不放行
+                logger.exception(
+                    "[mcp.client] confirm gate unexpected error for %s",
+                    _cap_name,
+                )
+                return {
+                    "isError": True,
+                    "text": f"确认门内部错误,已取消调用:{exc}",
+                }
+            # 2026-06-15 batch 2 [超时] · call_tool 包 wait_for(45s) ·
+            # 超时返干净"工具超时"给 LLM 当 tool-result(不抛 CancelledError
+            # 中断主对话 task)。45s 覆盖大多数 MCP 工具(github API 慢路径 +
+            # filesystem 大目录 + fetch 慢页)· 真要更长的工具(eg fish TTS
+            # 合成)走自己流式接口 · 不在 MCP 工具范畴。
+            try:
+                result = await asyncio.wait_for(
+                    _session.call_tool(_tname, kwargs),
+                    timeout=_CALL_TOOL_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[mcp.client] %s tool=%s call_tool timeout after %.0fs",
+                    _sname, _tname, _CALL_TOOL_TIMEOUT_SECONDS,
+                )
+                return {
+                    "isError": True,
+                    "text": (
+                        f"⏱️ 工具 {_sname}.{_tname} 调用超时"
+                        f"({int(_CALL_TOOL_TIMEOUT_SECONDS)}s)· 已取消"
+                    ),
+                }
             # CallToolResult.content 是 list[ContentBlock]；优先取第一个 text
             # 块直出 string；多个块 / 非 text 块退化成 list。
             blocks = list(result.content or [])

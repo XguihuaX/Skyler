@@ -63,6 +63,8 @@ interface UseWebSocketReturn {
   sendCharacterSwitch: (
     characterId: number, conversationId: number | null,
   ) => void;
+  // 2026-06-15 ⑤ · MCP tool 调用前确认 modal 回应
+  sendMcpToolConfirmResponse: (requestId: string, accept: boolean) => void;
   isConnected: () => boolean;
 }
 
@@ -414,6 +416,30 @@ export function useWebSocket(): UseWebSocketReturn {
         s.setCurrentToolName(null);
         break;
 
+      // 2026-06-15 ⑤ · MCP tool 调用前确认请求 · backend 给 dangerous tool
+      // 调用 wrap · 推这条 · 前端 MCPConfirmModal 接 store.mcpConfirmRequest
+      // 弹窗 · 用户 accept/reject 后回 mcp_tool_confirm_response 帧。
+      case 'mcp_tool_confirm_request': {
+        const m = msg as {
+          request_id?: string;
+          cap_name?: string;
+          server_name?: string;
+          tool_name?: string;
+          args_preview?: string;
+        };
+        if (m.request_id && m.cap_name && m.server_name && m.tool_name) {
+          // 2026-06-15 batch 2 [confirm 边界] · 入队 · 不覆盖前一条
+          s.enqueueMcpConfirm({
+            request_id: m.request_id,
+            cap_name: m.cap_name,
+            server_name: m.server_name,
+            tool_name: m.tool_name,
+            args_preview: m.args_preview ?? '',
+          });
+        }
+        break;
+      }
+
       default:
         console.warn('[WS] unknown message type:', msg.type);
     }
@@ -453,6 +479,10 @@ export function useWebSocket(): UseWebSocketReturn {
       console.log('[WS] disconnected');
       store.getState().setConnection('disconnected');
       store.getState().setWsReady(false);
+      // 2026-06-15 batch 2 [confirm 边界] · WS 断 · 清挂起 confirm queue ·
+      // 后端 deny_all_pending 已处理孤儿 capability handler · 前端 modal 不
+      // 该再弹(用户没法 accept · 后端也不再 await)。
+      store.getState().clearMcpConfirmQueue();
       wsRef.current = null;
       const delay = Math.min(
         RECONNECT_BASE_MS * Math.pow(2, reconnectAttemptsRef.current),
@@ -707,6 +737,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
   return {
     sendText, sendVoice, sendInterrupt, sendTouch, sendCharacterSwitch,
+    sendMcpToolConfirmResponse,
     isConnected,
   };
 }
