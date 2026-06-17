@@ -18,6 +18,7 @@ import {
 } from 'pixi-live2d-display/cubism4';
 
 import type { Live2DRuntime, ModelHandle } from '../runtime';
+import { DEFAULT_FRAMING, type Live2DFraming } from '../settings';
 
 // pixi-live2d-display 内部用 window.PIXI 取 Ticker 等共享实例。必须在创建任何
 // Live2DModel 之前完成挂载，否则模型的自动 ticker 不会跑（黑屏 / 不眨眼）。
@@ -87,6 +88,9 @@ interface MountContext {
   // 中央。两个 listener 注册一次，cleanup 函数同时移除两个，避免 _teardown
   // 时分散维护。
   gazeResetCleanup: (() => void) | null;
+  // 2026-06-16 INV · per-model framing(取景)· 叠加在 base fit 之上。
+  // mount 时默认 1.0/0/0 = 跟 base 等同 · setFraming 后立即重 _fit。
+  framing: Live2DFraming;
 }
 
 /**
@@ -115,6 +119,7 @@ export class PixiCubism4Runtime implements Live2DRuntime {
       resizeObserver: null,
       cancelled: false,
       gazeResetCleanup: null,
+      framing: { ...DEFAULT_FRAMING },
     };
     this.contexts.set(handle.id, ctx);
 
@@ -333,10 +338,29 @@ export class PixiCubism4Runtime implements Live2DRuntime {
     const w = ctx.app.renderer.width / (ctx.app.renderer.resolution || 1);
     const h = ctx.app.renderer.height / (ctx.app.renderer.resolution || 1);
     if (w <= 0 || h <= 0) return;
-    const scale = Math.min(w / ctx.nativeW, h / ctx.nativeH);
-    ctx.model.scale.set(scale);
-    ctx.model.x = (w - ctx.nativeW * scale) / 2;
-    ctx.model.y = (h - ctx.nativeH * scale) / 2;
+    // base fit-to-canvas:contain · 居中。承接 ResizeObserver 父容器变化 ·
+    // 不能动 base 算法。framing 是其上的乘 + 加(2026-06-16 INV)。
+    const baseScale = Math.min(w / ctx.nativeW, h / ctx.nativeH);
+    const baseX = (w - ctx.nativeW * baseScale) / 2;
+    const baseY = (h - ctx.nativeH * baseScale) / 2;
+    const finalScale = baseScale * ctx.framing.scale;
+    // scale 改了 → 物体宽变 ctx.nativeW * finalScale · 在 base 居中的基础上
+    // 加 (baseScale - finalScale) 那部分回中心 + 用户 offset。
+    // 等价写法:直接居中到 finalScale 后再加 offset。
+    ctx.model.scale.set(finalScale);
+    ctx.model.x = (w - ctx.nativeW * finalScale) / 2 + ctx.framing.offsetX;
+    ctx.model.y = (h - ctx.nativeH * finalScale) / 2 + ctx.framing.offsetY;
+    // baseX / baseY 算出但未直接用 —— 注释保留意图:base = (baseX,baseY) ·
+    // framing scale=1 + offset=0 时,(w - W*finalScale)/2 == baseX,等价 base。
+    void baseX; void baseY;
+  }
+
+  setFraming(handle: ModelHandle, framing: Live2DFraming): void {
+    const ctx = this.contexts.get(handle.id);
+    if (!ctx) return;
+    // 模型未加载完(ctx.model null)或已 teardown · _fit 内部 guard 自然 no-op
+    ctx.framing = framing;
+    this._fit(ctx);
   }
 
   private _teardown(ctx: MountContext): void {

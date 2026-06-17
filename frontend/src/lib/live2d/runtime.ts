@@ -1,3 +1,5 @@
+import type { Live2DFraming } from './settings';
+
 // v3-E2 chunk 5：Live2D 运行时抽象层。
 //
 // 让组件层（Live2DCanvas）跟具体 SDK（pixi-live2d-display / Cubism Web SDK
@@ -66,4 +68,20 @@ export interface Live2DRuntime {
    * v3-E1 未启用，先把契约准备好；v3-E2 接入八重神子 8 个 HitAreas 时用。
    */
   hitTest(handle: ModelHandle, x: number, y: number): string | null;
+
+  /**
+   * 2026-06-16 INV · per-model framing(取景)叠加在 base fit 之上。
+   *
+   * base 不动:`_fit` 仍算 `min(w/nativeW, h/nativeH)` 居中(承接 ResizeObserver
+   * 父容器变化)· framing 是其上的乘 + 加。**叠加 · 不替换 base**。
+   *
+   * 调用方时机:mount 完成后(读 DB 拿 framing)/ 用户调滑块 / 拖拽 / 滚轮 ·
+   * 频率高(拖拽时 ~60Hz)· 实现只改 ctx.framing 后重调 `_fit` · 单次 O(1)。
+   *
+   * 模型尚未加载完时静默 no-op(同 setMouthOpen 规范)。
+   */
+  setFraming(handle: ModelHandle, framing: Live2DFraming): void;
 }
+
+/** Re-export 给 runtime 实现 + 组件层共用。真源在 ``lib/live2d/settings.ts``。 */
+export type { Live2DFraming } from './settings';

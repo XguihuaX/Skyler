@@ -80,6 +80,26 @@ class Character(Base):
                             cascade="all, delete-orphan")
 
 
+class Live2DModelSettings(Base):
+    """2026-06-16 INV · per-Live2D-model 设置容器。
+
+    挂模型(model_key = scanner slug · 等于 frontend/public/live2d/<slug>/
+    目录名 · 也等于 character.live2d_model)· 不挂 character.id —— 模型原生
+    比例决定怎么裁,共用 slug 的角色共享 framing。
+
+    settings_json 容器形(本期只写 framing 一个 section · 其它键透传不动):
+        {
+          "framing": { "scale": 1.0, "offsetX": 0, "offsetY": 0 }
+          // 留位:param_map / director / future
+        }
+    """
+    __tablename__ = "live2d_model_settings"
+
+    model_key     = Column(Text, primary_key=True)
+    settings_json = Column(Text, nullable=False)
+    updated_at    = Column(DateTime, server_default=func.now())
+
+
 class CharacterPersona(Base):
     """v4 persona engineering segment 1 — multi-variant persona schema.
 

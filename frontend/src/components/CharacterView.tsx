@@ -45,12 +45,20 @@ export default function CharacterView({
 
   // 角色配了 live2d_model 且能解析出资源 URL → 走 Live2D 渲染管道
   // key 用 live2dUrl,切换角色时强制 unmount 旧 canvas + mount 新的
+  // 2026-06-17 INV · applyFraming 按 mode gate:
+  //   panel(大窗主视图)→ true · 吃 per-model framing(bust 半身锚底)
+  //   widget(小窗 · 整窗透明)→ false · 永远 DEFAULT 全身 base fit
   if (live2dUrl) {
+    const applyFraming = mode === 'panel';
     return (
       <div className={rootClass}>
         {/* Live2D canvas · 背景层已下沉到全窗 SceneBackground · 这里只角色透明 */}
         <div className="absolute inset-0 z-10">
-          <Live2DCanvas key={live2dUrl} modelUrl={live2dUrl} />
+          <Live2DCanvas
+            key={live2dUrl}
+            modelUrl={live2dUrl}
+            applyFraming={applyFraming}
+          />
         </div>
       </div>
     );

@@ -24,6 +24,7 @@ import {
   type Live2DUploadResult,
 } from '../lib/live2d';
 import Live2DDropzone from './live2d/Live2DDropzone';
+import Live2DManagerSection from './character/Live2DManagerSection';
 import MotionMapConfirmDialog from './live2d/MotionMapConfirmDialog';
 import SplashArtDropzone from './character/SplashArtDropzone';
 import VoiceLinesSection from './character/VoiceLinesSection';
@@ -1227,6 +1228,14 @@ export default function CharacterPanel() {
                 选项来自 frontend/public/live2d/。新角色资产请先放进对应 slug
                 目录，详见 frontend/public/live2d/README.md。
               </p>
+
+              {/* 2026-06-16 INV · Live2D 管理(scope = 模型,不绑 character.id)
+                  · 模块①取景。展开后主画布进入调整模式:拖拽改 offset / 滚轮
+                  改 scale。共用 slug 角色共享 framing(预期)。 */}
+              <Live2DManagerSection
+                modelKey={form.live2d_model || null}
+                showToast={showToast}
+              />
             </div>
 
             <div>

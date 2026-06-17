@@ -71,6 +71,9 @@ from backend.database.migrations.v3_g_chunk2_proactive import (
 from backend.database.migrations.v3_g_chunk2_6_pending_briefing import (
     run_migration as migrate_v3_g_chunk2_6_pending_briefing,
 )
+from backend.database.migrations.inv_live2d_model_settings import (
+    run_migration as migrate_inv_live2d_model_settings,
+)
 from backend.database.migrations.v4_fan_chunk1_splash_art import (
     run_migration as migrate_v4_fan_chunk1_splash_art,
 )
@@ -186,6 +189,7 @@ from backend.routes.conversations_api import router as conversations_router
 from backend.routes.health_api import app_state, router as health_router
 from backend.routes.integrations_api import router as integrations_router
 from backend.routes.live2d_api import router as live2d_router
+from backend.routes.live2d_settings_api import router as live2d_settings_router
 from backend.routes.memory_api import router as memory_router
 # bugfix-3.3: settings_api 仅 GET/POST /api/settings/model — DB ai_providers
 # 已是新唯一 LLM 路由,该路由整文件删除。yaml available_models 字段一并删。
@@ -319,6 +323,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── 1b14a. V4-fan chunk 1: characters.splash_art_url 列（idempotent）──
     # Fan UI 扇面卡牌底图字段。POST /api/characters/{id}/splash-art 写入。
     await migrate_v4_fan_chunk1_splash_art()
+
+    # ── 1b14b. INV · live2d_model_settings 表(per-model 容器 · 2026-06-16)─
+    # 挂 model_key=slug · 不挂 character.id · 共用 slug 角色共享 framing。
+    # 容器留扩展位:本期写 framing,将来 param_map / director。
+    await migrate_inv_live2d_model_settings()
 
     # ── 1b15. V3.5 chunk 7: mcp_credentials + mcp_client_state 表 ────────
     # 必须在 init_clients_from_config 之前（client.py 读 DB enabled override）
@@ -1023,6 +1032,7 @@ app.include_router(characters_router,    prefix="/api", tags=["characters"])
 app.include_router(persona_router,        prefix="/api", tags=["persona"])
 app.include_router(users_router,         prefix="/api", tags=["users"])
 app.include_router(live2d_router,        prefix="/api", tags=["live2d"])
+app.include_router(live2d_settings_router, prefix="/api", tags=["live2d"])
 app.include_router(backgrounds_router,    prefix="/api", tags=["backgrounds"])
 app.include_router(tts_router,           prefix="/api", tags=["tts"])
 app.include_router(observability_router, prefix="/api", tags=["observability"])

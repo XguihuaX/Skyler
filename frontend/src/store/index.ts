@@ -420,6 +420,33 @@ interface AppState {
   setWsReady: (v: boolean) => void;
   setLive2dReady: (v: boolean) => void;
 
+  // 2026-06-16 INV · Live2D 取景调整模式。
+  // - false:Live2DCanvas onClick 走原 touch motion 路径
+  // - true:Live2DCanvas mousedown/move/up 改 framing.offset · wheel 改 scale
+  //   onClick skip touch · 由 Live2DManagerSection 展开 / 收起切换
+  // pendingFraming:拖拽 / wheel / 滑块实时改 framing 时存这里;Live2DCanvas
+  // subscribe → runtime.setFraming · Live2DManagerSection 滑块也读这里。
+  // null = 跟 DB 拿来的一致(未 dirty),不为 null = 有未保存改动。
+  //
+  // savedFraming:server 上当前 per-model 已保存的 framing · 跟 slug 一起存
+  // 防 race(切模型时旧 slug 的值不会污染新 slug)。 ManagerSection 保存成功
+  // 后写新值 · Live2DCanvas pending=null 时回退到这里(不再靠 ref · ref 不
+  // 跨组件同步导致保存后 stale fallback,详 bisect 报告)。null = mount 时
+  // 还没 fetch 完 / 当前 slug 跟 saved.modelKey 不匹配 → 走 DEFAULT。
+  live2dAdjustMode: boolean;
+  pendingFraming: import('../lib/live2d/settings').Live2DFraming | null;
+  savedFraming: {
+    modelKey: string;
+    framing: import('../lib/live2d/settings').Live2DFraming;
+  } | null;
+  setLive2dAdjustMode: (v: boolean) => void;
+  setPendingFraming: (
+    f: import('../lib/live2d/settings').Live2DFraming | null,
+  ) => void;
+  setSavedFraming: (
+    s: { modelKey: string; framing: import('../lib/live2d/settings').Live2DFraming } | null,
+  ) => void;
+
   // ASR 回显（模块 7 才接真实数据，本模块只放接口）
   asrText: string;
   setAsrText: (t: string) => void;
@@ -685,6 +712,13 @@ export const useAppStore = create<AppState>((set) => ({
   setWhisperReady: (whisperReady) => set({ whisperReady }),
   setWsReady: (wsReady) => set({ wsReady }),
   setLive2dReady: (live2dReady) => set({ live2dReady }),
+
+  live2dAdjustMode: false,
+  pendingFraming: null,
+  savedFraming: null,
+  setLive2dAdjustMode: (live2dAdjustMode) => set({ live2dAdjustMode }),
+  setPendingFraming: (pendingFraming) => set({ pendingFraming }),
+  setSavedFraming: (savedFraming) => set({ savedFraming }),
 
   asrText: '',
   asrTimestamp: 0,
