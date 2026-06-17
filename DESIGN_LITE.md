@@ -806,12 +806,12 @@ backend/routes/live2d_api.py                        GET /api/live2d/models + POS
 
 ---
 
-## §7.7 MCP 能力层(2026-06-15~16 batch · 已建 · HOLD 待真机验收 + 提交)
+## §7.7 MCP 能力层(2026-06-15~17 batch · 已 ship · 4 MCP commit + merge `89b9f4e`)
 
-> 状态分层(2026-06-16):
-> - **已真机验**:xhs 换包 rednote-mcp(只读 · cookie ready · 4 个 tool 拉通 · 唯一已真机端到端跑过的卡)
-> - **已建 / HOLD 待 PM 全链路真机 + 4 logical commit + push**:holder-task 模型 / SSE transport / 配置分文件 / per-tool confirm gate / browser_login 流 / batch2 自校验+45s 超时+confirm 队列+deny_all_pending+登录子进程
-> - **未做(deferred)**:auto-reconnect / health probe / TaskGroup 异常解包 / stdio install-once
+> 状态(2026-06-17 合 main):
+> - **已 ship + 真机验**(主链 + xhs 端到端):holder-task 模型 / SSE transport(Amap)/ 配置分文件(mcp.config.yaml + example + loader merge)/ per-tool confirm gate(dangerous_tools)/ browser_login 流(rednote-mcp 扫码)/ batch2 自校验+45s 超时+confirm 队列+deny_all_pending+登录子进程
+> - **4 MCP commit**:`834fbac` holder-task / `2e5b914` SSE+拆文件 / `e805d34` confirm gate / `ab7f94a` batch2+browser_login → merge `89b9f4e`(整批同分支跟 GSV `a4a2681` 同 push,共 4 MCP + 1 GSV = 5 commit)
+> - **未做(deferred)**:auto-reconnect / health probe / TaskGroup 异常解包 / stdio install-once · 见 ROADMAP TD-MCP-1~6
 
 ### 7.7.1 配置分层 + loader
 
@@ -962,6 +962,119 @@ backend/config/__init__.py         loader merge mcp.config.yaml > example
 backend/database/migrations/inv_mcp_tool_confirmation.py  ⑤ 加 require_confirmation 列
 mcp.config.yaml                    本地真名单 · gitignored
 mcp.config.example.yaml            6 范式模板 · 入库
+```
+
+---
+
+## §7.8 Live2D 取景层(framing · 2026-06-16~17 commit `79f9f2f`)
+
+> 触发由来:每个 Live2D 模型原生比例 / 站位不同 · 缺统一构图方案。给用户**放大 + 下移让脚出框 = 半身锚底**的「取景」控制 · 绕开「接地阴影 + 比例」两个最难的合成问题。挂**模型**(model_key = scanner slug · 不挂 character)· 共用 slug 角色共享 framing。
+
+### 7.8.1 数据
+
+新表 `live2d_model_settings`:
+
+| 列 | 语义 |
+|---|---|
+| `model_key` (PK) | scanner slug · 等于 `frontend/public/live2d/<slug>/` 目录名 · 也等于 `character.live2d_model` |
+| `settings_json` | JSON 容器 · 本期写 `framing` 一个 section · `param_map` / `director` 留扩展位(未实现) |
+| `updated_at` | TIMESTAMP DEFAULT CURRENT_TIMESTAMP |
+
+容器 shape:
+```json
+{
+  "framing": { "scale": 1.0, "offsetX": 0, "offsetY": 0 }
+  // 留位:param_map / director / future · PATCH 走 merge 透传不动其它键
+}
+```
+
+migration 幂等(`CREATE TABLE IF NOT EXISTS`):`backend/database/migrations/inv_live2d_model_settings.py`。ORM:`backend/database/models.py:83 Live2DModelSettings`。
+
+### 7.8.2 API(merge 语义)
+
+`backend/routes/live2d_settings_api.py`:
+
+| route | 行为 |
+|---|---|
+| `GET  /api/live2d/models/{model_key}/settings` | 无 row → 返 default framing + 空 extra(不写库) |
+| `PATCH /api/live2d/models/{model_key}/settings` | **merge** `{**existing, framing: new}` · 其它键(`param_map` / `director`)透传不替换 · backend clamp 防呆 |
+
+clamp 边界(backend + frontend 双 clamp):scale ∈ [0.3, 5.0] / offset ∈ [-2000, 2000]。
+
+resolver 形跟 `resolve_tts_language(backend/tts/voice_config.py:42)` 同款:**DB override > 默认**(2-tier · 因为模型层无 registry spec 层概念)。`resolve_tts_language` 是 3-tier(DB > registry > "zh")· framing 简化成 2-tier · 形态一致。
+
+### 7.8.3 Runtime · base × framing 叠加(不替换)
+
+`frontend/src/lib/live2d/runtimes/pixiCubism4.ts`:
+- `MountContext` 加 `framing: Live2DFraming` default `DEFAULT_FRAMING = {1.0, 0, 0}`
+- `_fit(ctx)` 改:
+  ```
+  baseScale  = min(w/nativeW, h/nativeH)
+  finalScale = baseScale * ctx.framing.scale            // L497
+  model.x    = (w - W*finalScale)/2 + ctx.framing.offsetX  // L502
+  model.y    = (h - H*finalScale)/2 + ctx.framing.offsetY  // L503
+  ```
+  framing scale=1 + offset=0 时跟 base fit 严格等价。
+- `setFraming(handle, framing)`(L520+):`ctx.framing = framing` → `_fit(ctx)` · 拖拽/wheel/滑块每次都走这条 · 单次 O(1)。
+
+跟 §7.6 表演层共存验证:`_fit` 写 PIXI `model.x/y/scale`(PIXI Container 空间),`beforeModelUpdate` hook 写 `addParameterValueById('ParamBodyAngleY/Z')`(Cubism 参数空间)· **两条独立通道不互相 stomp**(merge `89b9f4e` 真机验过)。
+
+### 7.8.4 前端 lib
+
+`frontend/src/lib/live2d/settings.ts`:
+- 类型 `Live2DFraming` / `Live2DSettings` + `DEFAULT_FRAMING`
+- `clampFraming(f)`(跟 backend 同边界 · diff 即 bug)
+- API client `fetchLive2DSettings(slug)` / `patchLive2DFraming(slug, framing)` · slug 经 `encodeURIComponent`(支持中文 slug 如 `阿芙洛狄忒`)
+
+### 7.8.5 UI · Live2D 管理组件(scope = 模型)
+
+`frontend/src/components/character/Live2DManagerSection.tsx`:
+- 容器标题 "Live2D 管理 · {slug}" · 挂在 CharacterPanel Live2D 模型 dropdown 之后
+- **Section 1 取景**(本期):scale 滑块(0.3-5.0 步进 0.05)+ X / Y 数字框(本地 text state · editing ref · 空串/前导 0/负号中途态不卡 · blur 归一化)+ 重置 / 保存 / "未保存"黄字
+- **Section 2 / 3 占位注释**(未渲染):未来 param_map / director
+
+实时预览 store 链:
+```
+拖拽/wheel/滑块 → setPendingFraming
+  → Live2DCanvas useEffect [pendingFraming, fallbackFraming] → runtime.setFraming(handle, target)
+保存成功 → setSavedFraming(new) → setPendingFraming(null)(顺序很关键 · 防闪回 stale)
+```
+
+`savedFraming = { modelKey, framing }` 跨组件同步 · `Live2DCanvas` `fallbackFraming` `useMemo` 派生(slug 匹配才用 saved.framing · 否则 DEFAULT)。
+
+### 7.8.6 Widget gate(小窗永远全身)
+
+`Live2DCanvas:50` 加 `applyFraming: boolean` prop · `CharacterView:52` 按 `mode === 'panel'` 算:
+- **Panel(大窗主视图)** → applyFraming=true · 吃 framing(bust 半身锚底)
+- **Widget(小窗整窗透明)** → applyFraming=false · adjustMode / pending / saved 全 short-circuit `false/null/null` · 跳过 fetch + 不写 store · 永远 DEFAULT 全身 base fit
+
+小窗整窗 `overflow: hidden`(`App.tsx:228` + `Panel.tsx:114`)· 大窗 framing scale>1 + offsetY 大幅下移时超出部分被裁 = 脚出框成立。
+
+### 7.8.7 容器留位 vs parked 决策(诚实分层)
+
+`live2d_settings` JSON 容器的 `param_map` / `director` 字段是**留位**(`live2d_settings_api.py:12,50` 透传逻辑 + `models.py:93` 注释)· merge 时不识别也不替换 · 0 读 / 0 写 / 0 runtime 路径。
+
+| 块 | 容器位 | 决策路径 | 状态 |
+|---|---|---|---|
+| framing | ✅ 已 ship(本段) | scale × offset 叠加 _fit | ✅ ship |
+| param_map | ✅ 留位(JSON 透传) | per-model 概念→Cubism 参数 map | parked(详 §17.1 / ROADMAP Live2D backlog) |
+| director | ✅ 留位(JSON 透传) | emotion → 三仓库 cooldown/weighted 决策 | parked(详 §17.1 brick #2-5) |
+
+### 7.8.8 关键路径速查
+
+```
+backend/database/migrations/inv_live2d_model_settings.py  CREATE TABLE
+backend/database/models.py:83                              Live2DModelSettings ORM
+backend/routes/live2d_settings_api.py                      GET/PATCH merge · clamp
+frontend/src/lib/live2d/settings.ts                        类型 + clamp + API client
+frontend/src/lib/live2d/runtime.ts                         setFraming 接口
+frontend/src/lib/live2d/runtimes/pixiCubism4.ts:497-503    _fit 叠加 base × framing
+                                            :520+          setFraming 实现
+frontend/src/components/character/Live2DManagerSection.tsx UI · scope=slug
+frontend/src/components/Live2DCanvas.tsx:50                applyFraming prop
+                                       :100+               fallbackFraming useMemo
+frontend/src/components/CharacterView.tsx:52               mode==='panel' gate
+frontend/src/store/index.ts                                live2dAdjustMode + pendingFraming + savedFraming
 ```
 
 ---
@@ -1294,19 +1407,35 @@ per-card 错峰甩(spec 原意的"发牌")需要 FanLayout 配合 — framer-mot
 - sticker 必须 **IP-clean 原创**(自画 / 委托;不抓互联网)· license 跟 Live2D 模型同纪律
 - director 选择策略不写死:每角色独立 weights · 未来可让 LLM 显式 override(如 `<sticker>name</sticker>` tag)
 
+**当前真实状态(三档诚实分层)**:
+
+| 层 | 状态 | 锚 |
+|---|---|---|
+| **A · 性能层**(角色"活物"基线) | ✅ ship | §7.6 表演层 c14065b · idle sway BodyAngleY/Z ±1.5° + head-turn focus GAIN ±15° + 眨眼 + 呼吸 + 物理/姿态 SDK 自动 idle |
+| **B · `<emotion>` → expression 数据流** | 🟡 已接 · **休眠**(0 视觉) | `Live2DCanvas.tsx:148-167` 数据流接通(sanitize → store.currentEmotion → useEffect → `runtime.setExpression(handle, expressionName)`)· 但 `emotionMap` 默认 `{}`(Hiyori / 八重等),lookup miss → **无 SDK 调用 · 当前 0 视觉变化**。等 brick #2 给具体角色填 `emotion_map_json`(per-character JSON 字段)才点亮 |
+| **C · director 决策层** | 📋 parked(未实现) | cooldown / weighted random / 防过密 / 跨仓库三通道协同 · 0 代码 |
+
+**别让"性能层 ship"读成"导演在工作"** — 角色 idle sway + 转头是 SDK 物理 + 鼠标 focus 驱动 · 跟 LLM emotion 信号无关。emotion→expression **管线在但管子空**(无 map · 无视觉)· director **管线本身就没**(无策略)。
+
 **brick 顺序**(emergent 建,详 ROADMAP backlog):
 
-1. **brick #1**(✅ done · §7.6)`pixiCubism4` 表演层 = idle sway(BodyAngleY/Z ±1.5°)+ head-turn(focus GAIN ±15°)+ 眨眼 + 呼吸 + 物理/姿态 SDK 自动 idle = "活物"基线
-2. **brick #2** `<emotion>` → expression 切换(最小可见 · 单角色试 · 单仓库)
-3. **brick #3** motion bank + 选择策略(cooldown / weighted / 防过密)
+1. **brick #1**(✅ done · §7.6)`pixiCubism4` 表演层 = 性能层 A
+2. **brick #2** B 层激活 · 给单角色填 `emotion_map_json` + 试一个有 `.exp3.json` 的模型(阿芙洛狄忒 fense 5 expression:`axy/heilian/kuku/lianhong/shengqi` · 见 `frontend/public/live2d/阿芙洛狄忒/fense/expression/` + `fense.model3.json` FileReferences.Expressions)· 不动 Live2DCanvas 代码 · 数据驱动激活
+3. **brick #3** motion bank + 选择策略(C 层起步 · cooldown / weighted / 防过密)
 4. **brick #4** sticker bank + 聊天流通道 + tag schema
 5. **brick #5** 跨仓库 director(同一 emotion 协同三通道 · 防三通道同时炸)
 6. **brick #6** 管理 UI(每仓库 CRUD + tag 编辑 + 预览 + 角色级 weights)
 
+**容器留位 vs 决策层**(诚实分层 · 2026-06-17):
+
+`live2d_settings` JSON 容器(§7.8 framing 同表)预留了 `param_map` / `director` 字段位 · merge 透传不识别。**留位是 ship 的**(framing 走的同表 + 同 PATCH merge 走通)· **决策层是 parked**(B/C 层未实现)。容器位不等于 director 在工作。
+
 **关键路径占位**(实现时改 file:line):
 ```
-brick #2 信号:                后端 ws.py 第一句 <emotion> 已 parse → 推 WS event
-brick #2 实现:                frontend/src/lib/live2d/runtimes/pixiCubism4.ts · 加 expression bank + SDK model.expression(name)
+brick #2 信号:                后端 ws.py 第一句 <emotion> 已 parse → 推 WS event(已通 · §5.6)
+brick #2 数据流:              frontend/src/components/Live2DCanvas.tsx:148-167(已通 · 等 map)
+brick #2 激活路径:            character.emotion_map_json(per-character DB 字段 · v3-E2 已加 · 等填)
+brick #2 现成弹药:            阿芙洛狄忒 fense 5 expression(axy/heilian/kuku/lianhong/shengqi)
 brick #4 协议:                WS 新 event 'sticker_chosen' { url, alt } → 聊天气泡内联渲 <img>
 ```
 
