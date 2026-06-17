@@ -38,12 +38,43 @@ def get_settings() -> Settings:
 
 
 def load_config_yaml() -> dict:
+    """Load config.yaml + merge mcp.config.yaml(2026-06-15 ④ 拆文件)。
+
+    主源:`<repo>/config.yaml`(PM 个人偏好 + 运行参数 · 本地不入 stage)
+    MCP 拆文件后(④):`<repo>/mcp.config.yaml` 提供 `mcp_clients` + `mcp_server`
+    两段(覆盖 config.yaml 同名段;config.yaml 内 mcp_* 段应已搬走,无内容时
+    merge no-op)。若 `mcp.config.yaml` 不存在 → 退到 `mcp.config.example.yaml`
+    (入库的零凭证模板 · fresh install 起码有几条 demo 跑得起来)。
+    """
     # config.yaml lives at the project root (two levels up from this file)
-    config_path = Path(__file__).parent.parent.parent / "config.yaml"
+    repo_root = Path(__file__).parent.parent.parent
+    config_path = repo_root / "config.yaml"
     if config_path.exists():
         with open(config_path) as f:
-            return yaml.safe_load(f) or {}
-    return {}
+            data = yaml.safe_load(f) or {}
+    else:
+        data = {}
+
+    # 2026-06-15 ④ · MCP 段拆到 mcp.config.yaml(本地清单 · 不入 stage)
+    mcp_path = repo_root / "mcp.config.yaml"
+    mcp_example_path = repo_root / "mcp.config.example.yaml"
+    mcp_source = None
+    if mcp_path.exists():
+        mcp_source = mcp_path
+    elif mcp_example_path.exists():
+        mcp_source = mcp_example_path
+    if mcp_source is not None:
+        try:
+            with open(mcp_source) as f:
+                mcp_data = yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError):
+            mcp_data = {}
+        # 覆盖语义:mcp.config.yaml 的 mcp_clients / mcp_server 整段替换
+        # config.yaml 残留同名段(若有)。avoid 深 merge 防 entry 拼凑混乱。
+        for key in ("mcp_clients", "mcp_server"):
+            if key in mcp_data:
+                data[key] = mcp_data[key]
+    return data
 
 
 settings: Settings = get_settings()
@@ -51,7 +82,7 @@ config_yaml: dict = load_config_yaml()
 
 
 def reload_config_yaml() -> dict:
-    """Reload config.yaml into the existing module-level dict in place.
+    """Reload config.yaml + mcp.config.yaml into the existing module-level dict.
 
     Importing modules that hold a reference to ``config_yaml`` (via
     ``from backend.config import config_yaml``) will see the new values

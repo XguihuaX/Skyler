@@ -17,6 +17,10 @@ frontend/dist/
 # hotfix-8: config.yaml duplicate-block 备份（防未来 hotfix 期间一次性 snapshot 误 commit）
 config.yaml.backup-before-*
 
+# 2026-06-15 ④ MCP 拆文件 · 真实清单(8 + 7 entry · 含 PM 个人 path / 凭证 key 引用)
+# 入库的是 mcp.config.example.yaml(零凭证 4 范式模板)
+mcp.config.yaml
+
 .env
 .DS_Store
 *.log

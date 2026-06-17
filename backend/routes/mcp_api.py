@@ -22,9 +22,10 @@ from backend.config import config_yaml, reload_config_yaml
 from backend.mcp import server as mcp_server
 from backend.utils.yaml_atomic import write_config_atomic
 
-# Stage 2.1.1: 与 backend/config/__init__.py / backend/routes/config_api.py
-# 一致的 config.yaml 路径锚定。
-_CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
+# Stage 2.1.1: 与 backend/config/__init__.py 一致的路径锚定。
+# 2026-06-15 ④ · MCP 段从 config.yaml 拆到 mcp.config.yaml(本地清单 · 不入
+# stage)· POST/DELETE 写新文件 · loader 读时自动 merge 进 config_yaml dict。
+_MCP_CONFIG_PATH = Path(__file__).parent.parent.parent / "mcp.config.yaml"
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -211,7 +212,7 @@ async def create_client(body: CreateClientBody) -> CreateClientResponse:
             clients[body.name] = conf
 
         try:
-            await write_config_atomic(_CONFIG_PATH, _add_entry)
+            await write_config_atomic(_MCP_CONFIG_PATH, _add_entry)
         except (yaml.YAMLError, OSError) as exc:
             raise HTTPException(
                 status_code=500, detail=f"config.yaml write failed: {exc}",
@@ -300,7 +301,7 @@ async def delete_client(name: str) -> DeleteClientResponse:
                 clients.pop(name, None)
 
         try:
-            await write_config_atomic(_CONFIG_PATH, _remove_entry)
+            await write_config_atomic(_MCP_CONFIG_PATH, _remove_entry)
             reload_config_yaml()
         except (yaml.YAMLError, OSError) as exc:
             yaml_error = str(exc)
