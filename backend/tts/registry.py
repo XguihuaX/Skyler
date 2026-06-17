@@ -116,6 +116,8 @@ def _hardcoded_fallback() -> TtsModelsConfig:
             id="gsv",
             label="GPT-SoVITS(self-hosted · ja)",
             models=[
+                # PM SPEC-LOCK 2026-06-11 §B.4-y2:删 server_url 字段(全局 tier
+                # 在 ai_providers · 见 backend/tts/gsv_settings.py)。
                 ModelSpec(
                     id="mai_v4",
                     label="Mai v4(樱岛麻衣 ja)",
@@ -126,7 +128,6 @@ def _hardcoded_fallback() -> TtsModelsConfig:
                     emotion_bank_dir="tts/gsv/mai_v4",
                     remote_emotion_bank_dir="/workspace/GSVI/mai_emotion_bank/",
                     default_emotion="日常",
-                    server_url="http://106.75.224.167:9880",
                     inference_params={
                         "top_k": 15,
                         "top_p": 1.0,
@@ -194,7 +195,18 @@ def list_providers() -> List[str]:
 
 
 def list_models(provider: str) -> List[Dict[str, Any]]:
-    """Return models for provider · 字段透传 json(含 mode / gsv-specific 字段)。"""
+    """Return models for provider · 字段透传(含 mode / gsv-specific 字段)。
+
+    PM SPEC-LOCK (2026-06-11):
+      provider == 'gsv'  → 走 tts_models_cache(DB tts_models 表 · 用户可加/编辑)
+      provider == 'fish' / 'cosyvoice' → 仍走 _CONFIG(backend/config/tts_models.json)
+
+    本切换让 GsvTTSCard add/edit/delete model 立即对前端 (GET /api/tts/providers)
+    和后端(gsv.py:_get_model_spec 同源)生效 · 不用改 json + restart。
+    """
+    if provider == "gsv":
+        from backend.tts.tts_models_cache import list_gsv_model_specs  # noqa: PLC0415
+        return list(list_gsv_model_specs())
     p = _find_provider_spec(provider)
     if p is None:
         return []
@@ -280,13 +292,14 @@ async def list_voices(provider: str, model: Optional[str] = None) -> List[Dict[s
 
     if provider == "gsv":
         # GSV 2 mode (Part C):
-        #   - trained  (默认 / 旧 schema): emotion bank 16 ref · LLM 输出 emotion 路由
+        #   - trained  (默认 / 旧 schema): emotion bank N ref · LLM 输出 emotion 路由
         #   - zeroshot (future placeholder): 单 ref audio + prompt text 上传 (frontend 待实施)
-        m_spec = _find_provider_spec("gsv")
-        if m_spec is not None and model is not None:
-            for m in m_spec.models:
-                if m.id == model:
-                    mode = (m.mode or "trained").lower()
+        # PM SPEC-LOCK (2026-06-11):mode 从 tts_models_cache 拿(切到 DB 后)·
+        # 跟 list_models("gsv") 同源。
+        if model is not None:
+            for m_dict in list_models("gsv"):
+                if m_dict.get("id") == model:
+                    mode = (m_dict.get("mode") or "trained").lower()
                     if mode == "zeroshot":
                         return [{
                             "id": "reference",
@@ -301,8 +314,8 @@ async def list_voices(provider: str, model: Optional[str] = None) -> List[Dict[s
         # 默认 trained
         return [{
             "id": "emotion_bank",
-            "label": "emotion bank(16 emotion ref · LLM 输出 emotion 决定)",
-            "traits": "per-emotion 16 个 ref wav 自动路由",
+            "label": "emotion bank(N emotion ref · LLM 输出 emotion 决定)",
+            "traits": "per-emotion ref wav 自动路由 · N = lab_dir 实际 .lab 数",
             "instruct": False,
             "cloned": False,
             "uses_emotion_bank": True,
@@ -350,33 +363,7 @@ async def get_provider_tree() -> Dict[str, Any]:
     return {"providers": out_providers}
 
 
-def build_voice_model_json(
-    provider: str,
-    model: str,
-    voice: Optional[str] = None,
-    tts_language: Optional[str] = None,
-    **extras: Any,
-) -> Dict[str, Any]:
-    """Helper · 构造 character.voice_model JSON · 含 provider 默认参数。
-
-    用于前端 PATCH /api/characters/{cid} 时 normalize voice_model schema ·
-    确保 server_url / weights / emotion_bank_dir 等 gsv 字段写库时含 sane default。
-    """
-    base: Dict[str, Any] = {
-        "provider": provider,
-        "model": model,
-    }
-    if voice:
-        base["voice"] = voice
-    if tts_language:
-        base["tts_language"] = tts_language
-    for m in list_models(provider):
-        if m["id"] == model:
-            for k, v in m.items():
-                if k in ("id", "label"):
-                    continue
-                if k not in base and k not in extras:
-                    base[k] = v
-            break
-    base.update(extras)
-    return base
+# build_voice_model_json 删除(PM SPEC-LOCK 2026-06-11 §6):dead helper · 全仓
+# 零调用方(grep verified)· A-ii thin reference 后 voice_model 只装 thin 4 字段
+# {provider, model, voice?, tts_language?},不再需要 spread spec 副本。
+# 前端 VoicePicker.tsx::buildJsonFor gsv 分支直接拼 thin object。

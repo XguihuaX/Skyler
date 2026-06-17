@@ -128,6 +128,14 @@ from backend.database.migrations.bugfix_3_3_1_seed_cloned_voices import (
 from backend.database.migrations.bugfix_3_4_voice_aliases import (
     run_migration as migrate_bugfix_3_4_voice_aliases,
 )
+# INV (2026-06-11):tts_models 表 + mai_v4 builtin seed
+from backend.database.migrations.inv_tts_models_table_and_seed import (
+    run_migration as migrate_inv_tts_models_table_and_seed,
+)
+# INV (2026-06-11):A-ii thin · strip cid=1 voice_model spread 字段
+from backend.database.migrations.inv_voice_model_thin_strip_gsv import (
+    run_migration as migrate_inv_voice_model_thin_strip_gsv,
+)
 # bugfix-4: tts_call_log 表 (observability)
 from backend.database.migrations.bugfix_4_observability import (
     run_migration as migrate_bugfix_4_observability,
@@ -190,6 +198,7 @@ from backend.routes.memory_api import router as memory_router
 # bugfix-3.3: settings_api 仅 GET/POST /api/settings/model — DB ai_providers
 # 已是新唯一 LLM 路由,该路由整文件删除。yaml available_models 字段一并删。
 from backend.routes.tts_api import router as tts_router
+from backend.routes.tts_models_api import router as tts_models_router
 from backend.routes.observability_api import router as observability_router
 from backend.routes.users_api import router as users_router
 from backend.routes.webhooks_api import router as webhooks_router
@@ -259,6 +268,21 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 logger.info("[logging] FileHandler enabled · path=%s", _LOG_FILE)
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-14 · uvicorn.access /api/health 噪声止血
+#
+# 前端 poll /api/health 把 access log 刷成"GET /api/health 200 OK"几十条/30s,
+# 真实事件(thin-strip 迁移计数 / gsv 初始化 / DashScope 报错)被埋。
+# 用 logging.Filter 丢掉 health 行,其它端点照常记。
+# 前端治本(改 poll 间隔 / 修 useEffect cleanup runaway)单走一轮。
+class _DropHealthAccess(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/api/health" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(_DropHealthAccess())
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +404,42 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ROW_NUMBER 去重 + 只保留 Qwen 2 个 builtin(其他 vendor seed 行 trim,
     # 用户自填)+ CREATE UNIQUE INDEX 防未来重复。必须在 3.1 seed 后跑。
     await migrate_bugfix_3_2_8_dedup_and_trim_seed()
+
+    # ── 1b24.4. INV (2026-06-11): tts_models 表 + mai_v4 builtin seed ─────
+    # GSV model 库从 backend/config/tts_models.json 搬进 DB · 用户能在前端
+    # GsvTTSCard 加/列/选/编辑/删 · 各 model 独立 lab_dir / wav_remote_dir /
+    # weights / default_emotion / inference_params。INSERT 在 CREATE TABLE
+    # 分支内 · 仅首次建表执行 · 删了不复活(per PM SPEC-LOCK §6)。
+    await migrate_inv_tts_models_table_and_seed()
+
+    # ── 1b24.5. GSV 全局 server_url cache 启动期载入(2026-06-11 § 1 B.1) ──
+    # ai_providers 表已建好 → sync sqlite 直读 (type='tts', name='gsv',
+    # vendor_id IS NULL) 行的 endpoint · 写进 gsv_settings 模块 cache。
+    # 表/行不存在 → cache=None,GSVTTS 三 tier 自然回落 _DEFAULT。
+    # setter (POST /api/tts/gsv/server_url) 写库 + 更新 cache + 清旧 url
+    # LOADED/FAILED keys。
+    try:
+        from backend.tts.gsv_settings import reload_global_gsv_server_url
+        reload_global_gsv_server_url()
+    except Exception:  # noqa: BLE001
+        logger.exception("[gsv-settings] startup reload failed (non-fatal)")
+
+    # ── 1b24.6. INV (2026-06-11): tts_models_cache 启动期载入 ─────────────
+    # sync sqlite 读 tts_models 表 (provider='gsv' AND enabled=1) · 写进
+    # tts_models_cache 模块 cache。cache 整体失败 → fallback 到 tts_models.json
+    # gsv 段 + WARNING (per PM SPEC-LOCK §3)。CRUD 端点(POST/PATCH/DELETE
+    # /api/tts/models)调 reload 同步。
+    try:
+        from backend.tts.tts_models_cache import reload_gsv_models_cache
+        reload_gsv_models_cache()
+    except Exception:  # noqa: BLE001
+        logger.exception("[tts_models_cache] startup reload failed (non-fatal)")
+
+    # ── 1b24.7. INV (2026-06-11): A-ii thin · strip cid=1 voice_model ─────
+    # 必须在 tts_models 表 + tts_models_cache 建好之后跑(阶段 ① backend tier
+    # 能从 spec 解析所有 6 字段),否则 strip 后 GSVTTS 拿不到值会回 _DEFAULT
+    # 而非 builtin row spec。WHERE provider='gsv' · 当前 DB 仅 cid=1 命中 · 幂等。
+    await migrate_inv_voice_model_thin_strip_gsv()
 
     # ── 1b25. Bugfix-3.3.1: 灌入用户复刻的 CosyVoice voice_id ──────────────
     # 用户在 DashScope 控制台复刻了 3 个 voice, 这里写入对应 character.voice_model
@@ -1025,6 +1085,7 @@ app.include_router(users_router,         prefix="/api", tags=["users"])
 app.include_router(live2d_router,        prefix="/api", tags=["live2d"])
 app.include_router(backgrounds_router,    prefix="/api", tags=["backgrounds"])
 app.include_router(tts_router,           prefix="/api", tags=["tts"])
+app.include_router(tts_models_router,    prefix="/api", tags=["tts-models"])
 app.include_router(observability_router, prefix="/api", tags=["observability"])
 app.include_router(capabilities_router,  prefix="/api", tags=["capabilities"])
 app.include_router(integrations_router,  prefix="/api", tags=["integrations"])
