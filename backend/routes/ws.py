@@ -665,6 +665,21 @@ async def _handle_message(
     incoming_conv: Optional[int] = int(raw_conv) if raw_conv is not None else None
     incoming_char: Optional[int] = int(raw_char) if raw_char is not None else None
 
+    # 2026-06-15 ⑤ · MCP tool confirm response 路由 · 客户端 modal accept/reject
+    # 后回这一帧 · resolve confirm gate 内的 pending asyncio.Event。早出,不进
+    # 后续 conv/char 解析。
+    if msg_type == "mcp_tool_confirm_response":
+        request_id = (data.get("request_id") or "").strip()
+        accept = bool(data.get("accept"))
+        from backend.mcp.confirm_gate import resolve_confirmation
+        ok = resolve_confirmation(request_id, accept)
+        if not ok:
+            logger.warning(
+                "[ws] mcp_tool_confirm_response unknown request_id=%s",
+                request_id[:8] if request_id else "?",
+            )
+        return
+
     # 路径 7 / Rule B(绑定语义)— ``character_switch`` 是新 WS 帧 type:
     # 前端切角色时通知 backend 当前 UI 状态,不触发 LLM,仅更新连接状态。
     # 必须在 _resolve_conv_char 之前处理(避免反查 chat_history 干扰)。
@@ -847,13 +862,13 @@ async def _handle_message(
         # v4 segment 2 §2.5:解析 voice_model.tts_language,日语 / 英语 voice
         # 角色需要在 sentence 层走 extract_tts_text(ja/en 分离),否则 TTS 拿到
         # 中文正文音色合成会很差(Mai 复刻日语 sample 念中文不自然)。
-        tts_language = "zh"
-        if voice_model:
-            try:
-                _vm_obj = json.loads(voice_model)
-                tts_language = (_vm_obj or {}).get("tts_language", "zh") or "zh"
-            except (json.JSONDecodeError, TypeError):
-                tts_language = "zh"
+        # 2026-06-15 SPEC:silent default "zh" → resolve_tts_language(共享) ·
+        # 缺省时按注册表音色原生语种兜底 · 跟 chat.py renderer 路径同语义。
+        # 必要:chat.py 那侧只决定 layer_a.j2 directive 注不注入 <ja> · 本路径
+        # 给 extract_tts_text 喂 lang · 两条 lang 必须一致,否则 LLM 出 <ja>
+        # 但 extract 走 zh 分支剥光 → 没 ja 段送 TTS → 静音。
+        from backend.tts.voice_config import _resolve_lang_from_voice_model_json
+        tts_language = _resolve_lang_from_voice_model_json(voice_model)
         # bugfix-4: 设 TTS context — 主聊天 source='chat',让 tts_call_log 能
         # 区分用量来源 (chat / proactive / activity / preview)。ContextVar 在
         # asyncio task 内 propagate, _tts_synth_with_timeout / engine.synthesize
@@ -1230,6 +1245,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     user_id = _default_user_id()
     connection_manager.register(user_id, websocket)
     state = _TurnState()
+    # 2026-06-15 ⑤ · MCP confirm gate push callback · 注册 ws.send_json wrapper ·
+    # capability handler 调 request_confirmation 时通过此 callback 推 modal 弹窗。
+    # 多 WS 连接场景(罕见 · Skyler 单用户)· 后注册覆盖先注册 · 单 callback ok。
+    from backend.mcp import confirm_gate as _mcp_confirm_gate
+    async def _confirm_push(payload: dict) -> None:
+        await websocket.send_json(payload)
+    _mcp_confirm_gate.register_push_callback(_confirm_push)
     logger.info("WebSocket connection opened")
     try:
         while True:
@@ -1302,3 +1324,17 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             if not t.done():
                 t.cancel()
         connection_manager.unregister(user_id)
+        # 2026-06-15 ⑤ · 解绑 MCP confirm push callback · 防旧 callback 试图
+        # send_json 到已关闭的 socket(会抛 RuntimeError)。注意:若有重连且
+        # 旧连接 finally 跑得比新连接 register 晚,会误清新 callback · 实际
+        # Skyler 单用户连接稳定 + 上方注册是覆盖语义 · 该 race 概率低且
+        # 影响仅"confirm 弹不出" · 安全侧 DENY 兜底。
+        # 2026-06-15 batch 2 [confirm 边界] · 同时 deny 所有挂起 confirm ·
+        # 防孤儿 task 永远 await 死(用户重连后看不到旧 modal · 旧 capability
+        # handler 接 DENY 返"已取消" · LLM 继续)。
+        try:
+            from backend.mcp import confirm_gate as _mcp_confirm_gate
+            _mcp_confirm_gate.deny_all_pending()
+            _mcp_confirm_gate.register_push_callback(None)
+        except Exception:  # noqa: BLE001
+            pass

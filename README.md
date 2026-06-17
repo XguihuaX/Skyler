@@ -44,6 +44,7 @@ Fixed and verified on-device this cycle:
 - Other characters (Yae Miko etc., `cid=2/3/...`) are currently **empty skeletons** with no full persona; switching to them feels hollow. v4.1 (F1) fills real personas one by one.
 - **Long-term memory chain — audit complete, remediation shipped (code-verified), pending real-device regression** — the wrap-up audit concluded: the root cause was the fact-only extraction prompt + sparse/casual chat legitimately yielding `[]` (not a broken chain), plus a sub-bug where purge didn't reset the extractor pointer. A remediation chain shipped (bounded rolling-summary layer + extractor-pointer self-heal/reconcile + extraction-prompt rebalance + tombstone) and is code-verified against real diffs. **Companionship/functional quality is not yet validated — pending real-device regression + friend-test (acceptance gate; CC does not self-certify).** See the "Memory & Personality" note below and DESIGN §五·补 + §十五之 Z.5.1.
 - LLM first-response is slow (still 5–10s with VPN off) — an independent model + network performance issue. With binding semantics locked, "slow" and "cross-talk" are now decoupled; slowness degrades to a pure UX concern, optimized separately later.
+- **GSV local-host migration is in progress** (branch `gsv-thin-and-global-server`, uncommitted) — moving Mai's TTS from the cloud autodl GPT-SoVITS box to a local 5070ti machine on the LAN. Connectivity is through (`trust_env=False` proxy bypass + LAN server URL), real audio synthesizes (not stub), but Chinese output sounds off (likely cross-lingual: `mai_v4` is a Japanese-trained voice forced to read Chinese via `tts_language=zh`). Next pass continues in a separate session; until that lands, treat GSV as in-progress, not architecture-stable. See ROADMAP § *GSV 本地 TTS 迁移*.
 
 ---
 
@@ -73,9 +74,23 @@ Adding a new skill is five lines. Adding an external MCP server is one config en
 
 ### 2. Bidirectional MCP
 
-Skyler is both an MCP **client** (consuming any MCP server: filesystem, brave-search, Notion, anything else you connect) **and** an MCP **server** (exposing its capability registry, character state, and memory to Claude Desktop, Cursor, Claude Code, or any other MCP client).
+Skyler is both an MCP **client** (consuming any MCP server) **and** an MCP **server** (exposing its capability registry, character state, and memory to Claude Desktop, Cursor, Claude Code, or any other MCP client).
 
-Your AI character becomes a node in the MCP ecosystem, not an island.
+The client side is config-driven (Notion-style): a `mcp.config.yaml` entry adds a server, the MCP panel toggles it on, and the LLM sees its tools the next turn. Supports **stdio / streamable HTTP / SSE** transports; per-server credentials live in a local DB and fill via a modal; servers that need a browser scan-code login (e.g. Xiaohongshu via `rednote-mcp`) get a "登录 / 重新登录" button that drives a subprocess instead of an env-var modal; tools marked `dangerous_tools` go through a per-call confirmation gate (you accept in the UI before the call executes — reject and the LLM sees a "canceled" tool result without breaking the stream).
+
+Currently wired servers (out of 16 entries):
+
+- 🗺 **amap** — Chinese map / weather (SSE, official + stdio fallback)
+- 📈 **akshare** — A/HK/US stock market data (read-only)
+- 📧 **email** — IMAP/SMTP (QQ auth code / Gmail app password), `send_email` gated
+- 🧠 **xmind** — mindmap generator
+- 📰 **rss-reader** — feed reader (self-hosted RSS, RSSHub for CN sites)
+- 🌐 **fetch** — web pages → markdown
+- 🐙 **github** — full API, 12 write/delete tools gated behind confirm
+- 📕 **xhs** (`rednote-mcp`, read-only) — Xiaohongshu search / note / comments via scan-code login
+- 🚂 **trip12306** — disabled by default (12306 geo-blocks non-CN IPs at TLS layer)
+
+Plus the built-in `filesystem` / `everything` examples. Your AI character becomes a node in the MCP ecosystem, not an island.
 
 ### 3. Persona-level state machine
 
@@ -164,6 +179,16 @@ yarn live2d:probe my-char
 ```
 
 Only **Cubism 4** is supported in the current pixi-cubism4 runtime (`frontend/src/lib/live2d/runtimes/pixiCubism4.ts`); moc3 version ≥ 5 logs a console.warn and falls back. See [docs/live2d-setup.md](docs/live2d-setup.md) for motion map config and emotion binding.
+
+### Live2D performance layer (2026-06-14, commit `c14065b`)
+
+Single `beforeModelUpdate` hook on the SDK's `internalModel` runs three model-agnostic enhancements every frame (SDK emit timing = after motion / expression / eyeBlink / focus / breath / physics / pose accumulate, before `model.update()` renders):
+
+- **Head focus gain ±15°** — `autoFocus: false` + custom `window.mousemove` listener computes canvas-normalized `(x, y) ∈ [-1, 1]` → `focusController.focus(x * 0.5, -y * 0.5)`. SDK multiplies by 30 internally → ±15° max head turn (original ±30° was too dramatic). Existing 4-channel gaze reset reused unchanged.
+- **Body sway on Y/Z** — slow phased sine on `ParamBodyAngleY/Z` at ±1.5°, periods 5.4s / 7.3s, phase offset 1.7 rad. `BodyAngleX` left to SDK breath (which already runs ±4° / 15.5s there). Models without these params silently no-op.
+- **Per-model watermark removal (`bingtang` model)** — every frame `addParameterValueById('Paramheadxy', 30) + ('Paramheadxy3', 30)` reproduces the model's own `shuiyin1/2.exp3.json` expressions (original author's "press 1/2 to hide watermark" mechanism). Uses `add` not `set` so it composes safely with `red.exp3` which shares `Paramheadxy`. Other models silently no-op (model id list is hardcoded for now; per-model config TBD if more models bring different watermark IDs).
+
+**On-disk Live2D models** (in `frontend/public/live2d/` — slugs gitignored by default; whitelist after IP review): `hiyori` (default), `yae`, `ailian` (Cubism 5, runtime-incompatible, pending Cubism 5 fork — see ROADMAP), `bingtang`, `baizi`, `kafuka`, `阿芙洛狄忒/fense`. The last (Aphrodite/fense by 灵境 Sanctuary) is the newest addition (2026-06-14): moc3 v4, 6 motions, 5 expressions, standard `ParamMouthOpenY` (lipsync drives it via the hardcoded `LIPSYNC_PARAM_ID` constant — zero code change). Two small data-level patches applied in-place: `Groups[EyeBlink].Ids` populated with the two standard eye-open params, and `Motions` group key changed from `""` to `"Idle"` so the SDK's auto-idle picker finds the 6 motions.
 
 ---
 

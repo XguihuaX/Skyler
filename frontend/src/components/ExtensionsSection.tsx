@@ -28,11 +28,13 @@ import {
   deleteMCPServer,
   fetchMCPClients,
   fetchMCPCredentials,
+  getMCPLoginStatus,
   invokeMCPTool,
   reconnectMCPClient,
   setMCPClientEnabled,
   setMCPCredentials,
   setMCPToolEnabled,
+  startMCPBrowserLogin,
   type MCPClientCreatePayload,
   type MCPClientCreateResponse,
   type MCPClientStatus,
@@ -60,6 +62,9 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
   const [deleting, setDeleting] = useState<string | null>(null);
   // 2026-06-02 · A. reconnect 进行中 server name (防重复点)
   const [reconnecting, setReconnecting] = useState<string | null>(null);
+  // 2026-06-15 batch 2 [browser_login] · login 启动进行中 server name(防重复点)
+  // status=running 时跑 1.5s 轮询 · cookie_ready / error 终态停止
+  const [loggingIn, setLoggingIn] = useState<string | null>(null);
 
   const toggleExpand = (name: string) => {
     setExpanded((prev) => {
@@ -128,6 +133,52 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
       await refresh();
     } finally {
       setToolToggling(null);
+    }
+  };
+
+  // 2026-06-15 batch 2 [browser_login] · 点「登录/重新登录」按钮:
+  //   1. POST /login 拉子进程(立即返)· 状态翻 running
+  //   2. 1.5s 轮 GET /login 至 cookie_ready / error
+  //   3. cookie_ready 后 refresh server 列表(login 元数据更新 · toggle 解锁)
+  // 不同步 hang HTTP · 不开浏览器在前端 —— 浏览器开在子进程(Mac 默认浏览器)
+  const onBrowserLogin = async (c: MCPClientStatus) => {
+    setLoggingIn(c.name);
+    try {
+      const init = await startMCPBrowserLogin(c.name);
+      if (init.status === 'error') {
+        showToast(`${c.name} 启动登录失败:${init.error ?? '未知'}`);
+        await refresh();
+        return;
+      }
+      showToast(`${c.name} 已开浏览器扫码登录 · 完成后状态自动刷新`);
+      // 轮询:每 1.5s 查一次 · 终态 cookie_ready / error 退出 · 最多 10 分钟
+      const deadline = Date.now() + 600_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1500));
+        try {
+          const s = await getMCPLoginStatus(c.name);
+          if (s.status === 'cookie_ready') {
+            showToast(`${c.name} 登录成功 · 可以启用 server`);
+            await refresh();
+            return;
+          }
+          if (s.status === 'error') {
+            showToast(`${c.name} 登录失败:${s.error ?? '未知'}`);
+            await refresh();
+            return;
+          }
+        } catch (e) {
+          // 网络抖动忽略,继续轮
+          void e;
+        }
+      }
+      showToast(`${c.name} 登录轮询超时 · 请检查浏览器后重试`);
+      await refresh();
+    } catch (e) {
+      showToast(`${c.name} 登录请求失败:${(e as Error).message}`);
+      await refresh();
+    } finally {
+      setLoggingIn(null);
     }
   };
 
@@ -250,6 +301,8 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
             deleteDisabled={deleting === c.name}
             onReconnect={() => void onReconnect(c)}
             reconnecting={reconnecting === c.name}
+            onBrowserLogin={() => void onBrowserLogin(c)}
+            loggingIn={loggingIn === c.name}
           />
         ))}
         <div className="flex justify-between items-center pt-1">
@@ -355,6 +408,9 @@ interface ClientRowProps {
   // 2026-06-02 · A. reconnect
   onReconnect: () => void;
   reconnecting: boolean;
+  // 2026-06-15 batch 2 [browser_login] · 扫码登录(替代凭证 modal)
+  onBrowserLogin: () => void;
+  loggingIn: boolean;
 }
 
 function ClientRow({
@@ -370,10 +426,21 @@ function ClientRow({
   deleteDisabled,
   onReconnect,
   reconnecting,
+  onBrowserLogin,
+  loggingIn,
 }: ClientRowProps) {
-  const missing = client.missing_credentials.length > 0;
+  // 2026-06-15 batch 2 [browser_login] · 三类 entry 的差异化 UX:
+  //   1. browser_login & cookie 未就位 → toggle 禁用 + "登录" 按钮 + 黄字提示
+  //   2. browser_login & cookie 就位   → toggle 可点 + "重新登录" 按钮
+  //   3. 其他 (env_required / 无)     → 走原 missing_credentials 路径
+  const isBrowserLogin = client.auth === 'browser_login';
+  const cookiePresent = client.login?.cookie_present ?? false;
+  const loginRunning = client.login?.status === 'running';
+  const missing = isBrowserLogin
+    ? !cookiePresent
+    : client.missing_credentials.length > 0;
   const status = badgeFor(client);
-  const toggleDisabled = disabled || missing;
+  const toggleDisabled = disabled || missing || loginRunning;
   // UX-001：connected server 才显示 tool 列表（disconnected 时 tools=[]，
   // caret 仍渲染但点开"暂无 tool 列表，先启用此 server"占位）
   const expandable = client.tools.length > 0 || client.connected;
@@ -441,12 +508,31 @@ function ClientRow({
               错误：{client.last_error}
             </div>
           )}
-          {missing && (
+          {missing && !isBrowserLogin && (
             <div
               className="text-[10px] mt-1"
               style={{ color: 'var(--color-text-secondary)', marginLeft: 16 }}
             >
               请先配置：{client.missing_credentials.join(', ')}
+            </div>
+          )}
+          {isBrowserLogin && (
+            <div
+              className="text-[10px] mt-1"
+              style={{
+                color: cookiePresent
+                  ? 'var(--color-text-secondary)'
+                  : 'rgb(234, 179, 8)',
+                marginLeft: 16,
+              }}
+            >
+              {loginRunning && '浏览器扫码中 · 完成后自动刷新'}
+              {!loginRunning && cookiePresent && '已登录(cookie 就位)'}
+              {!loginRunning && !cookiePresent && (
+                <>请先扫码登录{client.login?.error
+                  ? ` · 上次失败:${client.login.error}`
+                  : ''}</>
+              )}
             </div>
           )}
         </div>
@@ -456,7 +542,25 @@ function ClientRow({
             disabled={toggleDisabled}
             onChange={(v) => onToggle(client, v)}
           />
-          {client.env_required.length > 0 && (
+          {isBrowserLogin ? (
+            <button
+              type="button"
+              onClick={onBrowserLogin}
+              disabled={loggingIn || loginRunning}
+              className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+              style={{
+                background: 'var(--color-bg-elevated)',
+                color: 'var(--color-text-primary)',
+                border: '1px solid var(--color-border)',
+              }}
+              title="开浏览器扫码 · 存 cookie · 后续 enable 不再开浏览器"
+            >
+              <Key size={10} />
+              {(loggingIn || loginRunning)
+                ? '扫码中…'
+                : cookiePresent ? '重新登录' : '登录'}
+            </button>
+          ) : client.env_required.length > 0 && (
             <button
               type="button"
               onClick={onConfigure}

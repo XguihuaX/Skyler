@@ -1,0 +1,99 @@
+# MCP server / client 配置模板(2026-06-15 ④ 入库 · 零凭证 schema 示例)
+#
+# 真实清单见 mcp.config.yaml(本地 · `.gitignore` 默认排除 · 不入 git)。
+# loader 检测顺序:mcp.config.yaml > mcp.config.example.yaml > none。
+#
+# 加新 server:
+#   1. 复制本文件到 mcp.config.yaml
+#   2. 按下方 4 个范式增减 entry
+#   3. 含凭证的:用 env_required: [KEY_NAME] · UI 自动出"配置凭证"按钮 ·
+#      用户在前端 MCP 面板填 → 存 DB · 启动子进程时自动注入 env
+#   4. 含写/删类危险操作的:加 dangerous_tools: [tool_name, ...] · 每次调用
+#      前 WS 弹确认窗 · 用户 accept 才执行(⑤ confirm 门 land 后生效)
+#   5. 别用旧式 env: ${VAR}(github auth bug 根因)· 一律走 env_required
+mcp_server:
+  enabled: true
+  endpoint_path: /mcp
+
+mcp_clients:
+  # ---- 范式 1 · stdio + uvx + 零凭证(最简)----
+  fetch:
+    description: 抓网页转 markdown · Python 实现 · uvx 自动拉
+    transport: stdio
+    command: uvx
+    args:
+    - mcp-server-fetch
+    enabled: true
+    expose_via_skyler_server: false
+
+  # ---- 范式 2 · stdio + npx + 零凭证 · 中国本地服务 ----
+  trip12306:
+    description: 12306 火车票查询 · 只查不订
+    transport: stdio
+    command: npx
+    args:
+    - -y
+    - 12306-mcp
+    enabled: false
+    expose_via_skyler_server: false
+
+  # ---- 范式 3 · stdio + env_required 凭证(前端配置)----
+  notion:
+    description: Notion 页面(需 NOTION_API_KEY · 前端配置)
+    transport: stdio
+    command: npx
+    args:
+    - -y
+    - '@notionhq/notion-mcp-server'
+    env_required:
+    - NOTION_API_KEY
+    enabled: false
+    expose_via_skyler_server: false
+
+  # ---- 范式 4 · env_required + dangerous_tools(写/删需 ⑤ confirm)----
+  github:
+    description: GitHub API(需 GITHUB_PERSONAL_ACCESS_TOKEN · scope:repo + delete_repo + read:user · 前端配置)
+    transport: stdio
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-github'
+    env_required:
+    - GITHUB_PERSONAL_ACCESS_TOKEN
+    # 写/删类调用前 WS 弹确认窗 · 读类(get/list/search)直接放行
+    dangerous_tools:
+    - delete_repository
+    - create_or_update_file
+    - push_files
+    - merge_pull_request
+    - create_pull_request
+    enabled: false
+    expose_via_skyler_server: true
+
+  # ---- 范式 5(可选)· SSE transport ----
+  # amap:
+  #   description: 高德地图(需 AMAP_MAPS_API_KEY · 前端配置)
+  #   transport: sse
+  #   url: https://mcp.amap.com/sse?key=${AMAP_MAPS_API_KEY}
+  #   env_required:
+  #   - AMAP_MAPS_API_KEY
+  #   enabled: false
+
+  # ---- 范式 6(可选)· browser_login(浏览器扫码 · 存 cookie · 非凭证 modal)----
+  # 推荐"全局装包 + command 指向装好的 bin",别用 npx -y(每次冷启动现拉、易超时
+  # · TaskGroup 报 unhandled errors)。安装 rednote-mcp:`npm i -g rednote-mcp` 后
+  # 用 `which rednote-mcp` 拿绝对路径(backend .venv 一般不带 nvm 的 PATH,所以
+  # 直接给绝对路径最稳)。
+  # xhs:
+  #   description: 小红书(rednote-mcp · 扫码登录 · 只读)
+  #   transport: stdio
+  #   command: /Users/<you>/.nvm/versions/node/<node-version>/bin/rednote-mcp
+  #   args: [--stdio]
+  #   auth: browser_login
+  #   login_command: /Users/<you>/.nvm/versions/node/<node-version>/bin/rednote-mcp
+  #   login_args: [init]
+  #   # rednote-mcp 硬编码读这条 · 跟内部 fallback 对齐 · 别瞎改
+  #   cookie_path: ${HOME}/.mcp/rednote/cookies.json
+  #   # rednote-mcp 4 个 tool 全只读 · 但 login tool 暴露给 LLM · gate 防自调弹浏览器
+  #   dangerous_tools: [login]
+  #   enabled: false

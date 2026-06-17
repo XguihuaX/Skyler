@@ -1228,9 +1228,13 @@ async def _build_messages(
             # INV-11 Stage 0' V2'' (2026-05-25):再抽 voice_model_name 字段给
             # layer_a.j2 per-(provider, model) sub-template 路由(例如
             # 'gsv' + 'mai_v4' → V2'' GSV mai_v4 段)。
-            tts_language = "zh"
-            voice_provider = "cosyvoice"
+            # 2026-06-15 SPEC:tts_language 改走 resolve_tts_language 共享 ·
+            # voice_model 没显式 tts_language 时按 (provider, model) 查注册表
+            # 音色原生语种(mai_v4=ja 等)· 防 cid=5 绫华那种"挂日语音却落 zh
+            # → directive 不注入 <ja> → LLM 出纯中文 → 静音/音色飘"链路。
+            voice_provider: str = "cosyvoice"
             voice_model_name: Optional[str] = None
+            _override_lang: Optional[str] = None
             try:
                 async with AsyncSessionLocal() as session:
                     vm_str = (await session.execute(
@@ -1240,8 +1244,8 @@ async def _build_messages(
                     _vm = json.loads(vm_str)
                     if isinstance(_vm, dict):
                         _t = _vm.get("tts_language")
-                        if _t in ("zh", "ja", "en"):
-                            tts_language = _t
+                        if isinstance(_t, str):
+                            _override_lang = _t
                         _p = _vm.get("provider")
                         if isinstance(_p, str) and _p.strip():
                             voice_provider = _p.strip().lower()
@@ -1255,6 +1259,13 @@ async def _build_messages(
                     "[chat] tts_language lookup failed for character_id=%s",
                     character_id,
                 )
+
+            from backend.tts.voice_config import resolve_tts_language
+            tts_language = resolve_tts_language(
+                provider=voice_provider,
+                model=voice_model_name,
+                override=_override_lang,
+            )
 
             from backend.agents.prompt import render_system_prompt
             # INV-5 §5 Phase 2:renderer 返 (stable, variable) 二元组,

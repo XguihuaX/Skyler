@@ -432,7 +432,9 @@ async def gsv_ping(body: GsvPingRequest) -> GsvPingResponse:
     url = body.server_url.strip().rstrip("/") + "/"
     started = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        # 2026-06-14 · trust_env=False 绕过 shell HTTP(S)_PROXY · 局域网
+        # GSV server 调用不依赖 NO_PROXY · 同 gsv.py synthesize/ensure_model_loaded。
+        async with httpx.AsyncClient(timeout=3.0, trust_env=False) as client:
             resp = await client.get(url)
         latency_ms = int((time.monotonic() - started) * 1000)
         ok = resp.status_code < 500
@@ -505,3 +507,186 @@ async def fish_key_status() -> FishKeyStatusResponse:
         except OSError:
             pass
     return FishKeyStatusResponse(configured=False, source=None)
+
+
+# ---------------------------------------------------------------------------
+# INV (2026-06-11) · GSV 全局 server_url GET/POST(walks ai_providers · 同 gsv_settings)
+# ---------------------------------------------------------------------------
+
+
+class GsvServerUrlResponse(BaseModel):
+    server_url: Optional[str] = None
+    source: str  # 'global' | 'default' (default 表示 cache 为 None,显示后端 _DEFAULT)
+
+
+class GsvServerUrlBody(BaseModel):
+    server_url: Optional[str] = None  # None / "" → 清掉全局,运行时回 _DEFAULT
+
+
+@router.get("/tts/gsv/server_url", response_model=GsvServerUrlResponse)
+async def get_gsv_server_url() -> GsvServerUrlResponse:
+    """返当前生效的全局 server_url(若 ai_providers 无行 → source='default')。
+
+    前端 GsvTTSCard 卡顶 input 用此初始值;clean state 或 N/A 时显示 backend
+    _DEFAULT(让用户知道 fallback 走的是公网 IP · 通常需要改成局域网)。
+    """
+    from backend.tts.gsv_settings import get_global_gsv_server_url  # noqa: PLC0415
+    from backend.tts.gsv import _DEFAULT_SERVER_URL  # noqa: PLC0415
+    url = get_global_gsv_server_url()
+    if url:
+        return GsvServerUrlResponse(server_url=url, source="global")
+    return GsvServerUrlResponse(server_url=_DEFAULT_SERVER_URL, source="default")
+
+
+@router.post("/tts/gsv/server_url", response_model=GsvServerUrlResponse)
+async def set_gsv_server_url(body: GsvServerUrlBody) -> GsvServerUrlResponse:
+    """写全局 server_url · upsert ai_providers(type='tts' name='gsv' vendor_id=NULL)。
+
+    body.server_url:
+      - None / "" → 清掉全局 row(下次启动 / get 走 _DEFAULT)
+      - 非空 → upsert · 同时清掉旧 url 对应的 _MODEL_LOADED_KEYS /
+              _MODEL_LOAD_FAILED_KEYS(避免老 weights state 误命中)
+
+    设值后建议前端调 POST /api/tts/gsv/ping {server_url: <new>} 立即验通。
+    """
+    from backend.tts.gsv_settings import set_global_gsv_server_url  # noqa: PLC0415
+    set_global_gsv_server_url(body.server_url)
+    return await get_gsv_server_url()
+
+
+# ---------------------------------------------------------------------------
+# INV (2026-06-11) · GSV emotion coverage 视图(per-model)
+# ---------------------------------------------------------------------------
+
+
+class EmotionCoverageEntry(BaseModel):
+    name: str
+    has_local_lab: bool
+    lab_size: Optional[int] = None
+    lab_preview: Optional[str] = None
+
+
+class EmotionCoverageResponse(BaseModel):
+    model_id: str
+    lab_dir: Optional[str] = None
+    default_emotion: Optional[str] = None
+    default_present: bool
+    emotions: list[EmotionCoverageEntry]
+
+
+@router.get(
+    "/tts/gsv/models/{model_id}/emotion_coverage",
+    response_model=EmotionCoverageResponse,
+)
+async def gsv_emotion_coverage(model_id: str) -> EmotionCoverageResponse:
+    """fs glob lab_dir/*.lab · 报每条 emotion 状态 + default 是否就位。
+
+    跟 GSVTTS._load_lab_cache 同 glob pattern(_lab_cache 的集合派生)·
+    fresh fs read(不带实例 cache)· endpoint per-request 触发。
+
+    model_id 未注册 → 404。lab_dir 字段为空(model 创建时未填)→ emotions 返 []
+    + default_present=False。
+    """
+    from backend.tts.tts_models_cache import get_gsv_model_spec  # noqa: PLC0415
+    from backend.tts.gsv import list_refs  # noqa: PLC0415
+    spec = get_gsv_model_spec(model_id)
+    if not spec:
+        raise HTTPException(
+            status_code=404, detail=f"gsv model {model_id!r} not registered",
+        )
+    lab_dir = spec.get("emotion_bank_dir")
+    default_emotion = spec.get("default_emotion")
+    if not lab_dir:
+        return EmotionCoverageResponse(
+            model_id=model_id, lab_dir=None,
+            default_emotion=default_emotion,
+            default_present=False, emotions=[],
+        )
+    refs = list_refs(lab_dir)
+    names = {r["name"] for r in refs}
+    return EmotionCoverageResponse(
+        model_id=model_id,
+        lab_dir=lab_dir,
+        default_emotion=default_emotion,
+        default_present=bool(default_emotion and default_emotion in names),
+        emotions=[EmotionCoverageEntry(**r) for r in refs],
+    )
+
+
+# ---------------------------------------------------------------------------
+# INV (2026-06-11) · GSV ref list / upload_local(前端本轮不接 UI)
+# ---------------------------------------------------------------------------
+
+
+class RefEntry(BaseModel):
+    name: str
+    has_local_lab: bool
+    lab_size: Optional[int] = None
+    lab_preview: Optional[str] = None
+
+
+class RefListResponse(BaseModel):
+    model_id: str
+    lab_dir: Optional[str] = None
+    refs: list[RefEntry]
+
+
+class RefUploadBody(BaseModel):
+    emotion: str = Field(..., min_length=1, max_length=80)
+    prompt_text: str = Field(..., max_length=2000)
+
+
+@router.get(
+    "/tts/gsv/models/{model_id}/refs", response_model=RefListResponse,
+)
+async def gsv_list_refs(model_id: str) -> RefListResponse:
+    from backend.tts.tts_models_cache import get_gsv_model_spec  # noqa: PLC0415
+    from backend.tts.gsv import list_refs  # noqa: PLC0415
+    spec = get_gsv_model_spec(model_id)
+    if not spec:
+        raise HTTPException(
+            status_code=404, detail=f"gsv model {model_id!r} not registered",
+        )
+    lab_dir = spec.get("emotion_bank_dir")
+    if not lab_dir:
+        return RefListResponse(model_id=model_id, lab_dir=None, refs=[])
+    return RefListResponse(
+        model_id=model_id, lab_dir=lab_dir,
+        refs=[RefEntry(**r) for r in list_refs(lab_dir)],
+    )
+
+
+@router.post(
+    "/tts/gsv/models/{model_id}/refs/upload_local",
+    response_model=RefListResponse, status_code=201,
+)
+async def gsv_upload_ref_local(
+    model_id: str, body: RefUploadBody,
+) -> RefListResponse:
+    """写 <lab_dir>/<emotion>.lab(UTF-8)· 不写远程 .wav(SSH 范畴)。
+
+    PM SPEC-LOCK §#2:本轮只本地落 .lab · upload_ref_remote 留 stub。
+    """
+    from backend.tts.tts_models_cache import get_gsv_model_spec  # noqa: PLC0415
+    from backend.tts.gsv import list_refs, upload_ref_local  # noqa: PLC0415
+    spec = get_gsv_model_spec(model_id)
+    if not spec:
+        raise HTTPException(
+            status_code=404, detail=f"gsv model {model_id!r} not registered",
+        )
+    lab_dir = spec.get("emotion_bank_dir")
+    if not lab_dir:
+        raise HTTPException(
+            status_code=400,
+            detail=f"gsv model {model_id!r} has no lab_dir configured",
+        )
+    try:
+        upload_ref_local(lab_dir, body.emotion, body.prompt_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"write failed: {exc}")
+    return RefListResponse(
+        model_id=model_id, lab_dir=lab_dir,
+        refs=[RefEntry(**r) for r in list_refs(lab_dir)],
+    )

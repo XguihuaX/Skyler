@@ -178,8 +178,14 @@ export default function VoicePicker({
 
   // Build new voice_model JSON for a (provider, model, voice, ttsLang) tuple.
   // cosyvoice 必带 model 字段(否则 _parseVm 只能从 voice 前缀推断 · 系统音 ↔
-  // plus model 切换会卡死回 flash · 见 2026-05-26 hotfix); fish/gsv 走 modelMeta
-  // spread 完整 schema(server_url / weights / 等)。
+  // plus model 切换会卡死回 flash · 见 2026-05-26 hotfix)。
+  //
+  // 2026-06-11 · PM SPEC-LOCK A-ii:gsv 分支改 thin reference,只写
+  // {provider, model, voice?, tts_language?},不再 spread mNode 全字段。
+  // gpt_weights / sovits_weights / emotion_bank_dir / remote_emotion_bank_dir /
+  // default_emotion / inference_params 全走 backend tts_models_cache spec(per-model
+  // 级 tier · 阶段 ① 已落)· server_url 走全局 ai_providers · 两者跟 thin reference
+  // 正交。fish 分支保持原状(下次单列改造,本轮范围外)。
   const buildJsonFor = useCallback(
     (
       provider: string,
@@ -190,6 +196,13 @@ export default function VoicePicker({
       const pNode = tree?.providers.find((p) => p.id === provider);
       const mNode = pNode?.models.find((m) => m.id === model);
       const vNode = mNode?.voices.find((v) => v.id === voiceId);
+      // 2026-06-15 SPEC:语种 = model 注册时声明的属性,不再 per-character
+      // 写 voice_model.tts_language。backend resolver 三 tier 第二档从注册表
+      // (provider, model) spec.tts_language 兜底,UI 永远不写 override。
+      // 现有 voice_model 旧 override 值(如 cid=1 Momo 'ja')无害保留,
+      // resolver 第一档继续读 · 跟从 spec 继承同结果。
+      // ttsLang 参数保留(callsites 仍传 parsed.tts_language 以保 type 兼容)·
+      // buildJsonFor 一律不写 vm.tts_language · 留给 spec 兜底。
       if (provider === 'cosyvoice') {
         const isCloned = vNode?.cloned === true;
         const instructSupported = isCloned ? true : vNode?.instruct === true;
@@ -199,9 +212,19 @@ export default function VoicePicker({
           voice: voiceId,
           instruct_supported: instructSupported,
         };
-        if (ttsLang && ttsLang !== 'zh') vm.tts_language = ttsLang;
         return JSON.stringify(vm);
       }
+      if (provider === 'gsv') {
+        // thin reference · 不 spread · backend 三 tier 自动从 tts_models_cache 解析
+        const vm: Record<string, unknown> = { provider, model };
+        if (voiceId && voiceId !== 'emotion_bank' && voiceId !== 'reference') {
+          vm.voice = voiceId;
+        }
+        return JSON.stringify(vm);
+      }
+      // fish · 保持原 spread 行为(本轮范围外 · 由后续 thin 化单列处理)·
+      // spread 会自动从 mNode 拿 tts_language(注册表 spec 'ja')写入 vm —
+      // 但这只是 spread 副作用 · 跟 resolver 第一档读同结果,无害保留。
       if (!mNode) return voiceModel;
       const vm: Record<string, unknown> = { provider, model };
       for (const [k, v] of Object.entries(mNode)) {
@@ -211,7 +234,6 @@ export default function VoicePicker({
       if (voiceId && voiceId !== 'reference' && voiceId !== 'emotion_bank') {
         vm.voice = voiceId;
       }
-      if (ttsLang && ttsLang !== 'zh') vm.tts_language = ttsLang;
       return JSON.stringify(vm);
     },
     [tree, voiceModel],
@@ -262,12 +284,13 @@ export default function VoicePicker({
   };
 
   const onVoiceSelect = (newVoice: string) => {
-    propagate(buildJsonFor(parsed.provider, parsed.model, newVoice, parsed.tts_language));
+    // 2026-06-15 SPEC:不再传 parsed.tts_language · UI 不写 override · 语种
+    // 由 backend resolver 第二档从 model spec 兜底(同 onProviderChange /
+    // onModelChange 也都不传 lang)。
+    propagate(buildJsonFor(parsed.provider, parsed.model, newVoice));
   };
 
-  const onTtsLangChange = (lang: 'zh' | 'ja' | 'en') => {
-    propagate(buildJsonFor(parsed.provider, parsed.model, parsed.voice, lang));
-  };
+  // 2026-06-15 SPEC:onTtsLangChange 删除 · TTS 语言下拉已删 · 不再有调用点。
 
   const onPreview = useCallback(async (voiceId: string) => {
     if (previewingId === voiceId && audioRef.current) {
@@ -478,40 +501,30 @@ export default function VoicePicker({
         </p>
       )}
 
-      {/* TTS language (仅在选了 voice 后) */}
-      {parsed.voice && (
-        <div className="mt-2">
-          <label
-            className="block text-[11px] mb-1"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
-            TTS 语言
-          </label>
-          <div className="relative">
-            <select
-              value={parsed.tts_language ?? 'zh'}
-              onChange={(e) =>
-                onTtsLangChange(e.target.value as 'zh' | 'ja' | 'en')
-              }
-              className="w-full appearance-none rounded-md px-2 py-1.5 pr-8 text-xs focus:outline-none"
-              style={inputStyle}
-            >
-              <option value="zh">中文(默认)</option>
-              <option value="ja">日语(中文字幕 + 日语朗读)</option>
-              <option value="en">英语(中文字幕 + 英文朗读)</option>
-            </select>
-            <ChevronDown
-              size={12}
-              className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
-              style={{ color: 'var(--color-text-secondary)' }}
-            />
-          </div>
-          <p
-            className="text-[10px] mt-1"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            选 ja/en 时,LLM 自动输出双语:中文给字幕,目标语言给 TTS。
-          </p>
+      {/* TTS 语言:2026-06-15 SPEC · 改为只读 · 取自所选 model 的 spec
+          tts_language(来自 /api/tts/providers tree · mNode.tts_language ·
+          registry 已 expose)· 不再 per-character 可编辑下拉。
+          语种 = model 注册时声明的属性,resolver 后端走"音色原生语种兜底"
+          (override 档保留但 UI 不写,留作未来真·多语种音色用)。
+          ja/en 角色的双语 directive 注入由后端按 tts_language 自动触发,
+          不再需要用户手动选 ja 才启用。 */}
+      {parsed.voice && modelNode && (
+        <div className="mt-2 text-[11px]"
+          style={{ color: 'var(--color-text-secondary)' }}>
+          TTS 语言:
+          <span className="ml-1 font-mono"
+            style={{ color: 'var(--color-text-primary)' }}>
+            {(() => {
+              const lang = modelNode.tts_language;
+              if (lang === 'ja') return '日语(中文字幕 + 日语朗读)';
+              if (lang === 'en') return '英语(中文字幕 + 英文朗读)';
+              if (lang === 'zh') return '中文';
+              return lang ?? '中文';
+            })()}
+          </span>
+          <span className="ml-1" style={{ color: 'var(--color-text-secondary)' }}>
+            (来自 model)
+          </span>
         </div>
       )}
 

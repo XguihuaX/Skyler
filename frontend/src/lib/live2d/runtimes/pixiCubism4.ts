@@ -42,8 +42,20 @@ pixiL2DConfig.sound = false;
 
 // pixi-live2d-display 的 internalModel.coreModel 在类型层是 unknown 风格，
 // 这里只声明我们用到的子集，避免到处 as any。
+// 2026-06-13 加 addParameterValueById(身体微晃用,跟 SDK breath/focus 同时机
+// 叠加 · 在 beforeModelUpdate hook 内调)。
 interface CubismCoreModelLipSync {
   setParameterValueById?: (id: string, value: number) => void;
+  addParameterValueById?: (id: string, value: number) => void;
+}
+
+// pixi-live2d-display Cubism4InternalModel 继承 EventEmitter · 在 update()
+// 流程内 emit 'beforeModelUpdate'(SDK cubism4.es.js:10307 · 时序:motion +
+// expression + eyeBlink + focus + breath + physics + pose 全 add 完后,
+// model.update() 渲染前)。是给用户注入额外参数动画的标准接口。
+interface CubismInternalModelEmitter {
+  on?: (event: string, listener: () => void) => void;
+  off?: (event: string, listener: () => void) => void;
 }
 
 // pixi-live2d-display 的 ``model.focus(x, y)`` 与 ``focusController.focus(x, y)``
@@ -76,6 +88,72 @@ interface CubismInternalModelWithFocus {
 // 当前 Hiyori 与候选八重神子模型都是 ParamMouthOpenY，硬编码这一个值即可。
 const LIPSYNC_PARAM_ID = 'ParamMouthOpenY';
 
+// ---------------------------------------------------------------------------
+// 转头幅度增益(2026-06-13 PM SPEC #2)
+//
+// 原 autoFocus: true 让 SDK 走 model.focus(x, y) → atan2 单位向量 → controller
+// 满偏 → updateFocus 每帧给 ParamAngleX/Y/Z 加 ±30 度 + BodyAngleX ±10。
+// 视觉是鼠标到画布边缘 = 满偏 ±30° 转头,过头。
+//
+// 改:autoFocus 关 · 自接 window.mousemove · 算 canvas-normalized [-1, 1] ·
+// 直接调 focusController.focus(x * GAIN, -y * GAIN) · GAIN 0.5 → 满偏 ±15°。
+// 现有 4 通道 gaze reset(mouseleave / blur / mouseout / mousemove clamp)
+// 仍调 focusController.focus(0, 0) 复位 · 跟 GAIN 正交 · 复用不动。
+//
+// Y 取负 · Web 坐标 Y 向下为正 · Live2D ParamAngleY 向上为正,需翻号。
+const FOCUS_GAIN = 0.5;
+
+// ---------------------------------------------------------------------------
+// 身体微晃(2026-06-13 PM SPEC #3)
+//
+// 给有 ParamBodyAngleY / ParamBodyAngleZ 的模型每帧叠慢速、小幅、错相的正弦
+// 微动 · 视觉:身体轻微左右晃 + 微旋。BodyAngleX 不动 —— SDK breath 已经
+// 用 ±4 度 / 15.5s 周期在 BodyAngleX 上跑,继续叠会过头。
+//
+// 缺参数 ID 的模型(神宫白子 / 秧秧 — ParamBodyAngle* 全缺)→
+// addParameterValueById 对 unknown ID 是 silent no-op,自动跳过,无副作用。
+//
+// 振幅参考:Cubism 标准 ParamBodyAngle 范围 ±10° · 这里 ±1.5° 是保守值
+// (SDK breath BodyAngleX 是 ±4° · 我们小一半,叠加视觉不像喝醉)。
+// 错相周期 5.4s / 7.3s · phase 偏移 1.7 弧度 · 避免 Y/Z 同步像规则摇头。
+const SWAY_BODY_Y_AMP_DEG = 1.5;
+const SWAY_BODY_Z_AMP_DEG = 1.5;
+const SWAY_BODY_Y_PERIOD_MS = 5400;
+const SWAY_BODY_Z_PERIOD_MS = 7300;
+const SWAY_BODY_Z_PHASE_RAD = 1.7;
+
+// ---------------------------------------------------------------------------
+// 冰糖模型水印关闭(2026-06-14 PM SPEC 方向修正 · 第 3 版)
+//
+// 真源:shuiyin1.exp3.json = { Paramheadxy:  +30, Add }
+//      shuiyin2.exp3.json = { Paramheadxy3: +30, Add }
+// 作者的"按 1/2 键去水印"= 应用这两个表情 = 把这 2 个参数推到 30 = 水印关。
+// 也就是说 **30 = 水印关 / 0 = 水印开** · cdi3.json 那个"水印开关" Name 是
+// 反义命名 / 历史遗留(用 ON 状态指代"启用水印控制器",而不是"开水印")。
+//
+// 前 2 版(2026-06-13 init-time set 0 + 2026-06-14 每帧 set 0)方向反 ·
+// 把参数死按"水印开" · 真机看到水印属正常表现 · 不是参数错 ID。
+//
+// 本版实施:每帧 add 30 到这 2 个 ID(原样复刻 shuiyin1/2 表情的 Add 30)。
+//   - 用 addParameterValueById 不用 setParameterValueById:跟 red.exp3 等
+//     共用 Paramheadxy 的表情累加(SDK 内部会按 .moc3 烤入的 Min/Max 夹值 ·
+//     即使叠加 70-90,渲染时夹回上限,不会爆值)· red 的几何效果保留。
+//   - 只动 2 个 ID:Paramheadxy / Paramheadxy3。前版多带 Paramheadxy2/4/5/6
+//     是过度防御(那 4 个没人在 expressions 用,默认状态是什么不清楚 · 不再
+//     主动干预,避免破坏没必要碰的字段)。
+//   - 其它模型(没这俩 ID)addParameterValueById 静默 no-op · 无副作用。
+//
+// hook 时机:onBeforeModelUpdate(SDK 所有 motion / expression / breath /
+// focus 跑完后,model.update 渲染前)· 累加在所有 system 之上。
+//
+// 若真机还看到部分水印行字 → 那部分不是 Paramheadxy/3 控的,转向查 4 张
+// texture / Part Opacity(本轮先不动贴图,按 SPEC 真机判别结果再说)。
+const BINGTANG_WATERMARK_OFF_PARAM_IDS: readonly string[] = [
+  'Paramheadxy',
+  'Paramheadxy3',
+];
+const BINGTANG_WATERMARK_OFF_VALUE = 30;
+
 interface MountContext {
   app: PIXI.Application | null;
   model: Live2DModel | null;
@@ -88,6 +166,8 @@ interface MountContext {
   // 中央。两个 listener 注册一次，cleanup 函数同时移除两个，避免 _teardown
   // 时分散维护。
   gazeResetCleanup: (() => void) | null;
+  // 2026-06-13 SPEC #3 身体微晃 cleanup —— off internalModel.on('beforeModelUpdate')
+  swayCleanup: (() => void) | null;
   // 2026-06-16 INV · per-model framing(取景)· 叠加在 base fit 之上。
   // mount 时默认 1.0/0/0 = 跟 base 等同 · setFraming 后立即重 _fit。
   framing: Live2DFraming;
@@ -119,6 +199,7 @@ export class PixiCubism4Runtime implements Live2DRuntime {
       resizeObserver: null,
       cancelled: false,
       gazeResetCleanup: null,
+      swayCleanup: null,
       framing: { ...DEFAULT_FRAMING },
     };
     this.contexts.set(handle.id, ctx);
@@ -155,8 +236,10 @@ export class PixiCubism4Runtime implements Live2DRuntime {
     // motion，idle / Tap / Flick* 全部能正常播。Step Z audit 结论保持现状。
     let loaded: Live2DModel;
     try {
+      // 2026-06-13 SPEC #2:autoFocus 改 false · 自接 mousemove + GAIN clamp ·
+      // 见 _attachManualFocus(下) + FOCUS_GAIN 模块顶常量。
       loaded = await Live2DModel.from(modelUrl, {
-        autoFocus: true,
+        autoFocus: false,
         autoHitTest: false,
       });
     } catch (err) {
@@ -175,6 +258,72 @@ export class PixiCubism4Runtime implements Live2DRuntime {
     ctx.nativeH = loaded.height || 1;
     app.stage.addChild(loaded);
     this._fit(ctx);
+
+    // 2026-06-13 SPEC #1+#3 · 单 beforeModelUpdate hook 复用两件事:
+    //   1. 冰糖水印 6 个 Paramheadxy* 每帧强制 setParameterValueById 0
+    //      (init-time 一次性 set 真机失败 · 见模块顶 BINGTANG_WATERMARK_*
+    //      docstring · 原因:.moc3 default 可能非 0 + SDK save/load 时序错位 ·
+    //      hook 时机 = SDK 所有 system add 完后,model.update 渲染前)
+    //   2. 身体微晃:有 ParamBodyAngleY/Z 的模型 add 慢速正弦小幅微动
+    //      (BodyAngleX 不动 · SDK breath 已经在那里跑 ±4° / 15.5s · 续叠会过头)
+    //
+    // 缺参数 ID 的模型(神宫白子 / 秧秧 — ParamBodyAngle*;非冰糖 — 6 个
+    // Paramheadxy*)→ setParameterValueById / addParameterValueById 对 unknown
+    // ID 是 silent no-op,自动跳过,无副作用。不需要前置探测/分支判断。
+    const swayStartT = performance.now();
+    const swayCore = loaded.internalModel
+      ?.coreModel as unknown as CubismCoreModelLipSync | undefined;
+    const onBeforeModelUpdate = (): void => {
+      if (!swayCore?.addParameterValueById) return;
+      // ---- 冰糖水印关:每帧 add 30 复刻 shuiyin1/2 表情 ----
+      // 用 add 不用 set:跟 red.exp 等共用 Paramheadxy 的表情累加 ·
+      // SDK 按 .moc3 烤入的 Min/Max 夹值 · 不爆值不抹其他表情几何效果。
+      // 其它模型没这俩 ID → silent no-op。
+      for (const id of BINGTANG_WATERMARK_OFF_PARAM_IDS) {
+        swayCore.addParameterValueById(id, BINGTANG_WATERMARK_OFF_VALUE);
+      }
+      // ---- 身体微晃 ----
+      const t = performance.now() - swayStartT;
+      const y = SWAY_BODY_Y_AMP_DEG *
+        Math.sin((2 * Math.PI * t) / SWAY_BODY_Y_PERIOD_MS);
+      const z = SWAY_BODY_Z_AMP_DEG *
+        Math.sin(
+          (2 * Math.PI * t) / SWAY_BODY_Z_PERIOD_MS + SWAY_BODY_Z_PHASE_RAD,
+        );
+      swayCore.addParameterValueById('ParamBodyAngleY', y);
+      swayCore.addParameterValueById('ParamBodyAngleZ', z);
+    };
+    const swayEmitter = loaded.internalModel as unknown as
+      CubismInternalModelEmitter | undefined;
+    if (swayEmitter?.on && swayEmitter?.off) {
+      swayEmitter.on('beforeModelUpdate', onBeforeModelUpdate);
+      ctx.swayCleanup = () => swayEmitter.off?.('beforeModelUpdate', onBeforeModelUpdate);
+    }
+
+    // 2026-06-13 SPEC #2 · 自接 window.mousemove + GAIN(autoFocus 已关 · 上面 Live2DModel.from 第二参数)。
+    // canvas-normalized [-1, 1] · 鼠标在画布中心 → 焦点 (0, 0) · 鼠标到画布
+    // 边缘 → 焦点 ±1 · 经 GAIN 0.5 → controller ±0.5 → SDK updateFocus 内
+    // 按 ×30 倍率 → ParamAngleX/Y 满偏 ±15°。
+    //
+    // 复用现有 4 通道 gaze reset(下方代码块) — 它们调 focusController.focus(0, 0)
+    // 复位,跟 GAIN 正交,继续工作:
+    //   - mouseleave / blur / mouseout / mousemove 越界 clamp
+    //
+    // 坐标:Y 取负 · web 向下为正 · Live2D ParamAngleY 向上为正。
+    const handleManualFocus = (e: MouseEvent): void => {
+      if (!ctx.model) return;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const y = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+      // 鼠标越界由下方 mousemove clamp 路径捕到 + reset · 这里不处理 ·
+      // 让 gazeReset 那条链统一管 reset 行为。
+      if (x < -1 || x > 1 || y < -1 || y > 1) return;
+      const internal = ctx.model.internalModel as unknown as
+        CubismInternalModelWithFocus | undefined;
+      internal?.focusController?.focus?.(x * FOCUS_GAIN, -y * FOCUS_GAIN);
+    };
+    window.addEventListener('mousemove', handleManualFocus);
 
     // v3-E2 patch：把 gaze focus 拉回中央，覆盖鼠标离开 webview 的所有场景。
     // pixi-live2d-display autoFocus 通过 window.mousemove 持续更新
@@ -234,6 +383,8 @@ export class PixiCubism4Runtime implements Live2DRuntime {
       window.removeEventListener('blur', handleGazeReset);
       document.removeEventListener('mouseout', handleMouseOut);
       window.removeEventListener('mousemove', handleMouseMove);
+      // 2026-06-13 SPEC #2 · 自接 mousemove 同一时段注册同一时段卸,放一起统一管。
+      window.removeEventListener('mousemove', handleManualFocus);
     };
 
     ctx.resizeObserver = new ResizeObserver(() => {
@@ -369,6 +520,12 @@ export class PixiCubism4Runtime implements Live2DRuntime {
     if (ctx.gazeResetCleanup) {
       try { ctx.gazeResetCleanup(); } catch { /* swallow */ }
       ctx.gazeResetCleanup = null;
+    }
+    // 2026-06-13 SPEC #3 · 身体微晃 hook off · internalModel emit
+    // 路径,跟 mousemove 是不同来源,单独 cleanup。
+    if (ctx.swayCleanup) {
+      try { ctx.swayCleanup(); } catch { /* swallow */ }
+      ctx.swayCleanup = null;
     }
     if (ctx.resizeObserver) {
       try { ctx.resizeObserver.disconnect(); } catch { /* swallow */ }

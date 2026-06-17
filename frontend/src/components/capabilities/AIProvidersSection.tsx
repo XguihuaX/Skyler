@@ -3,10 +3,12 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Circle,
   Cloud,
   KeyRound,
   Mic,
+  Pencil,
   Plus,
   Server,
   Trash2,
@@ -37,6 +39,16 @@ import {
 } from '../SettingsPanelLegacy';
 import AddModelModal from './AddModelModal';
 import AddVendorModal from './AddVendorModal';
+import AddGsvModelModal from './AddGsvModelModal';
+import {
+  type TtsModel,
+  type EmotionCoverage,
+  listTtsModels,
+  deleteTtsModel,
+  getGsvServerUrl,
+  setGsvServerUrl,
+  getEmotionCoverage,
+} from '../../lib/tts_models';
 import VendorCredentialsModal from './VendorCredentialsModal';
 
 /**
@@ -1847,140 +1859,372 @@ interface GsvPingResult {
 }
 
 function GsvTTSCard() {
-  const { tree, err: treeErr } = useTtsProviderTree();
-  const gsvProvider = tree?.providers.find((p) => p.id === 'gsv') ?? null;
-  const models = gsvProvider?.models ?? [];
+  // INV (2026-06-11) · 重做:
+  //  - 卡顶 server_url 输入(全局 · 走 ai_providers · 复用 doPing 测连接)
+  //  - model 列表 fetch /api/tts/models?provider=gsv(DB tts_models 表 · per-PM SPEC-LOCK)
+  //    行副信息显 [default_emotion, tts_language](去掉 server_url · 已挪卡顶)
+  //  - 每行 Edit / Delete + 顶部 [+ 添加 GSV 模型] → AddGsvModelModal
+  //  - 折叠"情绪覆盖"section(per-model 切换 · GET /tts/gsv/models/{id}/emotion_coverage)
+  const [models, setModels] = useState<TtsModel[]>([]);
+  const [modelsErr, setModelsErr] = useState<string | null>(null);
+  const [loadingModels, setLoadingModels] = useState(false);
 
-  // 2026-06-07 · 改 per-model 行列表(对齐 CosyVoice TtsGalleryRow 结构) ·
-  // 测试连接 state per-server_url 标记 · 结果就近显示在该 row 内(server_url
-  // 匹配最近一次 ping 的目标才渲染),为未来多 model 留口。
+  const refreshModels = useCallback(async () => {
+    setLoadingModels(true);
+    try {
+      const list = await listTtsModels('gsv');
+      setModels(list);
+      setModelsErr(null);
+    } catch (e) {
+      setModelsErr((e as Error).message);
+    } finally {
+      setLoadingModels(false);
+    }
+  }, []);
+  useEffect(() => { void refreshModels(); }, [refreshModels]);
+
+  // ---- Global server_url ----
+  const [serverUrl, setServerUrl] = useState('');
+  const [serverUrlSource, setServerUrlSource] = useState<'global' | 'default'>('default');
+  const [serverUrlDirty, setServerUrlDirty] = useState(false);
+  const [savingServerUrl, setSavingServerUrl] = useState(false);
+  const [serverUrlMsg, setServerUrlMsg] = useState<string | null>(null);
+
+  const loadServerUrl = useCallback(async () => {
+    try {
+      const v = await getGsvServerUrl();
+      setServerUrl(v.server_url ?? '');
+      setServerUrlSource(v.source);
+      setServerUrlDirty(false);
+    } catch (e) {
+      setServerUrlMsg(`加载 server_url 失败:${(e as Error).message}`);
+    }
+  }, []);
+  useEffect(() => { void loadServerUrl(); }, [loadServerUrl]);
+
+  const saveServerUrl = async () => {
+    setSavingServerUrl(true);
+    setServerUrlMsg(null);
+    try {
+      const v = await setGsvServerUrl(serverUrl.trim() || null);
+      setServerUrl(v.server_url ?? '');
+      setServerUrlSource(v.source);
+      setServerUrlDirty(false);
+      setServerUrlMsg('✓ 已保存');
+    } catch (e) {
+      setServerUrlMsg(`✗ 保存失败:${(e as Error).message}`);
+    } finally {
+      setSavingServerUrl(false);
+    }
+  };
+
+  // ---- Ping (复用 backend POST /api/tts/gsv/ping) ----
   const [pingingFor, setPingingFor] = useState<string | null>(null);
   const [pingResult, setPingResult] = useState<(GsvPingResult & { server_url: string }) | null>(null);
 
-  const doPing = async (serverUrl: string) => {
-    if (!serverUrl) return;
-    setPingingFor(serverUrl);
+  const doPing = async (urlToPing: string) => {
+    if (!urlToPing) return;
+    setPingingFor(urlToPing);
     setPingResult(null);
     try {
       const r = await fetch(`${_BACKEND_BASE}/api/tts/gsv/ping`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ server_url: serverUrl }),
+        body: JSON.stringify({ server_url: urlToPing }),
       });
       const j = (await r.json()) as GsvPingResult;
-      setPingResult({ ...j, server_url: serverUrl });
+      setPingResult({ ...j, server_url: urlToPing });
     } catch (e) {
       setPingResult({
         ok: false, latency_ms: 0,
         error: (e as Error).message,
-        server_url: serverUrl,
+        server_url: urlToPing,
       });
     } finally {
       setPingingFor(null);
     }
   };
 
-  // 静态分类徽标(self-hosted)· 跟 Cosy 卡的 builtin 徽标同款 layout · 内容固定。
-  // 动态连接状态(测试结果)留 body 不进 header,避免 header 频繁变更。
+  // ---- Edit / Delete ----
+  const [editing, setEditing] = useState<TtsModel | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<TtsModel | null>(null);
+  const [deleteMsg, setDeleteMsg] = useState<string | null>(null);
+
+  const doDelete = async () => {
+    if (!confirmDelete) return;
+    try {
+      await deleteTtsModel(confirmDelete.id);
+      setConfirmDelete(null);
+      setDeleteMsg(`✓ 已删除 ${confirmDelete.label}`);
+      await refreshModels();
+    } catch (e) {
+      setDeleteMsg(`✗ 删除失败:${(e as Error).message}`);
+    }
+  };
+
+  // ---- Emotion coverage (per-model · 折叠 / 展开 一个模型一次) ----
+  const [coverageFor, setCoverageFor] = useState<string | null>(null);
+  const [coverage, setCoverage] = useState<EmotionCoverage | null>(null);
+  const [coverageErr, setCoverageErr] = useState<string | null>(null);
+  const [loadingCoverage, setLoadingCoverage] = useState(false);
+
+  const toggleCoverage = async (modelId: string) => {
+    if (coverageFor === modelId) {
+      setCoverageFor(null);
+      setCoverage(null);
+      setCoverageErr(null);
+      return;
+    }
+    setCoverageFor(modelId);
+    setLoadingCoverage(true);
+    setCoverageErr(null);
+    setCoverage(null);
+    try {
+      const c = await getEmotionCoverage(modelId);
+      setCoverage(c);
+    } catch (e) {
+      setCoverageErr((e as Error).message);
+    } finally {
+      setLoadingCoverage(false);
+    }
+  };
+
   const statusBadge = (
     <span
       className="text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0"
-      style={{
-        background: 'var(--color-bg-elevated)',
-        color: 'var(--color-text-secondary)',
-      }}
+      style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text-secondary)' }}
     >
       self-hosted
     </span>
   );
 
+  const inputStyle = {
+    background: 'var(--color-bg-input)',
+    border: '1px solid var(--color-border)',
+    color: 'var(--color-text-primary)',
+  } as const;
+
   return (
-    <TtsCardShell
-      icon={Server}
-      title="GPT-SoVITS(ja)"
-      statusBadge={statusBadge}
-    >
-      {treeErr ? (
+    <TtsCardShell icon={Server} title="GPT-SoVITS(ja)" statusBadge={statusBadge}>
+      {/* ---- 卡顶:全局 server_url ---- */}
+      <div className="rounded-md px-3 py-2 mb-3 flex flex-col gap-1.5"
+        style={{ background: 'var(--color-bg-input)', border: '1px solid var(--color-border-subtle)' }}>
+        <div className="text-[11px] font-medium uppercase tracking-wide"
+          style={{ color: 'var(--color-text-secondary)' }}>
+          全局 Server URL ({serverUrlSource === 'global' ? '已配置' : '回落默认'})
+        </div>
+        <div className="flex gap-1.5 items-center">
+          <input
+            className="flex-1 rounded-md px-2 py-1.5 text-xs font-mono"
+            style={inputStyle}
+            value={serverUrl}
+            onChange={(e) => { setServerUrl(e.target.value); setServerUrlDirty(true); setServerUrlMsg(null); }}
+            placeholder="http://192.168.x.x:9880"
+          />
+          <button
+            type="button"
+            onClick={() => void saveServerUrl()}
+            disabled={!serverUrlDirty || savingServerUrl}
+            className="text-xs px-2.5 py-1.5 rounded transition disabled:opacity-50 shrink-0"
+            style={{ background: 'var(--color-accent)', color: 'var(--color-bubble-user-text)' }}
+          >
+            {savingServerUrl ? '…' : '保存'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void doPing(serverUrl.trim())}
+            disabled={!serverUrl.trim() || pingingFor === serverUrl.trim()}
+            className="text-xs px-2.5 py-1.5 rounded transition disabled:opacity-50 shrink-0"
+            style={inputStyle}
+          >
+            {pingingFor === serverUrl.trim() ? '…' : '测试连接'}
+          </button>
+        </div>
+        {(serverUrlMsg || (pingResult && pingResult.server_url === serverUrl.trim())) && (
+          <div className="text-[10px]" style={{
+            color:
+              pingResult && pingResult.server_url === serverUrl.trim()
+                ? (pingResult.ok ? 'rgb(34,197,94)' : 'rgb(239,68,68)')
+                : 'var(--color-text-secondary)',
+          }}>
+            {pingResult && pingResult.server_url === serverUrl.trim()
+              ? (pingResult.ok
+                ? `✓ 通 (${pingResult.latency_ms}ms${pingResult.status_code ? ` · HTTP ${pingResult.status_code}` : ''})`
+                : `✗ 不通:${pingResult.error ?? '?'}`)
+              : serverUrlMsg}
+          </div>
+        )}
+      </div>
+
+      {/* ---- model 行列表 ---- */}
+      {modelsErr ? (
         <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-          加载失败:{treeErr}
+          加载失败:{modelsErr}
         </p>
-      ) : !gsvProvider ? (
-        <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-          还没注册 GSV 模型。
+      ) : models.length === 0 && !loadingModels ? (
+        <p className="text-xs mb-3" style={{ color: 'var(--color-text-secondary)' }}>
+          还没注册 GSV 模型。点下方 [+ 添加 GSV 模型] 创建一个。
         </p>
       ) : (
-        <>
-          {/* 2026-06-07 · per-model 行列表(对齐 CosyVoice TtsGalleryRow 结构) ·
-              chip 容器 token 全部照搬 TtsGalleryRow:rounded-md px-3 py-2 +
-              bg-input + border-subtle · 左 model 名 + 副信息 / 右测试连接按钮 /
-              结果就近显示 row 内底部。多 model 时自然多条。 */}
-          <ul className="space-y-1.5 mb-3">
-            {models.map((m) => {
-              const isPinging = pingingFor === m.server_url;
-              const myResult =
-                pingResult && pingResult.server_url === m.server_url
-                  ? pingResult : null;
-              const subParts = [
-                m.server_url,
-                m.default_emotion ? `默认 ${m.default_emotion}` : null,
-                m.tts_language,
-              ].filter(Boolean);
-              return (
-                <li
-                  key={m.id}
-                  className="rounded-md px-3 py-2 flex flex-col gap-1"
-                  style={{
-                    background: 'var(--color-bg-input)',
-                    border: '1px solid var(--color-border-subtle)',
-                  }}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm truncate"
-                        style={{ color: 'var(--color-text-primary)' }}>
-                        {m.label}
-                      </div>
-                      <div className="text-[10px] truncate"
-                        style={{ color: 'var(--color-text-secondary)' }}
-                        title={subParts.join(' · ')}>
-                        {subParts.join(' · ') || '—'}
-                      </div>
+        <ul className="space-y-1.5 mb-3">
+          {models.map((m) => {
+            const subParts = [
+              m.default_emotion ? `默认 ${m.default_emotion}` : null,
+              m.tts_language,
+            ].filter(Boolean);
+            const coverageOpen = coverageFor === m.model_id;
+            return (
+              <li
+                key={m.id}
+                className="rounded-md px-3 py-2 flex flex-col gap-1"
+                style={{
+                  background: 'var(--color-bg-input)',
+                  border: '1px solid var(--color-border-subtle)',
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void toggleCoverage(m.model_id)}
+                    className="rounded p-0.5 shrink-0"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                    title={coverageOpen ? '收起情绪覆盖' : '展开情绪覆盖'}
+                  >
+                    {coverageOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm truncate"
+                      style={{ color: 'var(--color-text-primary)' }}>
+                      {m.label}
+                      {m.builtin && (
+                        <span className="text-[10px] ml-1.5 px-1 py-0.5 rounded uppercase"
+                          style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text-secondary)' }}>
+                          builtin
+                        </span>
+                      )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => void doPing(m.server_url ?? '')}
-                      disabled={isPinging || !m.server_url}
-                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded transition disabled:opacity-50 shrink-0"
-                      style={{
-                        background: 'var(--color-bg-input)',
-                        border: '1px solid var(--color-border)',
-                        color: 'var(--color-text-primary)',
-                      }}
-                    >
-                      {isPinging ? '测试中…' : '测试连接'}
-                    </button>
+                    <div className="text-[10px] truncate"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                      title={subParts.join(' · ')}>
+                      {subParts.join(' · ') || '—'}
+                    </div>
                   </div>
-                  {myResult && (
-                    <div className="text-[10px]"
-                      style={{
-                        color: myResult.ok
-                          ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)',
-                      }}>
-                      {myResult.ok
-                        ? `✓ 通 (${myResult.latency_ms}ms${myResult.status_code ? ` · HTTP ${myResult.status_code}` : ''})`
-                        : `✗ 不通:${myResult.error ?? '?'}`}
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+                  <button
+                    type="button" onClick={() => setEditing(m)}
+                    className="rounded p-1 shrink-0"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                    title="编辑"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    type="button" onClick={() => { setConfirmDelete(m); setDeleteMsg(null); }}
+                    className="rounded p-1 shrink-0"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                    title="删除"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
 
-          <p className="text-[10px]"
-            style={{ color: 'var(--color-text-secondary)' }}>
-            在 ⚙ 设置 → 角色管理 给单个角色选用 GSV 音色。
-          </p>
-        </>
+                {coverageOpen && (
+                  <div className="mt-1 pl-5">
+                    {loadingCoverage ? (
+                      <div className="text-[10px]" style={{ color: 'var(--color-text-secondary)' }}>加载中…</div>
+                    ) : coverageErr ? (
+                      <div className="text-[10px]" style={{ color: 'rgb(239,68,68)' }}>
+                        ✗ {coverageErr}
+                      </div>
+                    ) : coverage ? (
+                      <div className="text-[10px]" style={{ color: 'var(--color-text-secondary)' }}>
+                        <div className="mb-1">
+                          lab_dir: <span className="font-mono">{coverage.lab_dir ?? '<未配置>'}</span>
+                          {' · '}
+                          default_emotion: <span className="font-mono">{coverage.default_emotion ?? '—'}</span>{' '}
+                          {coverage.default_present
+                            ? <span style={{ color: 'rgb(34,197,94)' }}>✓ 就位</span>
+                            : <span style={{ color: 'rgb(239,68,68)' }}>✗ 缺失</span>}
+                        </div>
+                        {coverage.emotions.length === 0 ? (
+                          <div>暂无 .lab(lab_dir 不存在 / 0 个 .lab 文件)</div>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {coverage.emotions.map((emo) => (
+                              <span key={emo.name}
+                                className="px-1.5 py-0.5 rounded font-mono"
+                                title={emo.lab_preview ?? ''}
+                                style={{
+                                  background: 'var(--color-bg-elevated)',
+                                  color: 'var(--color-text-primary)',
+                                }}>
+                                {emo.name}{emo.lab_size ? ` (${emo.lab_size}B)` : ''}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {/* ---- 添加 model ---- */}
+      <div className="flex gap-2 items-center">
+        <button
+          type="button" onClick={() => setAddOpen(true)}
+          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition"
+          style={inputStyle}
+        >
+          <Plus size={14} /> 添加 GSV 模型
+        </button>
+        {deleteMsg && (
+          <span className="text-[10px]"
+            style={{ color: deleteMsg.startsWith('✓') ? 'rgb(34,197,94)' : 'rgb(239,68,68)' }}>
+            {deleteMsg}
+          </span>
+        )}
+      </div>
+
+      {confirmDelete && (
+        <div className="mt-2 rounded-md px-3 py-2 text-[11px]"
+          style={{ background: 'var(--color-bg-input)', border: '1px solid var(--color-border)' }}>
+          确认删除「{confirmDelete.label}」吗?{confirmDelete.builtin && '(builtin · 删了不复活)'}
+          <div className="flex gap-2 mt-1.5">
+            <button type="button" onClick={() => setConfirmDelete(null)}
+              className="text-xs px-2 py-1 rounded"
+              style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text-primary)' }}>
+              取消
+            </button>
+            <button type="button" onClick={() => void doDelete()}
+              className="text-xs px-2 py-1 rounded"
+              style={{ background: 'rgb(239,68,68)', color: '#fff' }}>
+              确认删除
+            </button>
+          </div>
+        </div>
+      )}
+
+      <p className="text-[10px] mt-2"
+        style={{ color: 'var(--color-text-secondary)' }}>
+        在 ⚙ 设置 → 角色管理 给单个角色选用 GSV 音色。
+      </p>
+
+      {(addOpen || editing) && (
+        <AddGsvModelModal
+          editing={editing}
+          onClose={() => { setAddOpen(false); setEditing(null); }}
+          onSaved={() => {
+            setAddOpen(false);
+            setEditing(null);
+            void refreshModels();
+          }}
+          showToast={(t) => setDeleteMsg(t)}
+        />
       )}
     </TtsCardShell>
   );

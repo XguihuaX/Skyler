@@ -38,6 +38,7 @@
       "label": "GPT-SoVITS(self-hosted · ja)",
       "models": [
         {
+          "_comment": "本块仅作 tts_models_cache 整体加载失败时的 fallback (PM SPEC-LOCK §3 2026-06-11)。运行时 truth-of-source = DB tts_models 表。server_url 字段已删 (B.4-y2) · 走全局 ai_providers (type='tts' name='gsv' vendor_id IS NULL) 单行 · 详见 backend/tts/gsv_settings.py。",
           "id": "mai_v4",
           "label": "Mai v4(樱岛麻衣 ja)",
           "mode": "trained",
@@ -47,7 +48,6 @@
           "emotion_bank_dir": "tts/gsv/mai_v4",
           "remote_emotion_bank_dir": "/workspace/GSVI/mai_emotion_bank/",
           "default_emotion": "日常",
-          "server_url": "http://106.75.224.167:9880",
           "inference_params": {
             "top_k": 15,
             "top_p": 1.0,

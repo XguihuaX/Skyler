@@ -518,6 +518,22 @@ interface AppState {
   activityPermissionHint: string | null;
   setActivityPermissionHint: (v: string | null) => void;
 
+  // 2026-06-15 ⑤ · MCP tool 调用前确认 queue · 数组 head 弹 modal · accept/reject
+  // 后 shift 出队 · 下一条自动接上。
+  // 2026-06-15 batch 2 [confirm 边界] · 改 single → queue · 并发多个 confirm
+  // 不互相覆盖(LLM 可能一轮调多个 dangerous tool · 或多 server 同时触发)。
+  // MCPConfirmModal 看 queue[0] 弹 · 处理完 shift。
+  mcpConfirmQueue: Array<{
+    request_id: string;
+    cap_name: string;
+    server_name: string;
+    tool_name: string;
+    args_preview: string;
+  }>;
+  enqueueMcpConfirm: (req: AppState['mcpConfirmQueue'][number]) => void;
+  shiftMcpConfirm: (request_id: string) => void;  // 处理完弹下一条 · 按 id 安全 shift
+  clearMcpConfirmQueue: () => void;  // WS 断开时调 · 清空(后端已经 deny)
+
   // INV-17 v3 (2026-05-28): silero web 接管 · vadThreshold/silenceTimeoutMs 语义
   // 改为 silero MicVAD 参数(positiveSpeechThreshold / redemptionMs)。
   // negativeSpeechThreshold / minSpeechMs / preSpeechPadMs 用 silero default ·
@@ -786,6 +802,18 @@ export const useAppStore = create<AppState>((set) => ({
 
   activityPermissionHint: null,
   setActivityPermissionHint: (activityPermissionHint) => set({ activityPermissionHint }),
+  mcpConfirmQueue: [],
+  enqueueMcpConfirm: (req) => set((state) => {
+    // 去重防 backend / WS 重复 push(same request_id)
+    if (state.mcpConfirmQueue.some((q) => q.request_id === req.request_id)) {
+      return state;
+    }
+    return { mcpConfirmQueue: [...state.mcpConfirmQueue, req] };
+  }),
+  shiftMcpConfirm: (request_id) => set((state) => ({
+    mcpConfirmQueue: state.mcpConfirmQueue.filter((q) => q.request_id !== request_id),
+  })),
+  clearMcpConfirmQueue: () => set({ mcpConfirmQueue: [] }),
 
   // INV-17 v3 · silero MicVAD 参数 default(只暴露这 2 个 · 其他用 silero default)
   // INV-17 v3.4 (2026-05-28): 0.3 → 0.6 · 真机实测安静环境麦克底噪 confidence

@@ -31,9 +31,92 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+_VALID_LANGS = frozenset({"zh", "ja", "en"})
+
+
+def resolve_tts_language(
+    *,
+    provider: Optional[str],
+    model: Optional[str],
+    override: Optional[str],
+) -> str:
+    """单一共享 resolver:决定送 layer_a.j2 directive / extract_tts_text /
+    GSV /tts 的 tts_language。
+
+    2026-06-15 SPEC:此前 chat.py / voice_config / ws.py / proactive/engine
+    各自 silent default "zh",导致挂日语训练音(mai_v4 等)的角色若 DB voice_model
+    没显式写 tts_language → 一路落 zh → directive 不注入 <ja> → LLM 出纯中文 →
+    GSV `text_lang=zh` 喂中文给日语训练音 → 音色飘(cid=5 神里绫华现象)。
+    收口此 resolver · 5 处独立 default 全调它。
+
+    顺序:
+      1. DB voice_model.tts_language ∈ {zh, ja, en} → 显式 override(采)
+      2. 注册表(provider, model)spec.tts_language ∈ {zh, ja, en} → 继承
+         音色原生语种(GSV mai_v4 = ja · CosyVoice = zh · Fish s2-pro = ja)
+      3. "zh" — 真·最后兜底
+
+    null-safe:provider / model 缺失 / registry 异常 / spec 没该字段 → 落 "zh",
+    不抛。registry import 用 late import 防 voice_config ↔ registry 循环
+    (registry 顶部不 import voice_config · 当前安全 · 但 late import 留余地)。
+
+    Args:
+        provider: voice_model.provider(eg 'gsv' / 'cosyvoice' / 'fish')· 可空
+        model:    voice_model.model(eg 'mai_v4' / 'cosyvoice-v3-flash' / 's2-pro')· 可空
+        override: voice_model.tts_language 原始值 · 可空 / 非 str / 不在白名单 → 落到下一档
+
+    Returns:
+        'zh' / 'ja' / 'en' 之一。
+    """
+    if isinstance(override, str):
+        normalized = override.strip().lower()
+        if normalized in _VALID_LANGS:
+            return normalized
+
+    if isinstance(provider, str) and provider.strip() \
+            and isinstance(model, str) and model.strip():
+        try:
+            from backend.tts.registry import list_models  # noqa: PLC0415
+            for m_spec in list_models(provider.strip().lower()):
+                if m_spec.get("id") == model.strip():
+                    spec_lang_raw = m_spec.get("tts_language")
+                    if isinstance(spec_lang_raw, str):
+                        spec_lang = spec_lang_raw.strip().lower()
+                        if spec_lang in _VALID_LANGS:
+                            return spec_lang
+                    break
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[resolve_tts_language] registry lookup failed "
+                "(provider=%r model=%r): %s · fallback 'zh'",
+                provider, model, exc,
+            )
+    return "zh"
+
+
+def _resolve_lang_from_voice_model_json(
+    voice_model_json: Optional[str],
+) -> str:
+    """字符串版 resolver · 给 ws.py / proactive 直接喂 character.voice_model
+    JSON 字符串用。空 / parse 失败 → 落最后兜底 'zh'(对应 voice_model=None
+    的默认 CosyVoice 路径,默认中文)。"""
+    if not isinstance(voice_model_json, str) or not voice_model_json.strip():
+        return "zh"
+    try:
+        data: Any = json.loads(voice_model_json)
+    except (json.JSONDecodeError, TypeError):
+        return "zh"
+    if not isinstance(data, dict):
+        return "zh"
+    return resolve_tts_language(
+        provider=data.get("provider") if isinstance(data.get("provider"), str) else None,
+        model=data.get("model") if isinstance(data.get("model"), str) else None,
+        override=data.get("tts_language") if isinstance(data.get("tts_language"), str) else None,
+    )
 
 
 @dataclass
@@ -155,8 +238,14 @@ def parse_voice_config(
     model = raw_model.strip() if isinstance(raw_model, str) and raw_model.strip() else None
 
     # INV-9 §2 新增字段
-    tts_language_raw = data.get("tts_language") or "zh"
-    tts_language = tts_language_raw.lower() if isinstance(tts_language_raw, str) else "zh"
+    # 2026-06-15 SPEC:silent default "zh" 替成 resolve_tts_language 共享 ·
+    # 缺省时按 (provider, model) 查注册表音色原生语种 · 否则才落 "zh"。
+    tts_language = resolve_tts_language(
+        provider=provider if isinstance(provider, str) else None,
+        model=model if isinstance(model, str) else None,
+        override=data.get("tts_language")
+        if isinstance(data.get("tts_language"), str) else None,
+    )
     reference_audio_path = data.get("reference_audio_path")
     reference_text = data.get("reference_text")
     fish_latency_raw = data.get("fish_latency") or "balanced"
