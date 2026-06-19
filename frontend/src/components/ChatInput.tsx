@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, AudioWaveform, Ban, ChevronDown, ChevronUp, ImagePlus, Loader2, Mic,
+  ArrowUp, AudioWaveform, ChevronDown, ChevronUp, ImagePlus, Loader2, Mic,
   Sparkles, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { useAppStore, type AiStatus } from '../store';
@@ -114,7 +114,9 @@ export default function ChatInput() {
   const addAttachment = useAppStore((s) => s.addAttachment);
   const removeAttachment = useAppStore((s) => s.removeAttachment);
 
-  const { sendText, sendInterrupt, startManual, stopManualAndSend, toggleVad } = useAppApi();
+  // 2026-06-19 · 删手动打断按钮 · sendInterrupt 移出本组件 destructure
+  // (useAudio barge-in 仍在用 · 不动那条;ChatInput 不再持手动打断 UI)
+  const { sendText, startManual, stopManualAndSend, toggleVad } = useAppApi();
 
   /** 接 N 个 File · 串行压图 · 失败 toast 单条提示。命中 IMG_MAX_COUNT 整批拒。 */
   const handleFiles = async (files: FileList | File[] | null) => {
@@ -215,10 +217,8 @@ export default function ChatInput() {
     }
   };
 
-  const handleInterrupt = () => {
-    // v3-F #4：真正打断 —— 后端取消 LLM stream + TTS，前端立即停播放
-    sendInterrupt();
-  };
+  // 2026-06-19 · handleInterrupt 已删除 · 手动 ⊘ 按钮取消(barge-in 自动打断
+  // 仍在 useAudio.ts 内基于音量阈值触发 · 后端 ws.py:1295 interrupt 帧路径不变)
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // 2026-06-19 · textarea Enter 发送(preventDefault)/ Shift+Enter 换行(走原生)
@@ -365,7 +365,9 @@ export default function ChatInput() {
       {/* ═══ 区 B · 单条工具条 · 3 簇 左→右 ═════════════════════════════════
           簇1 输入类:ImagePlus + 可扩展 flex group(留位后加)
           簇2 活动类:微型 StatusBadge(decision ①)+ tool spinner + 想法 chip
-                     + Ban 打断键(disabled 不变)· 想法 popover 向上弹
+                     · 想法 popover 向上弹
+                     (2026-06-19 删手动打断按钮 · barge-in 自动打断仍在
+                      useAudio.ts 内基于音量阈值触发 · idle 时簇2 自动全干净)
           簇3 语音/发送:Mic / TTS(mute)/ Send(ArrowUp)*/}
       <div className="flex items-center justify-between gap-2">
         {/* ── 簇1 · 输入类 · 可扩展 flex group(现放 ImagePlus · 留位后加)── */}
@@ -402,7 +404,7 @@ export default function ChatInput() {
         </div>
 
         {/* ── 簇2 · 活动类 · 全部运行时状态(决策 ① 微型 status + tool +
-              想法 chip + Ban 打断)· 想法 popover 向上弹 ─────────────────── */}
+              想法 chip)· 想法 popover 向上弹 · 空闲时全条件渲染 = 干净空 ── */}
         <div className="flex items-center gap-2 min-w-0">
           {/* 决策 ① · 微型 AI 状态指示 · idle 时整个 null · 非 idle 才显小色
               点 + 极短标签 · 不重复左栏 ConnectionDot(那是 WS 连接,不是 AiStatus)*/}
@@ -478,21 +480,10 @@ export default function ChatInput() {
             </div>
           )}
 
-          {/* v3-F #4 · Ban 打断 · thinking / speaking 时可按 · 决策 E 进活动簇 */}
-          <button
-            className={btnBaseClass}
-            style={{
-              ...btnSize,
-              background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
-              color: 'var(--color-text-secondary)',
-            }}
-            onClick={handleInterrupt}
-            disabled={status !== 'speaking' && status !== 'thinking'}
-            title="打断"
-            aria-label="打断"
-          >
-            <Ban size={ICON_SIZE} />
-          </button>
+          {/* 2026-06-19 · 手动 Ban 打断按钮已删 · barge-in 自动打断仍在
+              useAudio.ts:455 区段(用户开口超 INTERRUPT_THRESHOLD 触发)·
+              ws.py:1295 interrupt 帧路径不变 · StatusMicro 'interrupted'
+              态自动打断时仍会显示 */}
         </div>
 
         {/* ── 簇3 · 语音 / 发送 · Mic / TTS(mute)/ Send(ArrowUp) ──────── */}
