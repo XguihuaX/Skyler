@@ -447,6 +447,24 @@ interface AppState {
     s: { modelKey: string; framing: import('../lib/live2d/settings').Live2DFraming } | null,
   ) => void;
 
+  // 2026-06-19 · 图片输入(MVP)· 用户附件待发队列。
+  //   - dataUrl: 压缩后的 base64 (`data:image/jpeg;base64,...` · 同 Step 0 探针
+  //     验过的 image_url shape · 直接进 ws payload · 不另存)
+  //   - mime / bytes 仅 UI 缩略图展示用 · 不参与协议
+  //   - max 4 张/消息 (N=4 · 按图计费硬限) · 命中 add 时 toast 拒
+  // sendMessage 后由 useWebSocket 调 clearAttachments 清空。MVP 不持久化 · 不
+  // 建 chat_attachments 表 · 自己气泡显示 "[图片] N 张" 文字 (不是缩略图 ·
+  // P2 才回显缩略图)。
+  pendingAttachments: Array<{
+    id: string;
+    dataUrl: string;
+    mime: string;
+    bytes: number;
+  }>;
+  addAttachment: (a: { dataUrl: string; mime: string; bytes: number }) => void;
+  removeAttachment: (id: string) => void;
+  clearAttachments: () => void;
+
   // ASR 回显（模块 7 才接真实数据，本模块只放接口）
   asrText: string;
   setAsrText: (t: string) => void;
@@ -735,6 +753,19 @@ export const useAppStore = create<AppState>((set) => ({
   setLive2dAdjustMode: (live2dAdjustMode) => set({ live2dAdjustMode }),
   setPendingFraming: (pendingFraming) => set({ pendingFraming }),
   setSavedFraming: (savedFraming) => set({ savedFraming }),
+
+  // 2026-06-19 · 图片输入 MVP · 队列 + setter
+  pendingAttachments: [],
+  addAttachment: (a) => set((state) => ({
+    pendingAttachments: [
+      ...state.pendingAttachments,
+      { ...a, id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` },
+    ],
+  })),
+  removeAttachment: (id) => set((state) => ({
+    pendingAttachments: state.pendingAttachments.filter((a) => a.id !== id),
+  })),
+  clearAttachments: () => set({ pendingAttachments: [] }),
 
   asrText: '',
   asrTimestamp: 0,

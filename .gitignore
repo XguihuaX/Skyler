@@ -21,6 +21,10 @@ config.yaml.backup-before-*
 # 入库的是 mcp.config.example.yaml(零凭证 4 范式模板)
 mcp.config.yaml
 
+# 2026-06-19 · 一次性探针 / 临时调试脚本 · 不入 git
+# 例:scratch/step0_vl_probe.py(图片输入 vision 能力探针 · 跑完留本地可复跑)
+scratch/
+
 .env
 .DS_Store
 *.log

@@ -570,10 +570,26 @@ export function useWebSocket(): UseWebSocketReturn {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const sendText = useCallback((content: string) => {
+  // 2026-06-19 · sendText → sendMessage(text, attachments?) 兼容签名 ·
+  // 老 caller 单参数调用 == 旧 sendText 行为。attachments 是图片(MVP):
+  //   - 仍走 msg_type='text'(不开新 type · 兼容老 ws.py 路径)
+  //   - 字段 attachments: [{kind:'image', data_url, mime}] · 缺省 []
+  //   - image_block shape 跟 Step 0 探针 HTTP 200 验过的同款(照抄,别手搓)
+  //   - 自己气泡:有图 + 有文 → "<text> [图片] N 张";仅图 → "[图片] N 张"
+  //     (MVP 不渲缩略图 · P2 才回显)
+  //   - 发完清队列 clearAttachments() 防下一轮串
+  const sendText = useCallback((
+    content: string,
+    attachments?: Array<{ dataUrl: string; mime: string }>,
+  ) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       console.warn('[WS] not connected, drop text');
+      return;
+    }
+    const atts = attachments ?? [];
+    if (!content && atts.length === 0) {
+      // pin 1 守护:image-only 允许 · 但全空不发
       return;
     }
     textChunkCountRef.current = 0;
@@ -588,24 +604,37 @@ export function useWebSocket(): UseWebSocketReturn {
     // UX-004:新一轮开始,清掉上一轮残留的 tool loading(理论上 tool_use_done
     // 已经清过,这里是 belt-and-suspenders 防 backend 路径异常未发 done)
     s.setCurrentToolName(null);
-    // 乐观更新：立刻显示 user 气泡
+    // 乐观更新:气泡内容(MVP · 文字 [图片] N 张 一致显示 · 不渲缩略图)
+    const bubbleContent = atts.length > 0
+      ? (content ? `${content} [图片] ${atts.length} 张` : `[图片] ${atts.length} 张`)
+      : content;
     s.appendChatMessage({
       id: newClientId('u'),
       role: 'user',
-      content,
+      content: bubbleContent,
       streaming: false,
       ts: performance.now(),
-      // sendText 永远是用户主动文字输入
       kind: 'normal',
     });
-    console.log(`[FRONT] send text len=${content.length}`);
+    console.log(
+      `[FRONT] send text len=${content.length} attachments=${atts.length}`,
+    );
+    // image_block shape · 同 Step 0 探针验过(`{type:image_url, image_url:{url}}`)
+    const att_payload = atts.map((a) => ({
+      kind: 'image' as const,
+      data_url: a.dataUrl,
+      mime: a.mime,
+    }));
     ws.send(JSON.stringify({
       type: 'text',
       content,
+      attachments: att_payload,
       user_id: s.defaultUserId,
       conversation_id: s.currentConversationId,
       character_id: s.currentCharacterId,
     }));
+    // 发完清队列 · 防下一轮串
+    s.clearAttachments();
   }, [store]);
 
   const sendVoice = useCallback((audioBase64: string) => {
