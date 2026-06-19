@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, AudioWaveform, ChevronDown, ChevronUp, ImagePlus, Loader2, Mic,
-  Sparkles, Volume2, VolumeX, X,
+  ArrowUp, AudioWaveform, ChevronDown, ChevronUp, FileText, ImagePlus, Loader2,
+  Mic, Paperclip, Sparkles, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { useAppStore, type AiStatus } from '../store';
 import { useAppApi } from '../contexts/appApi';
@@ -38,13 +38,60 @@ function StatusMicro({ status }: { status: AiStatus }) {
 // 2026-06-19 · 图片输入(MVP)· 压图常量(按图计费硬限)
 const IMG_MAX_LONG_EDGE = 1568;   // 长边(qwen-vl 推荐 ~1568)
 const IMG_JPEG_QUALITY = 0.85;    // JPEG 0.85(截图小字可能糊 · PM watch · 真机调)
-const IMG_MAX_BYTES = 2 * 1024 * 1024;  // 单张 ≤ 2MB(压完仍超 = 拒)
-const IMG_MAX_COUNT = 4;          // 每条消息最多 4 张
+const IMG_MAX_BYTES = 2 * 1024 * 1024;  // 单张图 ≤ 2MB(压完仍超 = 拒)
+const IMG_MAX_COUNT = 4;          // 每条消息最多 4 张(image + file 共用总数 · 锁定 3)
 const IMG_ACCEPT = 'image/png,image/jpeg,image/jpg,image/webp,image/gif';
+
+// 2026-06-19 · 文件输入(MVP)· 文档常量(锁定 2:txt/md/code + docx + pdf)
+const FILE_MAX_BYTES = 10 * 1024 * 1024;   // 单文件 ≤ 10MB(锁定 6)
+const TOTAL_MAX_BYTES = 10 * 1024 * 1024;  // 所有 attachments 原字节总和 ≤ 10MB
+                                            // (补丁 A · uvicorn ws_max_size 默认 16MB
+                                            //  base64 膨胀 ~4/3 · 10MB 原字节 ≈ 13.3MB
+                                            //  稳在 16MB 内)
+const DOC_ACCEPT =
+  '.txt,.md,.markdown,.rst,' +
+  '.py,.ts,.tsx,.js,.jsx,.mjs,.cjs,' +
+  '.json,.yaml,.yml,.toml,.ini,.cfg,' +
+  '.sh,.bash,' +
+  '.html,.htm,.css,.scss,' +
+  '.go,.rs,.java,.kt,.swift,' +
+  '.c,.cpp,.cc,.cxx,.h,.hpp,' +
+  '.rb,.php,.lua,.pl,' +
+  '.sql,.csv,.tsv,.xml,.log,' +
+  '.vue,.svelte,' +
+  '.pdf,.docx,' +
+  'text/plain,text/markdown,application/pdf,' +
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const ACCEPT_ALL = IMG_ACCEPT + ',' + DOC_ACCEPT;
 
 // 2026-06-19 · 输入框重构 · textarea 自增长上限(5-6 行后内部滚动)
 // 真值用 line-height × MAX_LINES + 上下 padding 算 · 防 hard-code px 跟主题脱节
 const TEXTAREA_MAX_LINES = 6;
+
+/** 2026-06-19 · 文件输入(MVP)· File → base64 data URL · 不压缩。
+ *  跟 compressImage 平级 · ChatInput::handleFiles 按 mime 分派。
+ *  - mime 可能是 application/octet-stream / 空(代码文件)· 透传原值
+ *  - 后端 ws.py + file_extract.is_supported 用 mime + 扩展名兜底再校验 */
+async function readFileAsDataUrl(file: File): Promise<{
+  dataUrl: string; mime: string; bytes: number; filename: string;
+}> {
+  if (file.size > FILE_MAX_BYTES) {
+    throw new Error(`文件 > ${FILE_MAX_BYTES / 1024 / 1024}MB`);
+  }
+  const dataUrl: string = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(typeof r.result === 'string' ? r.result : '');
+    r.onerror = () => reject(new Error('文件读取失败'));
+    r.readAsDataURL(file);
+  });
+  if (!dataUrl) throw new Error('文件读取失败:空');
+  return {
+    dataUrl,
+    mime: file.type || 'application/octet-stream',
+    bytes: file.size,
+    filename: file.name,
+  };
+}
 
 /** File → 压图 base64 data URL · 失败抛 · 调用方 catch 显 toast。
  *  - HEIC / 解码失败 → image.onerror 抛(spec watch:优雅拒绝 · 别崩)
@@ -118,24 +165,44 @@ export default function ChatInput() {
   // (useAudio barge-in 仍在用 · 不动那条;ChatInput 不再持手动打断 UI)
   const { sendText, startManual, stopManualAndSend, toggleVad } = useAppApi();
 
-  /** 接 N 个 File · 串行压图 · 失败 toast 单条提示。命中 IMG_MAX_COUNT 整批拒。 */
+  /** 2026-06-19 · 接 N 个 File · 按 mime 分派(image→压图 / 其它→读 base64)·
+   *  失败 toast 单条提示。命中 IMG_MAX_COUNT 总数(image+file)或总和上限拒。
+   *  补丁 A · 总和上限 TOTAL_MAX_BYTES 防 ws 帧爆 16MB。 */
   const handleFiles = async (files: FileList | File[] | null) => {
     if (!files || files.length === 0) return;
     setImgError(null);
     const arr = Array.from(files);
-    const currentCount = useAppStore.getState().pendingAttachments.length;
+    const state = useAppStore.getState();
+    const currentCount = state.pendingAttachments.length;
     if (currentCount + arr.length > IMG_MAX_COUNT) {
-      setImgError(`最多 ${IMG_MAX_COUNT} 张 · 当前已 ${currentCount} 张`);
+      setImgError(`最多 ${IMG_MAX_COUNT} 个附件 · 当前已 ${currentCount}`);
       return;
     }
+    // 累加已在队列里的原字节数(image 用压缩后 bytes / file 用原 bytes)
+    let totalBytes = state.pendingAttachments.reduce((s, a) => s + a.bytes, 0);
     for (const f of arr) {
       try {
-        const a = await compressImage(f);
-        addAttachment(a);
+        const isImage = f.type.startsWith('image/');
+        const a = isImage ? await compressImage(f) : await readFileAsDataUrl(f);
+        // 补丁 A · 单文件 + 总和双层 cap
+        if (a.bytes > FILE_MAX_BYTES) {
+          throw new Error(`> ${FILE_MAX_BYTES / 1024 / 1024}MB`);
+        }
+        if (totalBytes + a.bytes > TOTAL_MAX_BYTES) {
+          throw new Error(`附件总和超 ${TOTAL_MAX_BYTES / 1024 / 1024}MB`);
+        }
+        addAttachment({
+          kind: isImage ? 'image' : 'file',
+          dataUrl: a.dataUrl,
+          mime: a.mime,
+          bytes: a.bytes,
+          filename: isImage ? undefined : (a as { filename: string }).filename,
+        });
+        totalBytes += a.bytes;
       } catch (err) {
-        const msg = (err as Error).message || '图片处理失败';
+        const msg = (err as Error).message || '附件处理失败';
         setImgError(`${f.name}:${msg}`);
-        console.warn('[ChatInput] image add failed', f.name, err);
+        console.warn('[ChatInput] attachment add failed', f.name, err);
         // 不 break · 继续处理后续文件
       }
     }
@@ -197,7 +264,12 @@ export default function ChatInput() {
     sendText(
       trimmed,
       atts.length > 0
-        ? atts.map((a) => ({ dataUrl: a.dataUrl, mime: a.mime }))
+        ? atts.map((a) => ({
+            kind: a.kind,
+            dataUrl: a.dataUrl,
+            mime: a.mime,
+            filename: a.filename,
+          }))
         : undefined,
     );
     setText('');
@@ -304,7 +376,7 @@ export default function ChatInput() {
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
         onPaste={onPaste}
-        placeholder="输入消息(可拖图 / 粘贴 / 选图)…"
+        placeholder="输入消息(可拖图 / 文件 / 粘贴 / 选择)…"
         rows={1}
         className="w-full resize-none rounded-xl outline-none focus:ring-1"
         style={{
@@ -316,36 +388,75 @@ export default function ChatInput() {
         }}
       />
 
-      {/* ═══ 缩略图预览带 · 区 A 与 区 B 之间 · 锁定决策:保留这里 ═══════════
-          函数 / 渲染 0 改 · 只跟着 root 挪 · 条件渲染 */}
+      {/* ═══ 附件预览带 · 区 A 与 区 B 之间 · 锁定决策:保留这里 ═══════════════
+          按 kind 分支:image → 12×12 缩略图;file → 文件卡片(FileText icon
+          + filename truncate + mime 小标 + X 移除)*/}
       {(pendingAttachments.length > 0 || imgError) && (
         <div className="flex flex-wrap items-center gap-2">
           {pendingAttachments.map((a) => (
-            <div
-              key={a.id}
-              className="relative w-12 h-12 rounded-md overflow-hidden"
-              style={{
-                background: 'var(--color-bg-elevated)',
-                border: '1px solid var(--color-border)',
-              }}
-              title={`${a.mime} · ${Math.round(a.bytes / 1024)} KB`}
-            >
-              <img
-                src={a.dataUrl}
-                alt="attachment"
-                className="w-full h-full object-cover"
-                draggable={false}
-              />
-              <button
-                type="button"
-                onClick={() => removeAttachment(a.id)}
-                className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
-                style={{ background: 'rgba(0, 0, 0, 0.6)', color: '#fff' }}
-                title="移除"
+            a.kind === 'file' ? (
+              <div
+                key={a.id}
+                className="relative flex items-center gap-2 rounded-md overflow-hidden pl-2 pr-6 py-1.5"
+                style={{
+                  background: 'var(--color-bg-elevated)',
+                  border: '1px solid var(--color-border)',
+                  maxWidth: 220,
+                }}
+                title={`${a.filename ?? ''} · ${a.mime || 'unknown'} · ${Math.round(a.bytes / 1024)} KB`}
               >
-                <X size={10} />
-              </button>
-            </div>
+                <FileText size={16} style={{ color: 'var(--color-text-secondary)' }} />
+                <div className="flex flex-col min-w-0">
+                  <span
+                    className="text-[11px] truncate"
+                    style={{ color: 'var(--color-text-primary)', maxWidth: 160 }}
+                  >
+                    {a.filename ?? 'file'}
+                  </span>
+                  <span
+                    className="text-[9px]"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                  >
+                    {Math.round(a.bytes / 1024)} KB
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.id)}
+                  className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
+                  style={{ background: 'rgba(0, 0, 0, 0.6)', color: '#fff' }}
+                  title="移除"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            ) : (
+              <div
+                key={a.id}
+                className="relative w-12 h-12 rounded-md overflow-hidden"
+                style={{
+                  background: 'var(--color-bg-elevated)',
+                  border: '1px solid var(--color-border)',
+                }}
+                title={`${a.mime} · ${Math.round(a.bytes / 1024)} KB`}
+              >
+                <img
+                  src={a.dataUrl}
+                  alt="attachment"
+                  className="w-full h-full object-cover"
+                  draggable={false}
+                />
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.id)}
+                  className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
+                  style={{ background: 'rgba(0, 0, 0, 0.6)', color: '#fff' }}
+                  title="移除"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            )
           ))}
           {pendingAttachments.length > 0 && (
             <span className="text-[10px]"
@@ -375,7 +486,7 @@ export default function ChatInput() {
           <input
             ref={fileInputRef}
             type="file"
-            accept={IMG_ACCEPT}
+            accept={ACCEPT_ALL}
             multiple
             onChange={onFileChange}
             style={{ display: 'none' }}
@@ -393,12 +504,12 @@ export default function ChatInput() {
             disabled={pendingAttachments.length >= IMG_MAX_COUNT}
             title={
               pendingAttachments.length >= IMG_MAX_COUNT
-                ? `已达上限 ${IMG_MAX_COUNT} 张`
-                : '加图片(拖拽 / 粘贴 / 选择)'
+                ? `已达上限 ${IMG_MAX_COUNT} 个`
+                : '加图片 / 文件(拖拽 / 粘贴 / 选择)'
             }
-            aria-label="加图片"
+            aria-label="加附件"
           >
-            <ImagePlus size={ICON_SIZE} />
+            <Paperclip size={ICON_SIZE} />
           </button>
           {/* 未来后加按钮:同 group 续写 · 别硬塞单按钮 */}
         </div>

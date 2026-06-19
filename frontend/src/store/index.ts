@@ -455,13 +455,23 @@ interface AppState {
   // sendMessage 后由 useWebSocket 调 clearAttachments 清空。MVP 不持久化 · 不
   // 建 chat_attachments 表 · 自己气泡显示 "[图片] N 张" 文字 (不是缩略图 ·
   // P2 才回显缩略图)。
+  // 2026-06-19 · 文件输入 MVP · kind='image'|'file' · file 必须带 filename
+  // 旧 caller 不传 kind 默认 'image'(向后兼容)
   pendingAttachments: Array<{
     id: string;
+    kind: 'image' | 'file';
     dataUrl: string;
     mime: string;
     bytes: number;
+    filename?: string;
   }>;
-  addAttachment: (a: { dataUrl: string; mime: string; bytes: number }) => void;
+  addAttachment: (a: {
+    kind?: 'image' | 'file';
+    dataUrl: string;
+    mime: string;
+    bytes: number;
+    filename?: string;
+  }) => void;
   removeAttachment: (id: string) => void;
   clearAttachments: () => void;
 
@@ -759,7 +769,11 @@ export const useAppStore = create<AppState>((set) => ({
   addAttachment: (a) => set((state) => ({
     pendingAttachments: [
       ...state.pendingAttachments,
-      { ...a, id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` },
+      {
+        ...a,
+        kind: a.kind ?? 'image',
+        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      },
     ],
   })),
   removeAttachment: (id) => set((state) => ({

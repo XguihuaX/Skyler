@@ -571,16 +571,24 @@ export function useWebSocket(): UseWebSocketReturn {
   }, []);
 
   // 2026-06-19 · sendText → sendMessage(text, attachments?) 兼容签名 ·
-  // 老 caller 单参数调用 == 旧 sendText 行为。attachments 是图片(MVP):
+  // 老 caller 单参数调用 == 旧 sendText 行为。attachments(image / file MVP):
   //   - 仍走 msg_type='text'(不开新 type · 兼容老 ws.py 路径)
-  //   - 字段 attachments: [{kind:'image', data_url, mime}] · 缺省 []
+  //   - 字段:
+  //     · image: { kind:'image', data_url, mime }
+  //     · file:  { kind:'file',  data_url, mime, filename }
   //   - image_block shape 跟 Step 0 探针 HTTP 200 验过的同款(照抄,别手搓)
-  //   - 自己气泡:有图 + 有文 → "<text> [图片] N 张";仅图 → "[图片] N 张"
-  //     (MVP 不渲缩略图 · P2 才回显)
+  //   - file: 后端 ws.py 解 base64 + file_extract 抽文本 + 拼 [文件 name] text block
+  //   - 自己气泡占位(补丁 D 分类不合并):
+  //     "<text> [图片] N张 [文件] M个"(只显存在的类)
   //   - 发完清队列 clearAttachments() 防下一轮串
   const sendText = useCallback((
     content: string,
-    attachments?: Array<{ dataUrl: string; mime: string }>,
+    attachments?: Array<{
+      kind?: 'image' | 'file';
+      dataUrl: string;
+      mime: string;
+      filename?: string;
+    }>,
   ) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -604,9 +612,16 @@ export function useWebSocket(): UseWebSocketReturn {
     // UX-004:新一轮开始,清掉上一轮残留的 tool loading(理论上 tool_use_done
     // 已经清过,这里是 belt-and-suspenders 防 backend 路径异常未发 done)
     s.setCurrentToolName(null);
-    // 乐观更新:气泡内容(MVP · 文字 [图片] N 张 一致显示 · 不渲缩略图)
-    const bubbleContent = atts.length > 0
-      ? (content ? `${content} [图片] ${atts.length} 张` : `[图片] ${atts.length} 张`)
+    // 乐观更新:气泡内容(MVP · 文字 [图片] N张 [文件] M个 一致显示 · 不渲缩略图)
+    // 补丁 D · 占位分类不合并 · 只显存在的类
+    const nImg = atts.filter((a) => (a.kind ?? 'image') === 'image').length;
+    const nFile = atts.filter((a) => a.kind === 'file').length;
+    const placeholderParts: string[] = [];
+    if (nImg > 0) placeholderParts.push(`[图片] ${nImg} 张`);
+    if (nFile > 0) placeholderParts.push(`[文件] ${nFile} 个`);
+    const placeholder = placeholderParts.join(' ');
+    const bubbleContent = placeholder
+      ? (content ? `${content} ${placeholder}` : placeholder)
       : content;
     s.appendChatMessage({
       id: newClientId('u'),
@@ -617,14 +632,27 @@ export function useWebSocket(): UseWebSocketReturn {
       kind: 'normal',
     });
     console.log(
-      `[FRONT] send text len=${content.length} attachments=${atts.length}`,
+      `[FRONT] send text len=${content.length} attachments=${atts.length} ` +
+      `img=${nImg} file=${nFile}`,
     );
     // image_block shape · 同 Step 0 探针验过(`{type:image_url, image_url:{url}}`)
-    const att_payload = atts.map((a) => ({
-      kind: 'image' as const,
-      data_url: a.dataUrl,
-      mime: a.mime,
-    }));
+    // file 加 filename · 后端 ws.py 解 base64 + file_extract 抽文本
+    const att_payload = atts.map((a) => {
+      const kind = a.kind ?? 'image';
+      if (kind === 'file') {
+        return {
+          kind: 'file' as const,
+          data_url: a.dataUrl,
+          mime: a.mime,
+          filename: a.filename ?? 'file',
+        };
+      }
+      return {
+        kind: 'image' as const,
+        data_url: a.dataUrl,
+        mime: a.mime,
+      };
+    });
     ws.send(JSON.stringify({
       type: 'text',
       content,
