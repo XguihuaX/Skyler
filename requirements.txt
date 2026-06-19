@@ -31,6 +31,8 @@ pycryptodome>=3.20
 pyperclip>=1.8
 # v3.5 chunk 7 — docx capability（python-docx 处理 .docx 文档）
 python-docx>=1.0
+# 2026-06-19 · 文件输入 MVP — PDF 抽文本(pypdf 4.x · 纯 python · 无 native 依赖)
+pypdf>=4.0
 # v3.5 chunk 6a — B 站接入（Nemo2011/bilibili-api 社区 fork，活跃维护）
 bilibili-api-python>=17.4
 # v3.5 chunk 8a — 公开 URL 正文提取（readability-lxml + 内置 lxml-html-clean）

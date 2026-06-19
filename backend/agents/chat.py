@@ -1118,31 +1118,74 @@ async def _get_active_llm_vendor() -> str:
 
 
 def _user_content(text: str, attachments: Optional[List[dict]]) -> object:
-    """2026-06-19 · 图片输入(MVP)· 把当前 user turn 的 text + attachments
-    组装成 OpenAI 兼容 content。
+    """2026-06-19 · 文件 + 图片输入(MVP)· 把当前 user turn 的 text +
+    attachments 组装成 OpenAI 兼容 content。
 
     无 attachments → 返 string(老路径 · chat_history 回放 + LLM 全兼容)
     有 attachments → 返 list[block]:
-        [{"type":"text","text": text}?, {"type":"image_url","image_url":{"url": data_url}}*]
-        - text 为空时只放 image_url block(pin 1 · 空 text block 部分端点会拒)
+        [{type:text,text}?,
+         {type:text,text:'[文件 {name}]\\n{content}'}*,   # file 分支(新增)
+         {type:image_url,image_url:{url}}*]              # image 分支(原有)
+        - text 为空时只放 image_url / file text block(pin 1 · 空 text block 部分端点会拒)
         - image_url shape 跟 Step 0 探针 HTTP 200 验过的同款 · 不手搓变体
+        - file:解 base64 → file_extract.extract_text 按 mime / 扩展兜底分派
+          → 拼 "[文件 {name}]\\n{content}" 单独 text block · 抽空 / 失败仍
+          标透明给 LLM(补丁 E:[抽取为空] / [抽取失败])
     """
     if not attachments:
         return text
     blocks: List[dict] = []
     if text:
         blocks.append({"type": "text", "text": text})
+    # 顺序:用户文字 → 文件文本块(可读) → 图片块(visual)
+    file_blocks: List[dict] = []
+    image_blocks: List[dict] = []
     for a in attachments:
         if not isinstance(a, dict):
             continue
-        if a.get("kind") != "image":
-            continue
-        url = a.get("data_url")
-        if isinstance(url, str) and url.startswith("data:image/"):
-            blocks.append({
-                "type": "image_url",
-                "image_url": {"url": url},
+        kind = a.get("kind")
+        if kind == "image":
+            url = a.get("data_url")
+            if isinstance(url, str) and url.startswith("data:image/"):
+                image_blocks.append({
+                    "type": "image_url",
+                    "image_url": {"url": url},
+                })
+        elif kind == "file":
+            url = a.get("data_url")
+            mime = str(a.get("mime") or "")
+            filename = str(a.get("filename") or "file")
+            if not isinstance(url, str) or "," not in url:
+                continue
+            try:
+                import base64  # noqa: PLC0415
+                _, _, b64 = url.partition(",")
+                raw = base64.b64decode(b64, validate=False)
+            except Exception as exc:  # noqa: BLE001
+                file_blocks.append({
+                    "type": "text",
+                    "text": f"[文件 {filename}]\n[抽取失败:{type(exc).__name__}]",
+                })
+                continue
+            from backend.agents import file_extract as _fx  # noqa: PLC0415
+            extracted, meta = _fx.extract_text(filename, mime, raw)
+            if meta.get("error"):
+                content_line = f"[抽取失败:{meta['error']}]"
+            elif meta.get("empty") or not extracted:
+                if meta.get("source") == "pdf":
+                    empty_pages = meta.get("empty_pages")
+                    extra = f"({empty_pages} 页未抽到文本 · 可能扫描件 / 加密)" if empty_pages else ""
+                    content_line = f"[抽取为空 {extra}]"
+                else:
+                    content_line = "[抽取为空]"
+            else:
+                content_line = extracted
+            file_blocks.append({
+                "type": "text",
+                "text": f"[文件 {filename}]\n{content_line}",
             })
+    blocks.extend(file_blocks)
+    blocks.extend(image_blocks)
     # 全过滤掉(异常输入)→ 退回 text(防出 empty content)
     return blocks if blocks else text
 

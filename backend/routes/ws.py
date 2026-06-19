@@ -769,38 +769,105 @@ async def _handle_message(
         else:
             text = (data.get("content") or "").strip()
 
-        # 2026-06-19 · 图片输入(MVP)· user attachments(只 image)
-        # - 协议:msg_type='text' + attachments: [{kind:'image', data_url, mime}]
-        # - image_url shape 跟 Step 0 探针验过的同款 · 不开新 msg_type
-        # - text 为空 + attachments 非空 = image-only · 允许(pin 1)
-        # - text 仍写 chat_history(string)· attachments 改 [图片] 占位 ·
-        #   不建 chat_attachments 表(spec 第 3 条 / pin 3)
+        # 2026-06-19 · 文件 + 图片输入(MVP)· user attachments(image / file)
+        # - 协议:msg_type='text' + attachments: [{kind, data_url, mime, filename?}]
+        # - image: kind='image' + data_url 'data:image/...' + mime · image_url
+        #   block 给 LLM(跟 Step 0 探针同款)
+        # - file:  kind='file'  + data_url 'data:<mime>;base64,...' + mime +
+        #   filename · 后端解码 + 抽文本 → text block 给 LLM
+        # - text 为空 + attachments 非空 = attachment-only · 允许(pin 1)
+        # - text 仍写 chat_history(string)· 占位分类:[图片] N张 [文件] M个
         # - state.user_text 仍 string · 不动既有打断 / 持久 / sanitize 路径
+        # - msg_type 仍 'text' 不开新类型(锁定 9)
+        #
+        # 补丁 A · 总和上限:per-file ≤ 10MB · 全 attachments 原字节之和 ≤ 10MB
+        # uvicorn 默认 ws_max_size = 16MB · base64 膨胀 ~4/3 · 10MB 原字节 ≈
+        # 13.3MB base64 · 稳在 16MB 内。前端 handleFiles 已累加判定 · 后端
+        # 解码后再校验防绕过。
+        # 补丁 B · mime 不可信:file 校验走 file_extract.is_supported(mime OR ext)
+        import base64
+        from backend.agents import file_extract as _fx  # noqa: PLC0415
+        PER_FILE_MAX_BYTES = 10 * 1024 * 1024
+        TOTAL_MAX_BYTES = 10 * 1024 * 1024
         raw_attachments = data.get("attachments") or []
         attachments: list[dict] = []
+        total_bytes = 0
+        rejected_reason: str | None = None
         if isinstance(raw_attachments, list):
             for item in raw_attachments:
                 if not isinstance(item, dict):
                     continue
-                if item.get("kind") != "image":
-                    continue
+                kind = item.get("kind")
                 data_url = item.get("data_url")
-                if isinstance(data_url, str) and data_url.startswith("data:image/"):
+                mime = str(item.get("mime") or "")
+                if not isinstance(data_url, str):
+                    continue
+                # 共用 base64 解码 · 拿原字节算总和
+                if "," not in data_url:
+                    continue
+                _, _, b64_payload = data_url.partition(",")
+                try:
+                    raw_bytes = base64.b64decode(b64_payload, validate=False)
+                except Exception:  # noqa: BLE001
+                    continue
+                if len(raw_bytes) > PER_FILE_MAX_BYTES:
+                    rejected_reason = f"single attachment > {PER_FILE_MAX_BYTES // 1024 // 1024}MB"
+                    continue
+                if total_bytes + len(raw_bytes) > TOTAL_MAX_BYTES:
+                    rejected_reason = f"total attachments > {TOTAL_MAX_BYTES // 1024 // 1024}MB"
+                    continue
+
+                if kind == "image":
+                    if not data_url.startswith("data:image/"):
+                        continue
                     attachments.append({
                         "kind": "image",
                         "data_url": data_url,
-                        "mime": str(item.get("mime") or "image/jpeg"),
+                        "mime": mime or "image/jpeg",
                     })
-        n_att = len(attachments)
+                    total_bytes += len(raw_bytes)
+                elif kind == "file":
+                    filename = str(item.get("filename") or "").strip()
+                    if not filename:
+                        continue
+                    # 补丁 B · mime 白名单 OR 扩展名兜底
+                    if not _fx.is_supported(mime, filename):
+                        rejected_reason = f"unsupported file type: {filename}"
+                        continue
+                    if not data_url.startswith(f"data:{mime};base64,") \
+                       and not data_url.startswith("data:application/octet-stream;base64,") \
+                       and not data_url.startswith("data:text/"):
+                        # mime 失配但扩展通过 · 仍接受(前端把代码文件 mime
+                        # 可能设 octet-stream / 空 · is_supported 已守过)
+                        pass
+                    attachments.append({
+                        "kind": "file",
+                        "data_url": data_url,
+                        "mime": mime or "application/octet-stream",
+                        "filename": filename,
+                    })
+                    total_bytes += len(raw_bytes)
+        n_img = sum(1 for a in attachments if a.get("kind") == "image")
+        n_file = sum(1 for a in attachments if a.get("kind") == "file")
+        n_att = n_img + n_file
+
+        if rejected_reason and n_att == 0 and not text:
+            await ws.send_json({"type": "error", "message": rejected_reason})
+            return
 
         if not text and n_att == 0:
             await ws.send_json({"type": "error", "message": "Empty input"})
             return
 
         # 让打断收尾能拿到这一轮的 user 文本(text 仍 string)
-        # 持久化时 image-only 用 "[图片] N 张" 占位 · 有文字时拼接
-        if n_att > 0:
-            placeholder = f"[图片] {n_att} 张"
+        # 持久化占位(补丁 D · 分类不合并):"[图片] N张 [文件] M个"
+        placeholder_parts: list[str] = []
+        if n_img > 0:
+            placeholder_parts.append(f"[图片] {n_img} 张")
+        if n_file > 0:
+            placeholder_parts.append(f"[文件] {n_file} 个")
+        placeholder = " ".join(placeholder_parts)
+        if placeholder:
             state.user_text = f"{text} {placeholder}" if text else placeholder
         else:
             state.user_text = text
