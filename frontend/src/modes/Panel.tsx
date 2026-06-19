@@ -180,21 +180,11 @@ export default function Panel() {
                 </button>
               )}
 
-              {/* 2026-06-03 · Round 3.2 输入丸:从贴底满宽栏改为底部居中浮动胶囊 ·
-                  四周留白、壁纸从两侧透出 · maxWidth 限宽避免大窗下拉太长 ·
-                  bottom 留 20px 不贴边、跟玻璃浮卡视觉一致。 */}
-              <div
-                className="absolute z-20"
-                style={{
-                  bottom: '20px',
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  width: 'calc(100% - 32px)',
-                  maxWidth: '680px',
-                }}
-              >
-                <ChatInput />
-              </div>
+              {/* 2026-06-19 · Build 1 决策 ②:输入丸包装层从这里(paddingLeft:80
+                  父内)挪到 z-10 wrapper 直接子(下方)· 解 W/2+40 右偏 bug ·
+                  实现真窗口正中(W/2)· 跟角色 / SceneBackground 中线对齐。
+                  原:left:50% translateX(-50%) 在 paddingLeft:80 父内 = 80 + (W-80)/2
+                  现:挪到 z-10 wrapper 直接子 · left:50% = 真 W/2 */}
             </div>
 
             {/* Round 3.5 起删除原 flex 流里的 collapse button + resize handle +
@@ -216,6 +206,27 @@ export default function Panel() {
            panelView=='chat' 走上面 chat 分支;其它(characters / legacy)各走各的。*/
         }
       </div>
+
+      {/* 2026-06-19 · Build 1 决策 ② · 输入丸包装层挪到这里 ·
+          直接挂在 z-10 wrapper(100% W,不含 paddingLeft:80)· left:50% =
+          真窗口正中(W/2)· 不再 W/2+40 右偏。
+          - 仅 panelView==='chat' 时渲染(跟上方 chat 分支同条件)
+          - 宽度走 var(--input-width)(themes.css clamp(400px, 66%, 840px))·
+            决策 ③:统一 CSS 变量驱动尺寸 · Build 2 设置项可实时调
+          - bottom:20 保留 / z-20 保留(对齐其它玻璃浮件) */}
+      {panelView === 'chat' && (
+        <div
+          className="absolute z-20"
+          style={{
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: 'var(--input-width)',
+          }}
+        >
+          <ChatInput />
+        </div>
+      )}
       </div>
 
       {/* bugfix-2: 顶层 toast surface 给 V2 panels 用 */}

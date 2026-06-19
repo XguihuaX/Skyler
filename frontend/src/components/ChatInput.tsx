@@ -1,13 +1,39 @@
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
-  AudioWaveform, Ban, CornerDownLeft, ImagePlus, Loader2, Mic,
+  ArrowUp, AudioWaveform, Ban, ChevronDown, ChevronUp, ImagePlus, Loader2, Mic,
   Sparkles, Volume2, VolumeX, X,
 } from 'lucide-react';
-import { useAppStore } from '../store';
+import { useAppStore, type AiStatus } from '../store';
 import { useAppApi } from '../contexts/appApi';
-import StatusBadge from './StatusBadge';
 import { setConfigField } from '../lib/window';
 import { toolLoadingLabel } from '../lib/tool_labels';
+
+// 2026-06-19 · Build 1 决策 ① · 微型 AI 状态指示(取代大 StatusBadge)·
+// idle 时整个 null · 非 idle 才显小色点 + 极短标签 · 进簇2 活动类。
+// 不动左栏 ConnectionDot(那连的是 WS 连接 · 跟 AiStatus 正交)。
+const aiStatusConfig: Record<Exclude<AiStatus, 'idle'>, { label: string; color: string }> = {
+  listening:   { label: '聆听', color: 'var(--color-accent)' },
+  thinking:    { label: '思考', color: '#F59E0B' },  // amber-500
+  speaking:    { label: '说话', color: '#10B981' },  // emerald-500
+  interrupted: { label: '已断', color: '#F43F5E' },  // rose-500
+};
+function StatusMicro({ status }: { status: AiStatus }) {
+  if (status === 'idle') return null;
+  const { label, color } = aiStatusConfig[status];
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[11px]"
+      style={{ color: 'var(--color-text-secondary)' }}
+      title={`AI: ${label}`}
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full"
+        style={{ background: color }}
+      />
+      {label}
+    </span>
+  );
+}
 
 // 2026-06-19 · 图片输入(MVP)· 压图常量(按图计费硬限)
 const IMG_MAX_LONG_EDGE = 1568;   // 长边(qwen-vl 推荐 ~1568)
@@ -15,6 +41,10 @@ const IMG_JPEG_QUALITY = 0.85;    // JPEG 0.85(截图小字可能糊 · PM watch
 const IMG_MAX_BYTES = 2 * 1024 * 1024;  // 单张 ≤ 2MB(压完仍超 = 拒)
 const IMG_MAX_COUNT = 4;          // 每条消息最多 4 张
 const IMG_ACCEPT = 'image/png,image/jpeg,image/jpg,image/webp,image/gif';
+
+// 2026-06-19 · 输入框重构 · textarea 自增长上限(5-6 行后内部滚动)
+// 真值用 line-height × MAX_LINES + 上下 padding 算 · 防 hard-code px 跟主题脱节
+const TEXTAREA_MAX_LINES = 6;
 
 /** File → 压图 base64 data URL · 失败抛 · 调用方 catch 显 toast。
  *  - HEIC / 解码失败 → image.onerror 抛(spec watch:优雅拒绝 · 别崩)
@@ -61,7 +91,11 @@ async function compressImage(file: File): Promise<{
 export default function ChatInput() {
   const [text, setText] = useState('');
   const [imgError, setImgError] = useState<string | null>(null);
+  // 2026-06-19 · 输入框重构 · 角色想法默认收起(组件内 state · 不上 store)
+  // 想法 chip 只在 currentThinking 非空时显 · 默认收起 · 点开往下顶不挤文本
+  const [thoughtOpen, setThoughtOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const recording    = useAppStore((s) => s.recording);
   const micMuted     = useAppStore((s) => s.micMuted);
@@ -115,7 +149,7 @@ export default function ChatInput() {
     e.target.value = '';
   };
 
-  const onPaste = async (e: React.ClipboardEvent<HTMLInputElement>) => {
+  const onPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items) return;
     const files: File[] = [];
@@ -186,7 +220,8 @@ export default function ChatInput() {
     sendInterrupt();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // 2026-06-19 · textarea Enter 发送(preventDefault)/ Shift+Enter 换行(走原生)
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -196,15 +231,62 @@ export default function ChatInput() {
   // 发送 enable 条件:文字非空 或 附件非空(pin 1)
   const canSend = text.trim().length > 0 || pendingAttachments.length > 0;
 
+  // 2026-06-19 · textarea 自增长(方案 B · JS)
+  // 每次 text 变化重置 height='auto' 再读 scrollHeight 写回 ·
+  // clamp 到 line-height × MAX_LINES + 上下 padding · 超出内部滚动条出来。
+  // useLayoutEffect 防 flicker(布局帧内同步算 + 写)。
+  useLayoutEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    // computed line-height · text-sm 默认 leading 1.25 (=17.5px on 14px font);
+    // 兜底 20px 防 NaN
+    const cs = getComputedStyle(ta);
+    const lh = parseFloat(cs.lineHeight) || 20;
+    const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const max = lh * TEXTAREA_MAX_LINES + padY;
+    ta.style.height = `${Math.min(ta.scrollHeight, max)}px`;
+  }, [text]);
+
+  // 角色想法面板:currentThinking 翻 null 时自动收起(下轮重置)
+  // sendText 前会 clearCurrentThinking · thoughtOpen 跟实际 thought 状态同步
+  useLayoutEffect(() => {
+    if (!currentThinking) setThoughtOpen(false);
+  }, [currentThinking]);
+
+  // 2026-06-19 · 输入框重构 · 派生 Mic 簇展示参数(原 IIFE 拆出 ·
+  // JSX 内只关心 render · 状态计算单独)
+  const isVad = recordingMode === 'vad';
+  const isListening = isVad
+    ? (vadState === 'active' || vadState === 'recording')
+    : recording;
+  const MicIcon = isVad ? AudioWaveform : Mic;
+  const micTitle = isListening
+    ? (isVad ? '停止监听' : '停止录音')
+    : (isVad ? '开始监听' : '开始录音');
+
+  // 2026-06-19 · Build 1 · 共享 button / chip 样式 · button-size 走 CSS var ·
+  // lucide-react `size` prop 是 SVG width/height 属性 · 不解析 CSS 变量 · 必须
+  // 给 JS 数值常量 · 跟 themes.css `--input-icon-size: 16px` 同步(Build 2 设置
+  // 项要可调 icon 尺寸时,这里改成 useState/CSS computed 读)
+  const ICON_SIZE = 16;             // 同步 themes.css --input-icon-size
+  const CHIP_ICON_SIZE = 12;        // 同步 themes.css --input-chip-icon-size
+  const btnSize: React.CSSProperties = {
+    width: 'var(--input-button-size)',
+    height: 'var(--input-button-size)',
+  };
+  const btnBaseClass =
+    'rounded-full flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed';
+
   return (
     <div
-      className="flex flex-col gap-2 px-4 py-3 shrink-0"
+      className="flex flex-col shrink-0"
       onDragOver={onDragOver}
       onDrop={onDrop}
       style={{
-        // Round 4 ④(2026-06-04):吃 glass-* 统一 token · 删 rounded-2xl 改用
-        // borderRadius var(--glass-radius) 让圆角跟所有浮件对齐(16px)。
-        borderRadius: 'var(--glass-radius)',
+        gap: 'var(--input-row-gap)',
+        padding: 'var(--input-padding-y) var(--input-padding-x)',
+        borderRadius: 'var(--input-radius)',
         background: 'var(--glass-bg)',
         backdropFilter: 'blur(var(--glass-blur))',
         WebkitBackdropFilter: 'blur(var(--glass-blur))',
@@ -212,8 +294,30 @@ export default function ChatInput() {
         boxShadow: 'var(--glass-shadow)',
       }}
     >
-      {/* 2026-06-19 · 图片输入 MVP · 缩略图行 + 删除 + 错误提示 ·
-          这一行只在有附件或有 imgError 时渲染 · 不占空 */}
+      {/* ═══ 区 A · 多行 textarea · 满宽 · 自增长方案 B ═════════════════════
+          Enter 发送(preventDefault)· Shift+Enter 换行(原生)·
+          useLayoutEffect[text] 内 height='auto' → scrollHeight → clamp 写回 ·
+          max 5-6 行后内部滚动 · 尺寸全走 var(--input-*)*/}
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={handleKeyDown}
+        onPaste={onPaste}
+        placeholder="输入消息(可拖图 / 粘贴 / 选图)…"
+        rows={1}
+        className="w-full resize-none rounded-xl outline-none focus:ring-1"
+        style={{
+          background: 'var(--color-bg-input)',
+          color: 'var(--color-text-primary)',
+          fontSize: 'var(--input-text-size)',
+          lineHeight: 'var(--input-text-leading)',
+          padding: '6px 12px',
+        }}
+      />
+
+      {/* ═══ 缩略图预览带 · 区 A 与 区 B 之间 · 锁定决策:保留这里 ═══════════
+          函数 / 渲染 0 改 · 只跟着 root 挪 · 条件渲染 */}
       {(pendingAttachments.length > 0 || imgError) && (
         <div className="flex flex-wrap items-center gap-2">
           {pendingAttachments.map((a) => (
@@ -236,10 +340,7 @@ export default function ChatInput() {
                 type="button"
                 onClick={() => removeAttachment(a.id)}
                 className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
-                style={{
-                  background: 'rgba(0, 0, 0, 0.6)',
-                  color: '#fff',
-                }}
+                style={{ background: 'rgba(0, 0, 0, 0.6)', color: '#fff' }}
                 title="移除"
               >
                 <X size={10} />
@@ -260,168 +361,208 @@ export default function ChatInput() {
           )}
         </div>
       )}
-      <div className="flex items-center gap-2">
-      <StatusBadge status={status} />
 
-      {/* v3-F #4: 打断按钮 —— thinking / speaking 时可按 */}
-      <button
-        className="w-9 h-9 rounded-full flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed"
-        style={{
-          background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
-          color: 'var(--color-text-secondary)',
-        }}
-        onClick={handleInterrupt}
-        disabled={status !== 'speaking' && status !== 'thinking'}
-        title="打断"
-      >
-        <Ban size={18} />
-      </button>
-
-      {/* v3-F: AI 内心独白。仅当本轮收到 thinking 时显示，下一轮发送清空 */}
-      {currentThinking && (
-        <div
-          className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs italic max-w-[280px] overflow-hidden text-ellipsis whitespace-nowrap"
-          style={{
-            background: 'color-mix(in srgb, var(--color-accent) 18%, transparent)',
-            color: 'var(--color-text-accent)',
-            border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
-          }}
-          title={currentThinking}
-        >
-          <Sparkles size={12} className="shrink-0" />
-          <span className="truncate">{currentThinking}</span>
-        </div>
-      )}
-
-      {/* UX-004: tool loading indicator。LLM 调 tool 期间显示前缀 mapping 文案
-          (查日历… / 查歌单… / etc),fallback "查询中…"。LLM 若遵守 prompt
-          先输出过渡语,此 indicator 与过渡语并存形成"语言 + 视觉"双重反馈;
-          LLM 不遵守时此 indicator 兜底视觉反馈。tool_use_done 时由 store
-          自动清空。 */}
-      {currentToolName && (
-        <div
-          className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs animate-pulse max-w-[220px] overflow-hidden text-ellipsis whitespace-nowrap"
-          style={{
-            background: 'color-mix(in srgb, var(--color-bg-elevated) 60%, transparent)',
-            color: 'var(--color-text-secondary)',
-            border: '1px dashed var(--color-border-subtle)',
-          }}
-          title={`tool: ${currentToolName}`}
-        >
-          <Loader2 size={12} className="shrink-0 animate-spin" />
-          <span className="truncate">{toolLoadingLabel(currentToolName)}</span>
-        </div>
-      )}
-      {/* 2026-06-19 · 图片输入 MVP · 选图按钮 + hidden file input ·
-          点击 = 文件选择;支持拖拽到整个 root(onDrop)+ input 粘贴(onPaste) */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept={IMG_ACCEPT}
-        multiple
-        onChange={onFileChange}
-        style={{ display: 'none' }}
-      />
-      <button
-        className="w-9 h-9 rounded-full flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed"
-        style={{
-          background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
-          color: pendingAttachments.length > 0
-            ? 'var(--color-text-accent)'
-            : 'var(--color-text-secondary)',
-        }}
-        onClick={onPickImages}
-        disabled={pendingAttachments.length >= IMG_MAX_COUNT}
-        title={
-          pendingAttachments.length >= IMG_MAX_COUNT
-            ? `已达上限 ${IMG_MAX_COUNT} 张`
-            : '加图片(拖拽 / 粘贴 / 选择)'
-        }
-      >
-        <ImagePlus size={18} />
-      </button>
-
-      {/* Text field · onPaste 抓图(从剪贴板) */}
-      <input
-        type="text"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        onPaste={onPaste}
-        placeholder="输入消息(可拖图 / 粘贴 / 选图)…"
-        className="flex-1 rounded-xl px-4 py-2 text-sm outline-none focus:ring-1"
-        style={{
-          background: 'var(--color-bg-input)',
-          color: 'var(--color-text-primary)',
-        }}
-      />
-
-      {/* Send · pin 1:image-only 允许 · canSend = text 或 attachments */}
-      <button
-        className="w-9 h-9 rounded-full flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed"
-        style={{
-          background: canSend ? 'var(--color-accent)' : 'var(--color-bg-elevated)',
-          color: canSend ? 'var(--color-bubble-user-text)' : 'var(--color-text-primary)',
-        }}
-        onClick={handleSend}
-        disabled={!canSend}
-        title="发送"
-      >
-        <CornerDownLeft size={18} />
-      </button>
-
-      {/* Mic · 2026-06-05 · 图标按 recordingMode 切(手动=话筒/VAD=波形) ·
-          点亮 = "真在听":手动看 recording、VAD 看 vadState∈{active,recording} ·
-          手动按钮 + 点亮 = silero 残留 active 的 bug 信号 */}
-      {(() => {
-        const isVad = recordingMode === 'vad';
-        const isListening = isVad
-          ? (vadState === 'active' || vadState === 'recording')
-          : recording;
-        const Icon = isVad ? AudioWaveform : Mic;
-        const titleListening = isVad ? '停止监听' : '停止录音';
-        const titleIdle      = isVad ? '开始监听' : '开始录音';
-        return (
+      {/* ═══ 区 B · 单条工具条 · 3 簇 左→右 ═════════════════════════════════
+          簇1 输入类:ImagePlus + 可扩展 flex group(留位后加)
+          簇2 活动类:微型 StatusBadge(decision ①)+ tool spinner + 想法 chip
+                     + Ban 打断键(disabled 不变)· 想法 popover 向上弹
+          簇3 语音/发送:Mic / TTS(mute)/ Send(ArrowUp)*/}
+      <div className="flex items-center justify-between gap-2">
+        {/* ── 簇1 · 输入类 · 可扩展 flex group(现放 ImagePlus · 留位后加)── */}
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={IMG_ACCEPT}
+            multiple
+            onChange={onFileChange}
+            style={{ display: 'none' }}
+          />
           <button
-            className="w-9 h-9 rounded-full flex items-center justify-center transition disabled:opacity-40 disabled:cursor-not-allowed"
+            className={btnBaseClass}
+            style={{
+              ...btnSize,
+              background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
+              color: pendingAttachments.length > 0
+                ? 'var(--color-text-accent)'
+                : 'var(--color-text-secondary)',
+            }}
+            onClick={onPickImages}
+            disabled={pendingAttachments.length >= IMG_MAX_COUNT}
+            title={
+              pendingAttachments.length >= IMG_MAX_COUNT
+                ? `已达上限 ${IMG_MAX_COUNT} 张`
+                : '加图片(拖拽 / 粘贴 / 选择)'
+            }
+            aria-label="加图片"
+          >
+            <ImagePlus size={ICON_SIZE} />
+          </button>
+          {/* 未来后加按钮:同 group 续写 · 别硬塞单按钮 */}
+        </div>
+
+        {/* ── 簇2 · 活动类 · 全部运行时状态(决策 ① 微型 status + tool +
+              想法 chip + Ban 打断)· 想法 popover 向上弹 ─────────────────── */}
+        <div className="flex items-center gap-2 min-w-0">
+          {/* 决策 ① · 微型 AI 状态指示 · idle 时整个 null · 非 idle 才显小色
+              点 + 极短标签 · 不重复左栏 ConnectionDot(那是 WS 连接,不是 AiStatus)*/}
+          <StatusMicro status={status} />
+
+          {/* UX-004 · tool loading indicator · 字号走 chip-text-size */}
+          {currentToolName && (
+            <div
+              className="flex items-center gap-1 rounded-full animate-pulse max-w-[200px] overflow-hidden text-ellipsis whitespace-nowrap"
+              style={{
+                background: 'color-mix(in srgb, var(--color-bg-elevated) 60%, transparent)',
+                color: 'var(--color-text-secondary)',
+                border: '1px dashed var(--color-border-subtle)',
+                fontSize: 'var(--input-chip-text-size)',
+                padding: 'var(--input-chip-pad-y) var(--input-chip-pad-x)',
+              }}
+              title={`tool: ${currentToolName}`}
+            >
+              <Loader2
+                size={CHIP_ICON_SIZE}
+                className="shrink-0 animate-spin"
+              />
+              <span className="truncate">{toolLoadingLabel(currentToolName)}</span>
+            </div>
+          )}
+
+          {/* v3-F · AI 内心独白 chip · 默认收起 · 点开【向上】popover
+              不挤文本横向 · currentThinking 空时整 chip 隐藏 */}
+          {currentThinking && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setThoughtOpen((v) => !v)}
+                className="flex items-center gap-1 rounded-full italic transition"
+                style={{
+                  background: 'color-mix(in srgb, var(--color-accent) 18%, transparent)',
+                  color: 'var(--color-text-accent)',
+                  border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
+                  fontSize: 'var(--input-chip-text-size)',
+                  padding: 'var(--input-chip-pad-y) var(--input-chip-pad-x)',
+                }}
+                title={thoughtOpen ? '收起角色想法' : '展开角色想法'}
+                aria-expanded={thoughtOpen}
+              >
+                <Sparkles size={12} className="shrink-0" />
+                <span>角色想法</span>
+                {thoughtOpen
+                  ? <ChevronUp size={12} className="shrink-0" />
+                  : <ChevronDown size={12} className="shrink-0" />}
+              </button>
+              {/* 想法 popover · 从 chip 上方 8px 向上弹 · 右对齐 chip 防溢出窗口
+                  · max 360 宽 + max 200 高 + 内部 scroll · 不顶到 textarea */}
+              {thoughtOpen && (
+                <div
+                  className="absolute italic rounded-lg leading-relaxed whitespace-pre-wrap break-words shadow-lg"
+                  style={{
+                    bottom: 'calc(100% + 8px)',
+                    right: 0,
+                    width: 'min(360px, calc(100vw - 32px))',
+                    maxHeight: '200px',
+                    overflowY: 'auto',
+                    padding: '8px 12px',
+                    fontSize: 'var(--input-chip-text-size)',
+                    background: 'var(--color-bg-surface)',
+                    color: 'var(--color-text-accent)',
+                    border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
+                    zIndex: 10,
+                  }}
+                >
+                  {currentThinking}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* v3-F #4 · Ban 打断 · thinking / speaking 时可按 · 决策 E 进活动簇 */}
+          <button
+            className={btnBaseClass}
+            style={{
+              ...btnSize,
+              background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
+              color: 'var(--color-text-secondary)',
+            }}
+            onClick={handleInterrupt}
+            disabled={status !== 'speaking' && status !== 'thinking'}
+            title="打断"
+            aria-label="打断"
+          >
+            <Ban size={ICON_SIZE} />
+          </button>
+        </div>
+
+        {/* ── 簇3 · 语音 / 发送 · Mic / TTS(mute)/ Send(ArrowUp) ──────── */}
+        <div className="flex items-center gap-2">
+          {/* Mic · 图标按 recordingMode 切 · 点亮 = 真在听 */}
+          <button
+            className={btnBaseClass + ' disabled:opacity-40'}
             style={
               isListening
-                ? { background: 'var(--color-accent)', color: 'var(--color-bubble-user-text)' }
+                ? {
+                    ...btnSize,
+                    background: 'var(--color-accent)',
+                    color: 'var(--color-bubble-user-text)',
+                  }
                 : {
+                    ...btnSize,
                     background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
                     color: 'var(--color-text-primary)',
                   }
             }
             onClick={handleMic}
             disabled={micMuted}
-            title={isListening ? titleListening : titleIdle}
-            aria-label={isListening ? titleListening : titleIdle}
+            title={micTitle}
+            aria-label={micTitle}
             aria-pressed={isListening}
           >
-            <Icon size={18} />
+            <MicIcon size={ICON_SIZE} />
           </button>
-        );
-      })()}
 
-      {/* TTS toggle */}
-      <button
-        className="w-9 h-9 rounded-full flex items-center justify-center transition"
-        style={
-          ttsEnabled
-            ? {
-                background: 'color-mix(in srgb, var(--color-accent) 35%, transparent)',
-                color: 'var(--color-text-accent)',
-              }
-            : {
-                background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
-                color: 'var(--color-text-secondary)',
-              }
-        }
-        onClick={handleTts}
-        title={ttsEnabled ? 'TTS 已开启' : 'TTS 已关闭'}
-      >
-        {ttsEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
-      </button>
+          {/* TTS toggle(mute) */}
+          <button
+            className={btnBaseClass}
+            style={
+              ttsEnabled
+                ? {
+                    ...btnSize,
+                    background: 'color-mix(in srgb, var(--color-accent) 35%, transparent)',
+                    color: 'var(--color-text-accent)',
+                  }
+                : {
+                    ...btnSize,
+                    background: 'color-mix(in srgb, var(--color-bg-elevated) 80%, transparent)',
+                    color: 'var(--color-text-secondary)',
+                  }
+            }
+            onClick={handleTts}
+            title={ttsEnabled ? 'TTS 已开启' : 'TTS 已关闭'}
+            aria-label={ttsEnabled ? 'TTS 已开启' : 'TTS 已关闭'}
+          >
+            {ttsEnabled
+              ? <Volume2 size={ICON_SIZE} />
+              : <VolumeX size={ICON_SIZE} />}
+          </button>
+
+          {/* Send · arrow-up 圆钮 · pin 1:image-only 允许 · canSend = text 或 attachments */}
+          <button
+            className={btnBaseClass}
+            style={{
+              ...btnSize,
+              background: canSend ? 'var(--color-accent)' : 'var(--color-bg-elevated)',
+              color: canSend ? 'var(--color-bubble-user-text)' : 'var(--color-text-primary)',
+            }}
+            onClick={handleSend}
+            disabled={!canSend}
+            title="发送"
+            aria-label="发送"
+          >
+            <ArrowUp size={ICON_SIZE} />
+          </button>
+        </div>
       </div>
     </div>
   );

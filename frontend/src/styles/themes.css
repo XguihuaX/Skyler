@@ -244,6 +244,33 @@
   --glass-text-shadow: 0 1px 2px rgba(255, 255, 255, 0.65);
 }
 
+/* ===================================================================
+ * 输入框尺寸 token(2026-06-19 · Build 1 · 决策 ③)
+ * 集中驱动 ChatInput 2 区 + 3 簇尺寸 · Build 2 设置项可实时调。
+ * 默认值用【缩小后】数值(密度提高 · 整体更紧凑)。
+ * 框宽 = clamp(min, %, max) 跟窗口比例缩 · 上限 840(明显宽于旧 680)。
+ * =================================================================== */
+:root {
+  /* 框尺寸(区 A textarea + 区 B 工具条共享 root 内边距)*/
+  --input-padding-x:        14px;     /* 略缩 16→14 */
+  --input-padding-y:        7px;      /* py 12→7 · 决策 ③ */
+  --input-radius:           var(--glass-radius);  /* 16 · 跟玻璃 token 同源 */
+  --input-row-gap:          6px;      /* 区 A/B 行间距 · 旧 8 → 6 */
+  /* 文本(区 A textarea)*/
+  --input-text-size:        13px;     /* 决策 ③ text 14→13 */
+  --input-text-leading:     1.5;
+  /* 按钮 / 图标(簇1+3)*/
+  --input-button-size:      32px;     /* w-9 h-9 → w-8 h-8 · 决策 ③ */
+  --input-icon-size:        16px;     /* 18→16 · 决策 ③ */
+  /* chip(簇2 活动类)*/
+  --input-chip-text-size:   12px;     /* 决策 ③ chip 12 */
+  --input-chip-pad-x:       10px;
+  --input-chip-pad-y:       3px;
+  --input-chip-icon-size:   12px;
+  /* 框宽 · 跟窗口同比例缩 · 上限放宽到 840(决策 ③)*/
+  --input-width:            clamp(400px, 66%, 840px);
+}
+
 /* ---------- 全局滚动条样式（webkit） ---------- */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
