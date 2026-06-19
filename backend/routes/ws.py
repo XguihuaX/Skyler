@@ -769,12 +769,41 @@ async def _handle_message(
         else:
             text = (data.get("content") or "").strip()
 
-        if not text:
+        # 2026-06-19 · 图片输入(MVP)· user attachments(只 image)
+        # - 协议:msg_type='text' + attachments: [{kind:'image', data_url, mime}]
+        # - image_url shape 跟 Step 0 探针验过的同款 · 不开新 msg_type
+        # - text 为空 + attachments 非空 = image-only · 允许(pin 1)
+        # - text 仍写 chat_history(string)· attachments 改 [图片] 占位 ·
+        #   不建 chat_attachments 表(spec 第 3 条 / pin 3)
+        # - state.user_text 仍 string · 不动既有打断 / 持久 / sanitize 路径
+        raw_attachments = data.get("attachments") or []
+        attachments: list[dict] = []
+        if isinstance(raw_attachments, list):
+            for item in raw_attachments:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("kind") != "image":
+                    continue
+                data_url = item.get("data_url")
+                if isinstance(data_url, str) and data_url.startswith("data:image/"):
+                    attachments.append({
+                        "kind": "image",
+                        "data_url": data_url,
+                        "mime": str(item.get("mime") or "image/jpeg"),
+                    })
+        n_att = len(attachments)
+
+        if not text and n_att == 0:
             await ws.send_json({"type": "error", "message": "Empty input"})
             return
 
-        # 让打断收尾能拿到这一轮的 user 文本
-        state.user_text = text
+        # 让打断收尾能拿到这一轮的 user 文本(text 仍 string)
+        # 持久化时 image-only 用 "[图片] N 张" 占位 · 有文字时拼接
+        if n_att > 0:
+            placeholder = f"[图片] {n_att} 张"
+            state.user_text = f"{text} {placeholder}" if text else placeholder
+        else:
+            state.user_text = text
 
         # v3-G chunk 3b：任何 user message 入 turn → 更新角色 last_interaction_at。
         # 不在这里改 mood / intimacy（那靠 LLM <state_update> 标签）。失败 best-effort，
@@ -896,6 +925,10 @@ async def _handle_message(
                 # Bug 1 修法:ChatAgent 用此 conv_id 过滤 short_term,确保同
                 # character 不同 conversation 的历史不串(audit_lost_replies.md)。
                 "conversation_id": conv_id,
+                # 2026-06-19 · 图片输入(MVP)· chat_agent 内 _build_messages
+                # 拿到 attachments 时把 user content 升 list block(image_url)·
+                # 缺省 [] 时保持 string · 老路径 0 行为变化。
+                "attachments": attachments,
             },
         }
 

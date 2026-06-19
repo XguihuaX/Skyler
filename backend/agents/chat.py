@@ -1117,6 +1117,36 @@ async def _get_active_llm_vendor() -> str:
     return "qwen"
 
 
+def _user_content(text: str, attachments: Optional[List[dict]]) -> object:
+    """2026-06-19 · 图片输入(MVP)· 把当前 user turn 的 text + attachments
+    组装成 OpenAI 兼容 content。
+
+    无 attachments → 返 string(老路径 · chat_history 回放 + LLM 全兼容)
+    有 attachments → 返 list[block]:
+        [{"type":"text","text": text}?, {"type":"image_url","image_url":{"url": data_url}}*]
+        - text 为空时只放 image_url block(pin 1 · 空 text block 部分端点会拒)
+        - image_url shape 跟 Step 0 探针 HTTP 200 验过的同款 · 不手搓变体
+    """
+    if not attachments:
+        return text
+    blocks: List[dict] = []
+    if text:
+        blocks.append({"type": "text", "text": text})
+    for a in attachments:
+        if not isinstance(a, dict):
+            continue
+        if a.get("kind") != "image":
+            continue
+        url = a.get("data_url")
+        if isinstance(url, str) and url.startswith("data:image/"):
+            blocks.append({
+                "type": "image_url",
+                "image_url": {"url": url},
+            })
+    # 全过滤掉(异常输入)→ 退回 text(防出 empty content)
+    return blocks if blocks else text
+
+
 async def _build_messages(
     user_id: str,
     text: str,
@@ -1126,6 +1156,7 @@ async def _build_messages(
     skip_short_term: bool = False,
     turn_origin: str = "user",
     conversation_id: Optional[int] = None,
+    attachments: Optional[List[dict]] = None,
 ) -> List[dict]:
     """Assemble the full message list to send to the LLM.
 
@@ -1335,7 +1366,12 @@ async def _build_messages(
                     messages.append(
                         {"role": turn["role"], "content": turn["content"]}
                     )
-            messages.append({"role": "user", "content": text})
+            # 2026-06-19 · 当前 user turn · 有 attachments 升 list block ·
+            # 无则保持 string(老路径 0 行为变化)。短期 buffer 回放仍 string。
+            messages.append({
+                "role": "user",
+                "content": _user_content(text, attachments),
+            })
             return messages
 
         except Exception as exc:
@@ -1540,7 +1576,11 @@ async def _build_messages(
             messages.append({"role": turn["role"], "content": turn["content"]})
 
     # ---- Current user input ----
-    messages.append({"role": "user", "content": text})
+    # 2026-06-19 · 同 renderer 路径:有 attachments 升 list block,无则 string。
+    messages.append({
+        "role": "user",
+        "content": _user_content(text, attachments),
+    })
     return messages
 
 
@@ -1574,12 +1614,18 @@ class ChatAgent(IAgent):
         conversation_id: Optional[int] = (
             int(raw_conv) if isinstance(raw_conv, (int, str)) and str(raw_conv).strip() else None
         )
+        # 2026-06-19 · 图片输入(MVP)· 透传到 _build_messages
+        raw_atts = payload.get("attachments") or []
+        attachments: Optional[List[dict]] = (
+            list(raw_atts) if isinstance(raw_atts, list) and raw_atts else None
+        )
 
-        if not user_id or not text:
+        # 2026-06-19 · 图片输入(MVP)· image-only 允许 · pin 1
+        if not user_id or (not text and not attachments):
             return {
                 "status": "error",
                 "agent": "ChatAgent",
-                "payload": {"error": "payload must contain non-empty user_id and text"},
+                "payload": {"error": "payload must contain non-empty user_id and (text or attachments)"},
             }
 
         try:
@@ -1589,6 +1635,7 @@ class ChatAgent(IAgent):
                 extra_system=extra_system,
                 turn_origin=turn_origin,
                 conversation_id=conversation_id,
+                attachments=attachments,
             )
 
             reply_parts: List[str] = []
@@ -1667,9 +1714,15 @@ class ChatAgent(IAgent):
         conversation_id: Optional[int] = (
             int(raw_conv) if isinstance(raw_conv, (int, str)) and str(raw_conv).strip() else None
         )
+        # 2026-06-19 · 图片输入(MVP)· 透传到 _build_messages
+        raw_atts = payload.get("attachments") or []
+        attachments: Optional[List[dict]] = (
+            list(raw_atts) if isinstance(raw_atts, list) and raw_atts else None
+        )
 
-        if not user_id or not text:
-            raise ValueError("payload must contain non-empty user_id and text")
+        # 2026-06-19 · image-only 允许(pin 1)
+        if not user_id or (not text and not attachments):
+            raise ValueError("payload must contain non-empty user_id and (text or attachments)")
 
         with timed("_build_messages"):
             messages = await _build_messages(
@@ -1679,6 +1732,7 @@ class ChatAgent(IAgent):
                 skip_short_term=skip_short_term,
                 turn_origin=turn_origin,
                 conversation_id=conversation_id,
+                attachments=attachments,
             )
 
         prompt_str = json.dumps(messages, ensure_ascii=False)
