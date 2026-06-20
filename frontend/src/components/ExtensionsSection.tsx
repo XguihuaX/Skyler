@@ -10,7 +10,7 @@
  * 复用 chunk 1.5 backend/mcp/client.py + 本 chunk 新增的 routes/mcp_api.py
  * enable/credentials endpoints；不重建任何 MCP 基础设施。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
@@ -22,7 +22,9 @@ import {
   AlertCircle,
   Key,
   Plus,
+  Search,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   deleteMCPServer,
@@ -65,6 +67,16 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
   // 2026-06-15 batch 2 [browser_login] · login 启动进行中 server name(防重复点)
   // status=running 时跑 1.5s 轮询 · cookie_ready / error 终态停止
   const [loggingIn, setLoggingIn] = useState<string | null>(null);
+  // 搜索:纯客户端 server 名子串 filter · 大小写不敏感 · 不碰 tool · 不自动展开。
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredClients = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return clients;
+    return clients.filter((c) => c.name.toLowerCase().includes(q));
+  }, [clients, searchQuery]);
+
+  const hasQuery = searchQuery.trim().length > 0;
 
   const toggleExpand = (name: string) => {
     setExpanded((prev) => {
@@ -262,6 +274,43 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
   return (
     <>
       <Section title="扩展能力 (MCP)">
+        {/* 搜索栏 · 纯展示层过滤 · 空 query 等同现状 */}
+        <div className="flex items-center gap-2 py-1.5">
+          <Search size={12} style={{ color: 'var(--color-text-secondary)' }} />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="搜索 server…"
+            aria-label="搜索 server"
+            className="flex-1 rounded-md px-2 py-1 text-xs focus:outline-none"
+            style={{
+              background: 'var(--color-bg-input)',
+              border: '1px solid var(--color-border)',
+              color: 'var(--color-text-primary)',
+            }}
+          />
+          {hasQuery && (
+            <>
+              <span
+                className="text-[10px]"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                {filteredClients.length}/{clients.length} 个 server
+              </span>
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="清除搜索"
+                title="清除搜索"
+                className="p-0.5 rounded hover:opacity-70"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                <X size={12} />
+              </button>
+            </>
+          )}
+        </div>
         {loading && clients.length === 0 && (
           <div
             className="text-xs py-2"
@@ -286,7 +335,15 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
             未在 config.yaml 配置任何 mcp_clients。
           </div>
         )}
-        {clients.map((c) => (
+        {hasQuery && clients.length > 0 && filteredClients.length === 0 && (
+          <div
+            className="text-xs py-2"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            没有匹配的 server 或工具
+          </div>
+        )}
+        {filteredClients.map((c) => (
           <ClientRow
             key={c.name}
             client={c}
