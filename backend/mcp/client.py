@@ -837,6 +837,8 @@ async def list_status() -> list:
             "missing_credentials": missing,
             "auth": auth_kind,
             "login": login_info,
+            # V4 · 用户自定义昵称(独立侧表 mcp_client_alias)· None = 未设
+            "alias": await _creds.get_alias(name),
             # UX-001：per-server tool 列表 + 单 tool enabled 状态。
             # disconnected → []；UI 用 server enabled + tools 长度做"X cap"角标。
             "tools": list(handle.tools),

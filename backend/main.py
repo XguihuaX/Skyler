@@ -181,6 +181,10 @@ from backend.database.migrations.v4_voice_greeting import (
 from backend.database.migrations.v4_users_current_character import (
     run_migration as migrate_v4_users_current_character,
 )
+# V4 · mcp_client_alias 侧表(用户自定义昵称 · 与 enabled override 解耦)
+from backend.database.migrations.v4_mcp_client_alias import (
+    run_migration as migrate_v4_mcp_client_alias,
+)
 from backend.database.services import create_user, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory, SHORT_TERM_MAX
@@ -531,6 +535,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # nullable INT · ws character_switch 写入 · ws _resolve_conv_char 读优先 ·
     # 前端 App.tsx mount 优先用 · 指向已删角色应用层兜底 Momo · 不设 FK 约束。
     await migrate_v4_users_current_character()
+
+    # ── 1b36. V4 mcp_client_alias 侧表 ─────────────────────────────────────
+    # 用户自定义昵称(xhs → 小红书)持久化。**独立侧表**:不与
+    # mcp_client_state(enabled override 表)合并 —— 那表"行存在 = enabled
+    # override",给从未 toggle 过的 yaml-enabled server 设别名会 INSERT
+    # enabled=0 静默禁用。CREATE IF NOT EXISTS,幂等。
+    await migrate_v4_mcp_client_alias()
     _boot.mark("db_migrations_all")
 
     # ── 2. Default user ──────────────────────────────────────────────────────

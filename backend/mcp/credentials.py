@@ -125,3 +125,39 @@ async def list_all_state() -> list[dict]:
         {"server_name": r[0], "enabled": bool(r[1]), "updated_at": str(r[2]) if r[2] else None}
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# User-defined alias (V4)
+#
+# 独立侧表 ``mcp_client_alias`` —— 与 ``mcp_client_state`` (enabled override)
+# 解耦。设别名 / 清别名都**不影响**该 server 的 enabled 状态。
+# ---------------------------------------------------------------------------
+
+async def get_alias(server_name: str) -> Optional[str]:
+    """Return user-defined alias if set; ``None`` if no row."""
+    async with engine.begin() as conn:
+        row = (await conn.execute(text(
+            "SELECT alias FROM mcp_client_alias WHERE server_name=:n"
+        ), {"n": server_name})).first()
+    if row is None:
+        return None
+    return row[0]
+
+
+async def set_alias(server_name: str, alias: str) -> None:
+    """Persist user-defined alias. Empty / whitespace value → delete row (clear)."""
+    cleaned = (alias or "").strip()
+    async with engine.begin() as conn:
+        if not cleaned:
+            await conn.execute(text(
+                "DELETE FROM mcp_client_alias WHERE server_name=:n"
+            ), {"n": server_name})
+            return
+        await conn.execute(text("""
+            INSERT INTO mcp_client_alias (server_name, alias, updated_at)
+            VALUES (:n, :a, CURRENT_TIMESTAMP)
+            ON CONFLICT(server_name) DO UPDATE SET
+              alias=excluded.alias,
+              updated_at=CURRENT_TIMESTAMP
+        """), {"n": server_name, "a": cleaned})

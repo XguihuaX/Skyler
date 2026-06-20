@@ -40,9 +40,17 @@ export interface MCPClientStatus {
   missing_credentials: string[];
   auth: 'browser_login' | null;
   login: MCPLoginStatus | null;
+  // V4 · 用户自定义昵称 · null = 未设
+  alias: string | null;
   // UX-001：connected server 暴露的 tool 列表 + 单 tool enabled override。
   // disconnected → []。
   tools: MCPToolStatus[];
+}
+
+export interface MCPAliasResponse {
+  status: string;
+  name: string;
+  alias: string | null;
 }
 
 export interface MCPToolEnabledResponse {
@@ -145,6 +153,33 @@ export async function setMCPToolEnabled(
     throw new Error(msg);
   }
   return (await res.json()) as MCPToolEnabledResponse;
+}
+
+/** PUT /api/mcp/clients/{name}/alias — 设 / 清 用户自定义昵称。
+ *
+ * 空串(或全空白)→ 后端删行 = 清除。**不动** enabled / 凭证 / 连接状态。
+ */
+export async function setMCPClientAlias(
+  name: string,
+  alias: string,
+): Promise<MCPAliasResponse> {
+  const res = await fetch(
+    `${BACKEND_BASE}/api/mcp/clients/${encodeURIComponent(name)}/alias`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alias }),
+    },
+  );
+  if (!res.ok) {
+    let msg = `set alias failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) msg = String(j.detail);
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return (await res.json()) as MCPAliasResponse;
 }
 
 export async function setMCPCredentials(

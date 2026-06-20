@@ -94,6 +94,10 @@ class MCPClientStatusItem(BaseModel):
     # isBrowserLogin=false → xhs 卡按钮缺失。
     auth: Optional[Literal["browser_login"]] = None
     login: Optional[MCPLoginStatusItem] = None
+    # V4 · 用户自定义昵称(侧表 mcp_client_alias)· None = 未设
+    # ★ 警告同 auth/login:Pydantic schema 没声明 → FastAPI 静默剥字段 →
+    # 前端 alias=undefined → 副标签 + 搜索别名 均失效。
+    alias: Optional[str] = None
     # UX-001：connected server 已注册的 tool 列表 + 单 tool enabled override
     tools: list[MCPToolItem] = []
 
@@ -474,6 +478,38 @@ async def set_client_enabled(name: str, body: EnabledBody) -> EnabledResponse:
         connected=item["connected"],
         tool_count=item["tool_count"],
         detail=item.get("last_error"),
+    )
+
+
+class AliasBody(BaseModel):
+    # V4 · 用户自定义昵称 · 空串(或全空白)→ 后端删行 = 清除
+    alias: str
+
+
+class AliasResponse(BaseModel):
+    status: str
+    name: str
+    alias: str | None
+
+
+@router.put("/mcp/clients/{name}/alias", response_model=AliasResponse)
+async def set_client_alias(name: str, body: AliasBody) -> AliasResponse:
+    """UI 设别名 / 清别名。持久化到 DB ``mcp_client_alias`` 侧表。
+
+    与 ``set_client_enabled`` 解耦:本接口**不动**任何 enabled / 凭证 / 连接
+    状态;反之 enabled toggle 也**不动** alias。空 ``alias`` 字段 → 删行 = 清除。
+    """
+    from backend.mcp import client as mcp_client
+    from backend.mcp import credentials as _creds
+    # 检查 server 存在(对齐 set_client_enabled 的 404 行为)
+    status_list = await mcp_client.list_status()
+    if not any(s["name"] == name for s in status_list):
+        raise HTTPException(status_code=404, detail=f"client {name!r} not configured")
+    await _creds.set_alias(name, body.alias)
+    return AliasResponse(
+        status="ok",
+        name=name,
+        alias=await _creds.get_alias(name),
     )
 
 

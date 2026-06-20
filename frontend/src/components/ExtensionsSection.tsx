@@ -23,6 +23,7 @@ import {
   Key,
   Plus,
   Search,
+  Settings,
   Trash2,
   X,
 } from 'lucide-react';
@@ -33,6 +34,7 @@ import {
   getMCPLoginStatus,
   invokeMCPTool,
   reconnectMCPClient,
+  setMCPClientAlias,
   setMCPClientEnabled,
   setMCPCredentials,
   setMCPToolEnabled,
@@ -55,6 +57,8 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
   const [error, setError]     = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
   const [credModalFor, setCredModalFor] = useState<MCPClientStatus | null>(null);
+  // V4 · per-server 设置 modal(目前只装别名 / 昵称,未来可扩展)
+  const [settingsModalFor, setSettingsModalFor] = useState<MCPClientStatus | null>(null);
   // UX-001：accordion expand state per server name + per-tool toggle 进行中标记
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [toolToggling, setToolToggling] = useState<string | null>(null);
@@ -73,7 +77,10 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
   const filteredClients = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return clients;
-    return clients.filter((c) => c.name.toLowerCase().includes(q));
+    return clients.filter((c) =>
+      c.name.toLowerCase().includes(q) ||
+      (c.alias ?? '').toLowerCase().includes(q),
+    );
   }, [clients, searchQuery]);
 
   const hasQuery = searchQuery.trim().length > 0;
@@ -249,6 +256,7 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
         last_error: response.error,
         env_required: envPlaceholders,
         missing_credentials: envPlaceholders,
+        alias: null,
         tools: [],
       };
       setCredModalFor(synthetic);
@@ -360,6 +368,7 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
             reconnecting={reconnecting === c.name}
             onBrowserLogin={() => void onBrowserLogin(c)}
             loggingIn={loggingIn === c.name}
+            onOpenSettings={() => setSettingsModalFor(c)}
           />
         ))}
         <div className="flex justify-between items-center pt-1">
@@ -403,6 +412,22 @@ export default function ExtensionsSection({ showToast }: ExtensionsSectionProps)
             setCredModalFor(null);
             void refresh();
             showToast(`${credModalFor.name} 凭证已保存`);
+          }}
+          showToast={showToast}
+        />
+      )}
+      {settingsModalFor && (
+        <SettingsModal
+          server={settingsModalFor}
+          onClose={() => setSettingsModalFor(null)}
+          onSaved={(newAlias) => {
+            setSettingsModalFor(null);
+            void refresh();
+            showToast(
+              newAlias
+                ? `${settingsModalFor.name} 别名已保存:${newAlias}`
+                : `${settingsModalFor.name} 别名已清除`,
+            );
           }}
           showToast={showToast}
         />
@@ -468,6 +493,8 @@ interface ClientRowProps {
   // 2026-06-15 batch 2 [browser_login] · 扫码登录(替代凭证 modal)
   onBrowserLogin: () => void;
   loggingIn: boolean;
+  // V4 · 打开 per-server 设置 modal(目前只装别名)
+  onOpenSettings: () => void;
 }
 
 function ClientRow({
@@ -485,6 +512,7 @@ function ClientRow({
   reconnecting,
   onBrowserLogin,
   loggingIn,
+  onOpenSettings,
 }: ClientRowProps) {
   // 2026-06-15 batch 2 [browser_login] · 三类 entry 的差异化 UX:
   //   1. browser_login & cookie 未就位 → toggle 禁用 + "登录" 按钮 + 黄字提示
@@ -531,6 +559,15 @@ function ClientRow({
             >
               {client.name}
             </span>
+            {client.alias && client.alias.trim().length > 0 && (
+              <span
+                className="text-xs"
+                style={{ color: 'var(--color-text-secondary)' }}
+                title="用户自定义昵称"
+              >
+                · {client.alias}
+              </span>
+            )}
             <span
               className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded"
               style={status.style}
@@ -632,6 +669,21 @@ function ClientRow({
               配置凭证
             </button>
           )}
+          {/* V4 · per-server 设置按钮(目前只装别名 / 昵称,未来可扩展) */}
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="text-[10px] inline-flex items-center gap-1 px-2 py-0.5 rounded hover:opacity-80"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              color: 'var(--color-text-primary)',
+              border: '1px solid var(--color-border)',
+            }}
+            title="设置别名 / 昵称"
+          >
+            <Settings size={10} />
+            设置
+          </button>
           {/* 2026-06-02 · A. reconnect 按钮:enabled 时显示(disabled 状态走 enable
               toggle 自动 connect,这里没意义)。健康 server 上点也无害——就 bounce
               一下;失败时 last_error 红字会出。 */}
@@ -1330,6 +1382,120 @@ function CredentialsModal({ server, onClose, onSaved, showToast }: CredentialsMo
             </div>
           ))}
         </div>
+        <div className="flex justify-end gap-2 pt-4">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="px-3 py-1.5 text-xs rounded-md transition disabled:opacity-50"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              color: 'var(--color-text-primary)',
+            }}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => void onSubmit()}
+            disabled={submitting}
+            className="px-3 py-1.5 text-xs rounded-md transition disabled:opacity-50"
+            style={{
+              background: 'var(--color-accent)',
+              color: 'var(--color-bubble-user-text)',
+            }}
+          >
+            {submitting ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// V4 · SettingsModal
+//
+// per-server "设置" 弹窗。当前唯一字段:用户自定义昵称 / 别名(alias)。
+// 设计与 CredentialsModal 形态一致(fixed overlay + 主题色),copy 同模板。
+//
+// 行为:
+//   - 输入框预填 server.alias(可能为 null/空)
+//   - 保存空串 → 后端删行 = 清除别名(showToast 区分"已保存"vs"已清除")
+//   - 不动 enabled / 凭证 / 连接状态(后端 set_client_alias endpoint 解耦)
+// ---------------------------------------------------------------------------
+
+interface SettingsModalProps {
+  server: MCPClientStatus;
+  onClose: () => void;
+  onSaved: (newAlias: string) => void;
+  showToast: (text: string) => void;
+}
+
+function SettingsModal({ server, onClose, onSaved, showToast }: SettingsModalProps) {
+  const [alias, setAlias] = useState<string>(server.alias ?? '');
+  const [submitting, setSubmitting] = useState(false);
+
+  const onSubmit = async () => {
+    setSubmitting(true);
+    try {
+      const r = await setMCPClientAlias(server.name, alias);
+      onSaved(r.alias ?? '');
+    } catch (e) {
+      showToast(`保存失败:${(e as Error).message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[55] flex items-center justify-center"
+      style={{ background: 'color-mix(in srgb, var(--color-bg-base) 60%, transparent)' }}
+      onClick={onClose}
+    >
+      <div
+        className="rounded-lg p-5 w-96 shadow-2xl"
+        style={{
+          background: 'var(--color-bg-surface)',
+          border: '1px solid var(--color-border)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h4
+          className="text-sm font-semibold mb-3"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          {server.name} 设置
+        </h4>
+        <p
+          className="text-xs mb-3"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          别名 / 昵称:给这个 server 起个好记的名字(如 xhs → 小红书)。
+          设别名后搜索框也能按别名命中。留空则清除别名。
+        </p>
+        <label
+          className="block text-xs mb-1"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          别名 / 昵称
+        </label>
+        <input
+          type="text"
+          value={alias}
+          onChange={(e) => setAlias(e.target.value)}
+          placeholder="例如:小红书"
+          aria-label={`${server.name} 别名`}
+          className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
+          style={{
+            background: 'var(--color-bg-input)',
+            border: '1px solid var(--color-border)',
+            color: 'var(--color-text-primary)',
+          }}
+          autoComplete="off"
+        />
         <div className="flex justify-end gap-2 pt-4">
           <button
             type="button"
