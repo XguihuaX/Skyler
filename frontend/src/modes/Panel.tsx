@@ -120,6 +120,10 @@ export default function Panel() {
                 }}
               >
                 <CharacterView className="absolute inset-0 w-full h-full" />
+                {/* PM 2026-06-21:大窗 SpeechBubble 暂关 · 大窗已有 ChatHistory
+                    全量列表 · audit_chat_panel 方案 1 "冗余"理由再次胜出 ·
+                    组件本体保留 · 小窗仍挂 · 后续如要复活只需 import +
+                    <CharacterSpeechBubble mode="panel" /> 单行 */}
                 {/* 脚下光台 · 跟着 wrapper 左移 · 在 wrapper 中心底部一片柔光 ·
                     width 缩到 30%(原 55% 是给 60% 压扁 wrapper 算的,现满宽
                     要按总画面比例算) · pointer-events-none. */}

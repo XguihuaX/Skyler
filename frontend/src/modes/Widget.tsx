@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useAppStore } from '../store';
 import { applyModeWindowProps } from '../lib/window';
+import CharacterSpeechBubble from '../components/character/CharacterSpeechBubble';
 import CharacterView from '../components/CharacterView';
 import StatusBadge from '../components/StatusBadge';
 import AsrPreview from '../components/AsrPreview';
@@ -59,13 +60,19 @@ export default function Widget() {
           不显式设 false。 */}
       <CharacterView />
 
+      {/* 角色头顶瞬时台词浮件 · linger 8s(小窗无 ChatHistory · 让用户随时
+          回头看)· streaming 中实时累加 · 与 06-06 删的 WidgetSpeechBubble 不同:
+          本组件大小窗共用一份取数 / 生命周期(详见组件 docstring)。 */}
+      <CharacterSpeechBubble mode="widget" />
+
       {/* Status badge — top-left, hover-controlled */}
       <div className={`absolute top-3 left-3 z-20 ${controlsClass}`}>
         <StatusBadge status={status} />
       </div>
 
       {/* 2026-06-06 · 删 WidgetSpeechBubble · 小窗只用 AsrPreview(实时 ASR
-          回显) + Live2D 嘴动 + TTS 出声,不再叠成句台词气泡浮件。 */}
+          回显) + Live2D 嘴动 + TTS 出声,不再叠成句台词气泡浮件。
+          (本次复活语义不同 · 共享 CharacterSpeechBubble · 见上注释) */}
 
       {/* ASR preview — centered above control bar */}
       <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20">
