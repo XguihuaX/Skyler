@@ -1,4 +1,7 @@
 {# C4 运行时状态(per-turn 变化,放 variable 段,不进 cache 前缀)#}
+{% if now_str %}[当前时间]
+现在 {{ now_str }}。说话自然贴合现在几点和你在做的事,别每句机械报时。
+{% endif %}
 [当前状态]
 心情: {{ states.mood }}
 亲密度: {{ states.intimacy }}/100

@@ -185,6 +185,10 @@ from backend.database.migrations.v4_users_current_character import (
 from backend.database.migrations.v4_mcp_client_alias import (
     run_migration as migrate_v4_mcp_client_alias,
 )
+# DailyAgent chunk 1 — character_daily_plans 表
+from backend.database.migrations.dailyagent_chunk1_character_daily_plan import (
+    run_migration as migrate_dailyagent_chunk1_character_daily_plan,
+)
 from backend.database.services import create_user, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory, SHORT_TERM_MAX
@@ -542,6 +546,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # override",给从未 toggle 过的 yaml-enabled server 设别名会 INSERT
     # enabled=0 静默禁用。CREATE IF NOT EXISTS,幂等。
     await migrate_v4_mcp_client_alias()
+
+    # ── 1b37. DailyAgent chunk 1 — character_daily_plans 表 ──────────────
+    # 每角色每日活动日程(plan = JSON 数组)。Stage 1 由 daily_plan_generate
+    # cron (5 0 * * *) + startup backfill 写,daily_activity_ticker 5min
+    # interval 查表写 current_activity。CREATE TABLE IF NOT EXISTS,幂等。
+    await migrate_dailyagent_chunk1_character_daily_plan()
     _boot.mark("db_migrations_all")
 
     # ── 2. Default user ──────────────────────────────────────────────────────
@@ -623,10 +633,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             # Bug 1 修法:把 chat_history.conversation_id 同步进 short_term
             # entry,让 get(conversation_id=cur) 能按当前 conv 过滤。重启后
             # 不同 conv 历史不再串(audit_lost_replies.md 主因 a)。
+            # DailyAgent Stage 1 时间地基:同步 chat_history.created_at,
+            # 让 chat.py 拼 prompt 时给 history 行加 ``[今天 12:31]`` 前缀
+            # (utils/chat_time.format_history_time_prefix);旧 row created_at
+            # 为 server-side CURRENT_TIMESTAMP(UTC naive),chat_time 按 UTC 解读。
             await short_term_memory.add(
                 default_uid, msg.role, cleaned,
                 character_id=cid,
                 conversation_id=msg.conversation_id,
+                created_at=msg.created_at,
             )
             n_cid += 1
         total_restored += n_cid
@@ -771,6 +786,43 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "[cron] activity_timeline_cleanup registration failed"
         )
     _boot.mark("cron_activity_cleanup")
+
+    # ── 6b''''. DailyAgent Stage 1 — daily_plan generation cron + ticker ──
+    # cron `5 0 * * *` 每天 0:05 生成今日 plan(错开 0:00 的 intimacy_decay);
+    # interval 300s 跑 ticker 查 today plan → 写 character_states.current_activity;
+    # startup backfill 在 scheduler.start 之后立即跑一次,补"启动早于 0:05" /
+    # "今日首启" 的 plan 缺失。Stage 1 MVP 单角色 (cid=1),Stage 2 扩 multi。
+    try:
+        from backend.services.daily_plan import (
+            daily_plan_backfill_if_missing,
+            daily_plan_generate,
+        )
+        from backend.services.daily_ticker import daily_activity_ticker
+        cron_scheduler.schedule_cron(
+            "daily_plan_generate", "5 0 * * *", daily_plan_generate,
+        )
+        logger.info("[cron] daily_plan_generate registered: 5 0 * * *")
+    except ValueError:
+        logger.info("[cron] daily_plan_generate already registered (hot-reload)")
+    except Exception:
+        logger.exception("[cron] daily_plan_generate registration failed")
+    try:
+        cron_scheduler.schedule_interval(
+            "daily_activity_ticker", 300, daily_activity_ticker,
+        )
+        logger.info("[cron] daily_activity_ticker registered: every 300s")
+    except ValueError:
+        logger.info("[cron] daily_activity_ticker already registered (hot-reload)")
+    except Exception:
+        logger.exception("[cron] daily_activity_ticker registration failed")
+    # backfill 不阻塞 lifespan:fire-and-forget。LLM 调用慢(>10s),阻塞
+    # lifespan 会卡 /api/health 与 splash 显示。
+    try:
+        asyncio.create_task(daily_plan_backfill_if_missing())
+        logger.info("[daily_plan] backfill task spawned")
+    except Exception:
+        logger.exception("[daily_plan] backfill spawn failed")
+    _boot.mark("daily_plan_jobs")
 
     # ── 6b''. v3.5 chunk 10 — MemoryExtractor worker ─────────────────────
     # 每 N 分钟扫 chat_history 提取 memory entries。worker 用

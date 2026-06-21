@@ -27,6 +27,7 @@ from backend.agents.prompt.persona_loader import (
     load_active_persona,
     load_character_state,
 )
+from backend.utils.chat_time import format_now_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -172,13 +173,17 @@ def _render_layer_c_runtime(
     states: LoadedState,
     safe_thought: Optional[str],
 ) -> str:
-    """渲染 Layer C 运行时段(C4 [当前状态]) — 每 turn 可变,放 variable 段。
+    """渲染 Layer C 运行时段(C4 [当前时间] / [当前状态]) — 每 turn 可变,
+    放 variable 段。
 
-    依赖:states.mood / intimacy / activity + safe_thought。
+    依赖:states.mood / intimacy / activity + safe_thought + 当前本地时间
+    (scheduler tz)。DailyAgent Stage 1 时间地基:把"现在 YYYY-MM-DD 周X
+    HH:MM" 注入 prompt,让 LLM 自然贴合现在几点和角色当下活动说话。
     """
     return _jinja_env.get_template("layer_c_runtime.j2").render(
         states=states,
         safe_thought=safe_thought,
+        now_str=format_now_prompt(),
     )
 
 

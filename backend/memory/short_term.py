@@ -29,6 +29,7 @@ test fallback bucket(不带角色信息的调用进此 bucket,与具体角色 bu
   重启后跨 conv 历史也能按 conv 隔离。
 """
 import logging
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class ShortTermMemory:
         content: str,
         character_id: Optional[int] = None,
         conversation_id: Optional[int] = None,
+        created_at: Optional[datetime] = None,
     ) -> None:
         """Append a turn to the (user_id, character_id) buffer。
 
@@ -67,6 +69,11 @@ class ShortTermMemory:
         修法 A:append 后 enforce ``SHORT_TERM_MAX``,超出则 trim oldest。
         trim 按 bucket-level(per (user, char)),保留 60 messages cap;
         conv 维度的"过滤"在 read 端做,不影响写入 cap 语义。
+
+        DailyAgent Stage 1 时间地基:每条 entry 记 ``created_at``(UTC),
+        供 chat.py 拼 prompt 时给 history 行前缀 ``[今天 HH:MM]`` 等。
+        ``created_at`` 缺省 = 当前 utcnow;restore_memory 走 chat_history
+        实际时间。
         """
         key: _Key = (user_id, character_id)
         if key not in self._store:
@@ -75,6 +82,7 @@ class ShortTermMemory:
             "role": role,
             "content": content,
             "conv_id": conversation_id,
+            "created_at": created_at if created_at is not None else datetime.utcnow(),
         })
         if len(self._store[key]) > SHORT_TERM_MAX:
             trimmed = len(self._store[key]) - SHORT_TERM_MAX

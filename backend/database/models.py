@@ -2,6 +2,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -290,6 +291,33 @@ class CharacterState(Base):
     current_activity    = Column(String(64), nullable=True)
     last_interaction_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at          = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class CharacterDailyPlan(Base):
+    """DailyAgent Stage 1 — per-character per-day 活动日程。
+
+    一行 = 一个 character 在某一本地日期(scheduler timezone)的全天 plan。
+    plan 是 JSON 字符串(SQLite 无原生 JSON 类型),形如:
+
+        [{"start": "07:00", "end": "08:30", "activity": "起床 + 早饭"}, ...]
+
+    UNIQUE(character_id, date) 防同日重复;ticker 每 5min 查今日 row、按当前
+    本地 HH:MM 命中 slot → 写 ``character_states.current_activity``。
+    """
+    __tablename__ = "character_daily_plans"
+
+    id           = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    date         = Column(Date, nullable=False)
+    plan         = Column(Text, nullable=False)
+    created_at   = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "character_id", "date",
+            name="uq_character_daily_plans_char_date",
+        ),
+    )
 
 
 class PendingBriefing(Base):

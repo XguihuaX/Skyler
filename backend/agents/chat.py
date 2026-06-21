@@ -62,6 +62,7 @@ from backend.llm.tool_name_sanitize import sanitize_tools_for_llm
 from backend.memory.long_term import generate_embedding, search_relevant_memories
 from backend.memory.short_term import short_term_memory
 from backend.tools.registry import ToolRegistry
+from backend.utils.chat_time import format_history_time_prefix, now_local
 from backend.utils.text_filters import has_partial_open_tag
 from backend.utils.timer import timed
 
@@ -1401,13 +1402,25 @@ async def _build_messages(
                     user_id, character_id, conversation_id,
                 )
             if not skip_short_term:
+                # DailyAgent Stage 1 时间地基:每条 short_term turn 前缀
+                # ``[今天 HH:MM]`` / ``[昨天 HH:MM]`` / ``[M月D日 HH:MM]``。
+                # turn 无 created_at(旧 in-memory entry 或 legacy 写入) →
+                # 前缀为空,优雅降级,只拼原 content。
+                _now_local = now_local()
                 for turn in await short_term_memory.get(
                     user_id,
                     character_id=character_id,
                     conversation_id=conversation_id,
                 ):
+                    _prefix = format_history_time_prefix(
+                        turn.get("created_at"),
+                        now_local_dt=_now_local,
+                    )
+                    _content = (
+                        f"{_prefix} {turn['content']}" if _prefix else turn["content"]
+                    )
                     messages.append(
-                        {"role": turn["role"], "content": turn["content"]}
+                        {"role": turn["role"], "content": _content}
                     )
             # 2026-06-19 · 当前 user turn · 有 attachments 升 list block ·
             # 无则保持 string(老路径 0 行为变化)。短期 buffer 回放仍 string。
@@ -1611,12 +1624,21 @@ async def _build_messages(
             user_id, character_id, conversation_id,
         )
     if not skip_short_term:
+        # DailyAgent Stage 1 时间地基:同 renderer 路径,history 加时间前缀。
+        _now_local = now_local()
         for turn in await short_term_memory.get(
             user_id,
             character_id=character_id,
             conversation_id=conversation_id,
         ):
-            messages.append({"role": turn["role"], "content": turn["content"]})
+            _prefix = format_history_time_prefix(
+                turn.get("created_at"),
+                now_local_dt=_now_local,
+            )
+            _content = (
+                f"{_prefix} {turn['content']}" if _prefix else turn["content"]
+            )
+            messages.append({"role": turn["role"], "content": _content})
 
     # ---- Current user input ----
     # 2026-06-19 · 同 renderer 路径:有 attachments 升 list block,无则 string。
