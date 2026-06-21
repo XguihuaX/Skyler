@@ -48,8 +48,13 @@ fn write_config_field(key_path: String, value: Value) -> Result<(), String> {
             .as_mapping_mut()
             .ok_or_else(|| format!("path segment '{}' is not under a mapping", k))?;
         let key = Value::String((*k).to_string());
+        // 2026-06-21 fix: 中间段不存在时自动建空 mapping(原 gate 抛错让
+        // 新 config 段如 thinking: 永远写不进 → toggleConfigField 回滚 → UI
+        // 看着没反馈)。从此任意新嵌套段都能 first-time toggle 自动落 yaml,
+        // 无须手动 pre-seed。is_mapping 校验保留 - 防 path 段命中已存在的
+        // 非 mapping 值(scalar / list)被误覆盖。
         if !mapping.contains_key(&key) {
-            return Err(format!("intermediate key '{}' does not exist", k));
+            mapping.insert(key.clone(), Value::Mapping(Default::default()));
         }
         current = mapping.get_mut(&key).unwrap();
         if !current.is_mapping() {

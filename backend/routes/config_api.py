@@ -35,6 +35,14 @@ class SearchConfig(BaseModel):
     enable_search: bool = True
 
 
+# 2026-06-21: qwen3.x thinking 开关 ConfigResponse 段 · 让 GET /api/config
+# 也透出 thinking,前端 syncFromConfig 才能拿到值刷页/重启保留状态。
+# getter 在 backend/config/__init__.py:get_enable_thinking 已存在,
+# 不重复读取逻辑,此 schema 只决定"前端能看到的字段"白名单。
+class ThinkingConfig(BaseModel):
+    enable_thinking: bool = False
+
+
 class CacheConfig(BaseModel):
     profile_ttl_seconds: int = 300
 
@@ -70,6 +78,7 @@ class ConfigResponse(BaseModel):
     default_user_id: str = "default"
     memory: MemoryConfig = MemoryConfig()
     search: SearchConfig = SearchConfig()
+    thinking: ThinkingConfig = ThinkingConfig()
     cache: CacheConfig = CacheConfig()
     tts: TtsConfig = TtsConfig()
     proactive: ProactiveConfig = ProactiveConfig()
@@ -83,6 +92,7 @@ def _build_config_response() -> ConfigResponse:
     """Extract the whitelist fields from config_yaml into a ConfigResponse."""
     memory_raw: dict = config_yaml.get("memory") or {}
     search_raw: dict = config_yaml.get("search") or {}
+    thinking_raw: dict = config_yaml.get("thinking") or {}
     cache_raw: dict = config_yaml.get("cache") or {}
     tts_raw: dict = config_yaml.get("tts") or {}
     proactive_raw: dict = config_yaml.get("proactive") or {}
@@ -106,6 +116,9 @@ def _build_config_response() -> ConfigResponse:
         ),
         search=SearchConfig(
             enable_search=search_raw.get("enable_search", True),
+        ),
+        thinking=ThinkingConfig(
+            enable_thinking=bool(thinking_raw.get("enable_thinking", False)),
         ),
         cache=CacheConfig(
             profile_ttl_seconds=cache_raw.get("profile_ttl_seconds", 300),

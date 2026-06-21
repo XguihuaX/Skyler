@@ -1,11 +1,12 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, AudioWaveform, ChevronDown, ChevronUp, FileText, ImagePlus, Loader2,
-  Mic, Paperclip, Sparkles, Volume2, VolumeX, X,
+  ArrowUp, AudioWaveform, Brain, ChevronDown, ChevronUp, FileText, Globe,
+  ImagePlus, Loader2, Mic, Paperclip, Sparkles, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { useAppStore, type AiStatus } from '../store';
 import { useAppApi } from '../contexts/appApi';
 import { setConfigField } from '../lib/window';
+import { toggleConfigField } from '../lib/toggleConfig';
 import { toolLoadingLabel } from '../lib/tool_labels';
 
 // 2026-06-19 · Build 1 决策 ① · 微型 AI 状态指示(取代大 StatusBadge)·
@@ -152,6 +153,10 @@ export default function ChatInput() {
   // 双源任一翻 truthy → 按钮点亮。手动话筒图标 + 点亮 = VAD 残留 active(bug)。
   const vadState     = useAppStore((s) => s.vadState);
   const ttsEnabled   = useAppStore((s) => s.ttsEnabled);
+  // 2026-06-21 双开关:thinking/search · 状态走 store + setConfigField 持久化
+  // · 与 SettingsPanelLegacy 同源 · 共享 lib/toggleConfig:toggleConfigField
+  const enableThinking = useAppStore((s) => s.enableThinking);
+  const enableSearch   = useAppStore((s) => s.enableSearch);
   const currentThinking = useAppStore((s) => s.currentThinking);
   const currentToolName = useAppStore((s) => s.currentToolName);
 
@@ -597,8 +602,97 @@ export default function ChatInput() {
               态自动打断时仍会显示 */}
         </div>
 
-        {/* ── 簇3 · 语音 / 发送 · Mic / TTS(mute)/ Send(ArrowUp) ──────── */}
+        {/* ── 簇3 · 语音 / 发送 · Thinking / Search / Mic / TTS(mute)/ Send ── */}
         <div className="flex items-center gap-2">
+          {/* 2026-06-21 v2 · 双开关 pill 重设计 ·
+              原圆钮(仅 icon + 35% mix 背景)状态太隐蔽 → 改 rounded-full
+              pill(icon + 文字),开 = 实心 accent 不透明,关 = 幽灵(透明 +
+              1px border),点一下填充翻转 = 强反馈。逻辑不变(toggleConfigField
+              同源)· 文字 "思考"/"联网" 短,全称走 tooltip。 */}
+          {/* 深度思考 toggle · On → qwen3.x 走思考链 · Off → 立即出 content
+              · 非 thinking 模型后端 silent skip 但 UI 仍可点(同 enableSearch) */}
+          <button
+            className={
+              'rounded-full inline-flex items-center justify-center gap-1.5 ' +
+              'text-xs font-medium transition-all duration-150 disabled:opacity-30'
+            }
+            style={
+              enableThinking
+                ? {
+                    height: 'var(--input-button-size)',
+                    paddingLeft: 10,
+                    paddingRight: 12,
+                    background: 'var(--color-accent)',
+                    color: 'var(--color-bubble-user-text)',
+                  }
+                : {
+                    height: 'var(--input-button-size)',
+                    paddingLeft: 10,
+                    paddingRight: 12,
+                    background: 'transparent',
+                    color: 'var(--color-text-secondary)',
+                    border: '1px solid var(--color-border)',
+                  }
+            }
+            onClick={() => {
+              const next = !enableThinking;
+              toggleConfigField(
+                useAppStore.getState().setEnableThinking,
+                'thinking.enable_thinking',
+                next,
+                (e) => console.error('[ChatInput] thinking toggle failed:', e),
+              );
+            }}
+            title={enableThinking ? '深度思考已开(慢但更细)' : '深度思考已关(回复快)'}
+            aria-label={enableThinking ? '关闭深度思考' : '开启深度思考'}
+            aria-pressed={enableThinking}
+          >
+            <Brain size={14} />
+            <span>思考</span>
+          </button>
+
+          {/* 联网搜索 toggle · On → qwen enable_search native · 非 qwen 后端
+              silent skip + warn log */}
+          <button
+            className={
+              'rounded-full inline-flex items-center justify-center gap-1.5 ' +
+              'text-xs font-medium transition-all duration-150 disabled:opacity-30'
+            }
+            style={
+              enableSearch
+                ? {
+                    height: 'var(--input-button-size)',
+                    paddingLeft: 10,
+                    paddingRight: 12,
+                    background: 'var(--color-accent)',
+                    color: 'var(--color-bubble-user-text)',
+                  }
+                : {
+                    height: 'var(--input-button-size)',
+                    paddingLeft: 10,
+                    paddingRight: 12,
+                    background: 'transparent',
+                    color: 'var(--color-text-secondary)',
+                    border: '1px solid var(--color-border)',
+                  }
+            }
+            onClick={() => {
+              const next = !enableSearch;
+              toggleConfigField(
+                useAppStore.getState().setEnableSearch,
+                'search.enable_search',
+                next,
+                (e) => console.error('[ChatInput] search toggle failed:', e),
+              );
+            }}
+            title={enableSearch ? '联网搜索已开' : '联网搜索已关'}
+            aria-label={enableSearch ? '关闭联网搜索' : '开启联网搜索'}
+            aria-pressed={enableSearch}
+          >
+            <Globe size={14} />
+            <span>联网</span>
+          </button>
+
           {/* Mic · 图标按 recordingMode 切 · 点亮 = 真在听 */}
           <button
             className={btnBaseClass + ' disabled:opacity-40'}

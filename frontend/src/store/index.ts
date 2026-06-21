@@ -717,6 +717,11 @@ interface AppState {
   setProfileEnabled: (v: boolean) => void;
   enableSearch: boolean;
   setEnableSearch: (v: boolean) => void;
+  // 2026-06-21: qwen3.x thinking 开关 · 默 false(关思考 · 快 first token)
+  // 同 enableSearch:setter 优化 + setConfigField 持久化 yaml(两入口共用 ·
+  // SettingsPanelLegacy "深度思考" toggle + ChatInput 簇3 Brain 钮)。
+  enableThinking: boolean;
+  setEnableThinking: (v: boolean) => void;
 
   // v3-G chunk 2 / 2.6 — 主动陪伴 (proactive engine) 配置镜像。SettingsPanel
   // [主动陪伴] section 写回经 setConfigField；/api/config GET 时由
@@ -1012,6 +1017,8 @@ export const useAppStore = create<AppState>((set) => ({
   setProfileEnabled: (profileEnabled) => set({ profileEnabled }),
   enableSearch: true,
   setEnableSearch: (enableSearch) => set({ enableSearch }),
+  enableThinking: false,  // 默关 · PM 决策:优先 first-token 速度
+  setEnableThinking: (enableThinking) => set({ enableThinking }),
 
   proactiveEnabled: true,
   setProactiveEnabled: (proactiveEnabled) => set({ proactiveEnabled }),
@@ -1108,6 +1115,7 @@ export const useAppStore = create<AppState>((set) => ({
       longTermEnabled: c.memory.long_term_enabled,
       profileEnabled: c.memory.profile_enabled,
       enableSearch: c.search.enable_search,
+      enableThinking: c.thinking?.enable_thinking ?? false,
       ttsEnabled: c.tts.enabled,
       proactiveEnabled: c.proactive?.enabled ?? true,
       proactiveMode: c.proactive?.mode ?? 'wake_call',

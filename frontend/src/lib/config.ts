@@ -10,6 +10,12 @@ export interface AppConfig {
   search: {
     enable_search: boolean;
   };
+  // 2026-06-21: qwen3.x thinking 模式开关。默 false(关思考 · 优先 first
+  // token 速度)· UI 切 toggle 走 setConfigField('thinking.enable_thinking') ·
+  // 后端 backend/config/get_enable_thinking() 同款 live 读取(无缓存)。
+  thinking?: {
+    enable_thinking: boolean;
+  };
   cache: {
     profile_ttl_seconds: number;
   };

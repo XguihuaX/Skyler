@@ -157,6 +157,7 @@ async def call_llm(
     model: Optional[str] = None,
     stream: bool = False,
     enable_search: bool = False,
+    enable_thinking: bool = False,
     **kwargs: Any,
 ) -> Any:
     """Call the LLM and return the raw LiteLLM response object.
@@ -215,6 +216,21 @@ async def call_llm(
                 "(LLM 将回退到训练知识 · 可能幻觉 / 硬控实时信息问题)",
                 resolved_model,
             )
+
+    # 2026-06-21: enable_thinking 显式传给 DashScope thinking 系列模型。
+    # 关键不同点 vs enable_search:**True / False 都显式注入**(qwen3.x 默认
+    # 开思考 · 关需要 enable_thinking=False)· 非 thinking model silent skip + log。
+    # 真机若 kwarg 不通(LiteLLM 不识别)→ 改 merged.setdefault("extra_body",
+    # {})["enable_thinking"] 走 extra_body 通道。
+    model_lower = resolved_model.lower()
+    if any(t in model_lower for t in ("qwen3.5", "qwen3.6-thinking", "qwq")):
+        merged["enable_thinking"] = bool(enable_thinking)
+    elif enable_thinking:
+        logger.info(
+            "[llm.dispatcher] enable_thinking=True requested but model %s "
+            "is non-thinking · skip injection",
+            resolved_model,
+        )
 
     # bugfix-3.2.7: defensive guard — LiteLLM 要求 'provider/model' 格式。
     # 裸 model 名(无 '/')会直接 BadRequestError('LLM Provider NOT provided')。
@@ -287,6 +303,7 @@ async def call_llm(
 async def stream_llm(
     messages: List[dict],
     model: Optional[str] = None,
+    enable_thinking: bool = False,
     **kwargs: Any,
 ) -> AsyncGenerator[str, None]:
     """Stream text chunks from the LLM.
@@ -300,7 +317,10 @@ async def stream_llm(
 
     Raises the same ``LLMError`` subclasses as ``call_llm``.
     """
-    wrapper = await call_llm(messages, model=model, stream=True, **kwargs)
+    wrapper = await call_llm(
+        messages, model=model, stream=True,
+        enable_thinking=enable_thinking, **kwargs,
+    )
     async for chunk in wrapper:
         delta = chunk.choices[0].delta.content
         if delta:

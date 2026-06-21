@@ -233,6 +233,16 @@ def get_enable_search() -> bool:
     return (config_yaml.get("search") or {}).get("enable_search", True)
 
 
+def get_enable_thinking() -> bool:
+    """qwen3.x 思考模式开关。**默 False**(关 thinking · 优先 first-token 速度)。
+
+    每次读最新值,无缓存(同 ``get_enable_search`` live 行为) — UI 切 toggle
+    后 ``setConfigField('thinking.enable_thinking', X)`` 写 yaml,下一个 turn
+    立即生效。模型不支持思考(非 qwen3.x)时 ``client.py`` 侧 silent skip · log。
+    """
+    return (config_yaml.get("thinking") or {}).get("enable_thinking", False)
+
+
 def get_base_instruction() -> str:
     """全局通用设定，会拼接到每个角色 persona 之前。
 

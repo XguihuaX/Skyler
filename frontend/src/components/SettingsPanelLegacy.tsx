@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore, type ThemeKey } from '../store';
 import { setConfigField } from '../lib/window';
+import { toggleConfigField } from '../lib/toggleConfig';
 // bugfix-3.3: lib/models.ts 已下线 (旧 /api/settings/model 路径)。LLM 切换走
 // DB ai_providers; 这个 legacy 面板里的 ModelSection 一并删除。
 import {
@@ -1459,14 +1460,15 @@ interface ShowToastProps {
   showToast: (text: string) => void;
 }
 
-/** 记忆 / 用户画像 / 联网搜索 三 toggle —— 写后端 config.yaml。*/
+/** 记忆 / 用户画像 / 联网搜索 / 深度思考 四 toggle —— 写后端 config.yaml。*/
 export function MemoryTogglesSection({ showToast }: ShowToastProps) {
   const longTermEnabled = useAppStore((s) => s.longTermEnabled);
   const profileEnabled  = useAppStore((s) => s.profileEnabled);
   const enableSearch    = useAppStore((s) => s.enableSearch);
+  const enableThinking  = useAppStore((s) => s.enableThinking);
 
   const remoteToggle = (
-    field: 'longTermEnabled' | 'profileEnabled' | 'enableSearch',
+    field: 'longTermEnabled' | 'profileEnabled' | 'enableSearch' | 'enableThinking',
     keyPath: string,
     next: boolean,
     label: string,
@@ -1475,12 +1477,13 @@ export function MemoryTogglesSection({ showToast }: ShowToastProps) {
       longTermEnabled: useAppStore.getState().setLongTermEnabled,
       profileEnabled:  useAppStore.getState().setProfileEnabled,
       enableSearch:    useAppStore.getState().setEnableSearch,
+      enableThinking:  useAppStore.getState().setEnableThinking,
     } as const;
     const setter = setterMap[field];
-    setter(next);
-    setConfigField(keyPath, next).catch((e: unknown) => {
+    // 走共享 toggleConfigField helper · 同款逻辑被 ChatInput 簇3 钮复用 ·
+    // 两入口共享一份 set+persist+rollback 链路防漂(lib/toggleConfig.ts)。
+    toggleConfigField(setter, keyPath, next, (e: unknown) => {
       console.error(`[MemoryToggles] ${keyPath} sync failed:`, e);
-      setter(!next);
       showToast(`${label} 写入失败：${extractErrorMessage(e)}`);
     });
   };
@@ -1501,6 +1504,11 @@ export function MemoryTogglesSection({ showToast }: ShowToastProps) {
         label="联网搜索"
         value={enableSearch}
         onChange={(next) => remoteToggle('enableSearch', 'search.enable_search', next, '联网搜索')}
+      />
+      <Toggle
+        label="深度思考(慢)"
+        value={enableThinking}
+        onChange={(next) => remoteToggle('enableThinking', 'thinking.enable_thinking', next, '深度思考')}
       />
     </Section>
   );

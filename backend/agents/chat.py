@@ -44,6 +44,7 @@ from backend.agents.base import IAgent
 from backend.config import (
     get_base_instruction,
     get_enable_search,
+    get_enable_thinking,
     get_long_term_enabled,
     get_profile_enabled,
     get_tts_emotions,
@@ -1767,6 +1768,10 @@ class ChatAgent(IAgent):
         # UI 可关)。原 X1 audit §1.6 + §8 #1 死代码消费方接通 ·
         # user-turn 从此默认 True(若 config 未关)。
         enable_search: bool = bool(context.get("enable_search", get_enable_search()))
+        # 同款:context 显式 enable_thinking 优先,缺则读 yaml(默 False)。
+        # qwen3.x thinking model 默认开思考链 → first content token 严重滞后,
+        # 关掉等于回到普通快速响应。模型非 thinking 时 client.py silent skip。
+        enable_thinking: bool = bool(context.get("enable_thinking", get_enable_thinking()))
         skip_short_term: bool = bool(context.get("skip_short_term", False))
         # v4 segment 1: 见 handle() 注释,deterministic mode 依 turn_origin
         turn_origin: str = str(context.get("turn_origin") or "user")
@@ -1844,6 +1849,7 @@ class ChatAgent(IAgent):
                     stream=True,
                     tools=san_tools,
                     enable_search=enable_search,
+                    enable_thinking=enable_thinking,
                     # INV-5 §5 Phase 4 step 3:让 stream 最后 chunk 含
                     # usage 字段(LiteLLM/OpenAI 行为),便于 probe 采
                     # cached_tokens / cache_creation_input_tokens 等。
