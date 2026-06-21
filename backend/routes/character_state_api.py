@@ -53,6 +53,42 @@ async def get_character_state(character_id: int) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# 1b. GET daily_plan/today  (DailyAgent Stage1-viz)
+# ---------------------------------------------------------------------------
+
+@router.get("/characters/{character_id}/daily_plan/today")
+async def get_today_daily_plan(character_id: int) -> dict[str, Any]:
+    """只读返回今日 plan(本地日期,scheduler tz)+ 当前命中 slot。
+
+    plan / current_slot 任一可为 ``null``:plan=null 区分"今日 row 未生成"
+    (vs Stage 1 schema 不允许空数组);current_slot=null 表当前在空档 /
+    plan 缺失。本端点**不触发生成、不写库**。
+    """
+    from backend.services.daily_plan import _load_plan, find_current_slot
+    from backend.utils.chat_time import (
+        get_scheduler_tz_name, now_local, weekday_zh,
+    )
+
+    cid = int(character_id)
+    tz_name = get_scheduler_tz_name()
+    now = now_local(tz_name)
+    today_local = now.date()
+    now_hhmm = now.strftime("%H:%M")
+
+    plan = await _load_plan(cid, today_local)
+    current_slot = find_current_slot(plan, now_hhmm) if plan else None
+
+    return {
+        "character_id": cid,
+        "date": today_local.isoformat(),
+        "weekday": weekday_zh(now),
+        "now_local": now_hhmm,
+        "current_slot": current_slot,
+        "plan": plan,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 2. reset_state
 # ---------------------------------------------------------------------------
 

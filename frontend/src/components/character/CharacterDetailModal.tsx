@@ -35,6 +35,8 @@ import { fetchCharacterState, type CharacterStateResponse, type CharacterMood } 
 import type { CharacterRow } from '../../lib/config';
 // v4 segment 2 D-S2-1:用 active variant 取代旧 character.persona 文本展示
 import { getActivePersona, type CharacterPersonaRow } from '../../lib/personas';
+// DailyAgent Stage1-viz:今日日程 live 区块
+import { fetchTodayPlan, type TodayPlan } from '../../lib/daily_plan';
 // v4.0 voice greeting:onMount 随机播放 voice line(per PM dispatch 2026-05-22)
 import { playRandomVoiceGreeting } from '../../lib/voice_lines';
 import PersonaEditorModal from '../PersonaEditorModal';
@@ -60,6 +62,7 @@ export default function CharacterDetailModal({
 }: CharacterDetailModalProps) {
   const [state, setState] = useState<CharacterStateResponse | null>(null);
   const [activePersona, setActivePersona] = useState<CharacterPersonaRow | null>(null);
+  const [plan, setPlan] = useState<TodayPlan | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const setActiveOverlay = useAppStore((s) => s.setActiveOverlay);
   const setGalleryOpen = useAppStore((s) => s.setGalleryOpen);
@@ -116,6 +119,19 @@ export default function CharacterDetailModal({
         try { audioEl.pause(); } catch { /* ignore */ }
       }
     };
+  }, [character.id]);
+
+  // DailyAgent Stage1-viz:per-mount 拉今日日程。404 / 网络挂 → silent,
+  // TodayPlanSection 自己按 plan===null 渲染"尚未生成"占位。
+  useEffect(() => {
+    let cancelled = false;
+    setPlan(null);
+    fetchTodayPlan(character.id)
+      .then((p) => { if (!cancelled) setPlan(p); })
+      .catch((err) => {
+        console.warn('[CharacterDetailModal] fetchTodayPlan failed:', err);
+      });
+    return () => { cancelled = true; };
   }, [character.id]);
 
   // 保存 persona 后:refetch getActivePersona 刷新本面板(per PM Build 1 spec)
@@ -283,13 +299,13 @@ export default function CharacterDetailModal({
               切换到这个角色
             </button>
 
+            {/* ── 今日日程(live · DailyAgent Stage1-viz)──────────────────
+                替换原「生活(dailyagent)」占位卡;由 DailyAgent 后端 cron
+                生成 + ticker 命中,本块仅渲染,不触发生成。 */}
+            <TodayPlanSection plan={plan} />
+
             {/* ── 即将推出占位卡 ──────────────────────────── */}
             <SectionHeader className="mt-6">即将推出</SectionHeader>
-            <ComingSoonCard
-              emoji="🌱"
-              title="生活(dailyagent)"
-              hint="角色拥有自己的日程 / 心情节律 / 主动行为,不再只是被动应答。"
-            />
             <ComingSoonCard
               emoji="🧠"
               title="生活记忆"
@@ -446,8 +462,9 @@ function PersonaSection({
         风格预设:{persona.style_preset || '未设置'}
       </p>
 
-      {/* Identity ──── 默认展开(PM Build 1 修订:其余全收太空) */}
-      <SubSection title="Identity" defaultExpanded>
+      {/* Identity ──── Stage1-viz 修订:今日日程接管主角位,Identity 默认收起,
+          与其它子段一致 */}
+      <SubSection title="Identity">
         {id.self_intro?.['0-69'] && (
           <FieldRow label="自介(0-69)">{id.self_intro['0-69']}</FieldRow>
         )}
@@ -665,6 +682,97 @@ function LoreView({ lore }: { lore: unknown }) {
     >
       {formatted}
     </pre>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// TodayPlanSection · DailyAgent Stage1-viz · 今日日程 live 区块
+//
+// 始终展开(本页新主角)· plan===null 或 plan.plan===null → muted 占位行;
+// plan 数组渲染竖向时间线,当前命中 slot 按 (start,end) 全等高亮(accent
+// 左边框 + 轻底色 + 行尾「● 现在」)。视觉复用 modal 现有 var(--color-*)
+// token,不造新 chrome。
+// ---------------------------------------------------------------------------
+
+function TodayPlanSection({ plan }: { plan: TodayPlan | null }) {
+  const cur = plan?.current_slot ?? null;
+  const slots = plan?.plan ?? null;
+  return (
+    <div className="mt-6 mb-2">
+      <div className="flex items-baseline gap-2 mb-2">
+        <span
+          className="text-sm font-medium"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          🌱 今日日程
+        </span>
+        {plan && (
+          <span
+            className="text-[11px] ml-auto"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            {plan.weekday} · 现在 {plan.now_local}
+          </span>
+        )}
+      </div>
+
+      {slots === null ? (
+        <div
+          className="text-xs italic"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          今日日程尚未生成
+        </div>
+      ) : (
+        <div className="space-y-0.5">
+          {slots.map((slot, i) => {
+            const isCurrent =
+              cur !== null &&
+              slot.start === cur.start &&
+              slot.end === cur.end;
+            return (
+              <div
+                key={`${slot.start}-${slot.end}-${i}`}
+                className="flex items-baseline gap-2 text-sm rounded px-2 py-1"
+                style={{
+                  background: isCurrent
+                    ? 'color-mix(in srgb, var(--color-accent) 14%, transparent)'
+                    : 'transparent',
+                  borderLeft: isCurrent
+                    ? '2px solid var(--color-accent)'
+                    : '2px solid transparent',
+                }}
+              >
+                <span
+                  className="text-[11px] font-mono flex-shrink-0 tabular-nums"
+                  style={{
+                    color: 'var(--color-text-secondary)',
+                    minWidth: 92,
+                  }}
+                >
+                  {slot.start}–{slot.end}
+                </span>
+                <span
+                  className="flex-1 break-words"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  {slot.activity}
+                </span>
+                {isCurrent && (
+                  <span
+                    className="text-[10px] flex-shrink-0 font-medium"
+                    style={{ color: 'var(--color-text-accent)' }}
+                  >
+                    ● 现在
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
