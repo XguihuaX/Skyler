@@ -111,6 +111,20 @@ def _run_osascript(script: str) -> Optional[str]:
 
 _FRONTMOST_APPLESCRIPT = "POSIX path of (path to frontmost application)"
 
+# 2026-06-21 · 屏幕读取 MVP 用 · 返 frontmost app 的 (unix_id, name) 二段
+# 给 read_current_screen capability 拿 PID 喂 macos-use refresh_traversal。
+# Skyler 自己(productName="MomoOS")在前台时由 caller 判 + 返"请切窗口"。
+#
+# 用多 -e 参数传 AppleScript(单 -e 含 \n 会触发 syntax error -2741 · 实测过)。
+_FRONTMOST_PID_APPLESCRIPT_LINES: tuple[str, ...] = (
+    'tell application "System Events"',
+    'set p to first application process whose frontmost is true',
+    'return ((unix id of p) as text) & "|" & (name of p)',
+    'end tell',
+)
+# Skyler 自己的 productName(frontend/src-tauri/tauri.conf.json)· 排除时用
+SKYLER_BUNDLE_NAME = "MomoOS"
+
 
 # ---------------------------------------------------------------------------
 # v3.5 hotfix-10 — LLM-facing display name 本地化
@@ -222,6 +236,73 @@ def get_active_app() -> Optional[str]:
     if name.endswith(".app"):
         name = name[:-4]
     return name or None
+
+
+# ---------------------------------------------------------------------------
+# Frontmost PID (2026-06-21 · 屏幕读取 MVP)
+# ---------------------------------------------------------------------------
+
+
+def get_frontmost_app_with_pid() -> Optional[Tuple[str, int]]:
+    """当前 frontmost 应用的 ``(bundle_name, unix_pid)``。
+
+    给 ``screen.read_current_screen`` capability 拿 PID 喂 macos-use 的
+    ``refresh_traversal``。**不**在这层排除 Skyler 自己 —— caller(capability
+    handler)拿到 name 后比对 ``SKYLER_BUNDLE_NAME`` 决定怎么响应("请把你想
+    让我看的应用切到前台" vs 真调 traverse)。本函数语义保持纯 frontmost 查询。
+
+    走 ``osascript`` + System Events(同 ``get_active_app`` 的理由:headless
+    Python 没 NSRunLoop · NSWorkspace.frontmostApplication 卡启动那一拍)。
+
+    非 macOS / osascript 缺失 / timeout / parse 失败 → 返 None。
+    """
+    if not IS_MACOS:
+        return None
+    if shutil.which("osascript") is None:  # pragma: no cover - macOS 总是有
+        return None
+    cmd: list[str] = ["osascript"]
+    for line in _FRONTMOST_PID_APPLESCRIPT_LINES:
+        cmd.extend(["-e", line])
+    try:
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_OSASCRIPT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "[activity_monitor] get_frontmost_app_with_pid osascript timed out "
+            "(>%ss)", _OSASCRIPT_TIMEOUT_SECONDS,
+        )
+        return None
+    except Exception as exc:  # pragma: no cover
+        logger.warning(
+            "[activity_monitor] get_frontmost_app_with_pid osascript failed: %s",
+            exc,
+        )
+        return None
+    if res.returncode != 0:
+        stderr = (res.stderr or "").strip()
+        if stderr:
+            logger.debug(
+                "[activity_monitor] get_frontmost_app_with_pid rc=%s: %s",
+                res.returncode, stderr[:200],
+            )
+        return None
+    raw = (res.stdout or "").strip()
+    if not raw or "|" not in raw:
+        return None
+    pid_str, name = raw.split("|", 1)
+    try:
+        pid = int(pid_str.strip())
+    except ValueError:
+        return None
+    name = name.strip()
+    if not name:
+        return None
+    return (name, pid)
 
 
 # ---------------------------------------------------------------------------

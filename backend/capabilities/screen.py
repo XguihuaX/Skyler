@@ -26,13 +26,28 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Optional
 
 from backend.capabilities import Consumer, TriggerMode, register_capability
 from backend.integrations import activity_monitor as _am
 from backend.integrations import url_fetcher as _uf
+from backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+# 2026-06-21 · 屏幕读取 MVP · macos-use refresh_traversal 在 ToolRegistry 里的
+# 注册名(见 backend/mcp/client.py:473 `cap_name = f"ext.{handle.name}.{tool.name}"`)。
+# macos-use server 暴露的 tool 名自带 "macos-use_" 前缀,所以双前缀是预期。
+_MACOS_USE_REFRESH_TOOL = "ext.macos-use.macos-use_refresh_traversal"
+
+# refresh_traversal 返的文本里夹的 .txt 文件路径 · 用来提 AX 摘要正文。
+# 例:"AX summary written to /tmp/macos-use_20260621_120000.txt"
+_TMP_PATH_RE = re.compile(r"(/[A-Za-z0-9_/.\-]+\.txt)")
+
+# 一次注入给 LLM 的 AX 摘要上限(字符)· 超出截断 + 标 truncated=true
+# 5000 字够回答 90% "屏幕上有啥" 类问题 · 完整文件留 source_path 给后续 grep 链
+_MAX_AX_CHARS = 5000
 
 
 # ---------------------------------------------------------------------------
@@ -196,3 +211,154 @@ async def get_active_document(**_kwargs) -> dict:
             )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# 5. screen.read_current_screen (2026-06-21 · 屏幕读取 MVP)
+#
+# Wrapper:内部解析"非 Skyler" frontmost PID + 调 macos-use refresh_traversal
+# + 直接读 .txt 内容截 5000 字返给 LLM。LLM 视角是单步调用、零参数。
+#
+# 设计原则:
+#   - **只读**:不调任何带写动作的 macos-use tool
+#   - **Skyler 自己 frontmost** → 返 self_frontmost · 让 LLM 提示用户切窗口
+#     (单 frontmost 查询不假装"次 frontmost",那个 osascript 不可靠)
+#   - **macos-use 未启用** → 返 macos_use_not_enabled · 让 LLM 引导去 UI 启用
+#   - 全异常路径返 ``{available: False, reason, message}`` · 绝不抛
+# ---------------------------------------------------------------------------
+
+
+@register_capability(
+    name="screen.read_current_screen",
+    display_name="读当前屏幕(AX)",
+    description=(
+        "读用户当前在看的 macOS 窗口的 accessibility 树(AX)摘要,返回前 5000 "
+        "字给你回答\"屏幕里有什么\"类问题。**无需参数** —— 内部自动找当前 "
+        "frontmost 应用 PID(排除 Skyler 自己)再调 macos-use refresh_traversal。"
+        "Skyler 自己在前台 → 返 ``{available: false, reason: \"self_frontmost\"}``,"
+        "让用户先把目标应用切到前台。macos-use 未启用 → 返 ``{available: false, "
+        "reason: \"macos_use_not_enabled\"}``,引导用户去 Capabilities → MCP "
+        "Servers 启用。**只读**,绝不调写/点击/输入类工具。"
+    ),
+    category="screen",
+    consumers=[Consumer.CHAT_AGENT],
+    trigger_modes=[TriggerMode.ON_DEMAND],
+    icon="scan-eye",
+    parameters_schema={"type": "object", "properties": {}, "required": []},
+)
+async def read_current_screen(**_kwargs) -> dict:
+    # 1. 拿 frontmost (name, pid)
+    info = _am.get_frontmost_app_with_pid()
+    if info is None:
+        return {
+            "available": False,
+            "reason": "no_frontmost",
+            "message": "没拿到当前 frontmost 应用(非 macOS / osascript 失败)",
+        }
+    name, pid = info
+
+    # 2. Skyler 自己在前台 → 不假装能看到"用户身后那个"
+    if name == _am.SKYLER_BUNDLE_NAME:
+        return {
+            "available": False,
+            "reason": "self_frontmost",
+            "frontmost_app": name,
+            "message": (
+                "Skyler 自己在前台 · 请把你想让我看的应用切到前台后再问一次 "
+                "(Cmd+Tab / 点对应窗口)"
+            ),
+        }
+
+    # 3. 调 macos-use refresh_traversal(pid=...)
+    try:
+        result = await ToolRegistry.call(_MACOS_USE_REFRESH_TOOL, pid=pid)
+    except KeyError:
+        return {
+            "available": False,
+            "reason": "macos_use_not_enabled",
+            "frontmost_app": name,
+            "pid": pid,
+            "message": (
+                "屏幕读取依赖的 macos-use MCP server 当前未启用 · 用户可在 "
+                "Capabilities → MCP Servers 里启用 'macos-use'"
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001 - 兜底任何运行时错
+        logger.warning(
+            "[screen.read_current_screen] refresh_traversal raise: %s", exc,
+        )
+        return {
+            "available": False,
+            "reason": "traversal_error",
+            "frontmost_app": name,
+            "pid": pid,
+            "message": f"AX 树读取失败:{exc}",
+        }
+
+    # 4. result = {"isError": bool, "text": str} | {"isError": bool, "content": list}
+    if not isinstance(result, dict) or result.get("isError"):
+        return {
+            "available": False,
+            "reason": "traversal_failed",
+            "frontmost_app": name,
+            "pid": pid,
+            "raw": result if isinstance(result, dict) else str(result),
+            "message": "macos-use refresh_traversal 返错(可能 PID 已退出或无 AX 权限)",
+        }
+    text_payload = result.get("text") or ""
+    if not text_payload:
+        return {
+            "available": False,
+            "reason": "empty_payload",
+            "frontmost_app": name,
+            "pid": pid,
+            "message": "AX 摘要返回空 · 应用可能没暴露 accessibility 树",
+        }
+
+    # 5. 从返回文本里提 /tmp/xxx.txt 路径 · 读前 5000 字
+    path_match = _TMP_PATH_RE.search(text_payload)
+    if path_match is None:
+        # 没匹到路径就直接把 server 返的 text 当摘要返(防御 · 不崩)
+        return {
+            "available": True,
+            "frontmost_app": name,
+            "pid": pid,
+            "summary": text_payload[:_MAX_AX_CHARS],
+            "truncated": len(text_payload) > _MAX_AX_CHARS,
+            "source_path": None,
+            "note": "未在 server 返回中找到 .txt 路径 · 用 text payload 直显",
+        }
+    source_path = path_match.group(1)
+    try:
+        with open(source_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(_MAX_AX_CHARS + 1)
+    except FileNotFoundError:
+        return {
+            "available": False,
+            "reason": "ax_file_missing",
+            "frontmost_app": name,
+            "pid": pid,
+            "source_path": source_path,
+            "message": "AX 摘要 .txt 不存在(可能 /tmp 已被清)",
+        }
+    except OSError as exc:
+        return {
+            "available": False,
+            "reason": "ax_file_read_error",
+            "frontmost_app": name,
+            "pid": pid,
+            "source_path": source_path,
+            "message": f"AX 摘要 .txt 读失败:{exc}",
+        }
+
+    truncated = len(content) > _MAX_AX_CHARS
+    if truncated:
+        content = content[:_MAX_AX_CHARS]
+    return {
+        "available": True,
+        "frontmost_app": name,
+        "pid": pid,
+        "summary": content,
+        "truncated": truncated,
+        "source_path": source_path,
+    }
