@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@jaames/iro": "^5.5.2",
     "@ricky0123/vad-web": "^0.0.30",
     "@tauri-apps/api": "^2.11.0",
     "framer-motion": "^12.38.0",

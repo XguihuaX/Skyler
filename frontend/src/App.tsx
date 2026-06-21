@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useState } from 'react';
-import { useAppStore } from './store';
+import { useAppStore, applyGlassCustom } from './store';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useAudio } from './hooks/useAudio';
 import Widget from './modes/Widget';
@@ -54,6 +54,9 @@ function MainApp() {
   useEffect(() => {
     void applyModeWindowProps(useAppStore.getState().mode);
     useAppStore.getState().setTheme(useAppStore.getState().theme);
+    // 2026-06-20 · 玻璃外观自定义 init · setTheme 已会 re-apply 一次,这里
+    // 保险再调一次(空指针 / first paint race 也能稳定挂上)。
+    applyGlassCustom(useAppStore.getState().glassCustom);
     // run once at mount; subsequent mode flips already call applyModeWindowProps
     // at their click sites (Widget.tsx / TopBar.tsx).
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -311,6 +311,88 @@ function applyThemeToDom(t: ThemeKey): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 玻璃外观自定义(2026-06-20)· 全局覆盖 · 切主题保留 · 可恢复默认。
+//
+// 设计:把用户调的 --glass-bg / --glass-text / --glass-text-muted /
+// --glass-text-shadow 用 setProperty 写到 :root inline style(specificity
+// 1000 · 自然盖过 [data-theme=...] stylesheet)。
+//
+// ★ 文字按卡面亮度自动反色(修写死白字 bug):
+//   lum < 0.5 → 卡面深 → 字浅(白系)+ 深字阴影
+//   lum >= 0.5 → 卡面浅 → 字深 + 淡白字阴影
+//
+// 持久化:独立 LS key,跟 momoos.theme 解耦 —— 切主题不丢覆盖。
+// 切主题时:setTheme 末尾必须 re-apply,避免 morandi/watercolor 主题块
+// 重写 --glass-text 把用户覆盖冲掉(themes.css:240-244)。
+// ---------------------------------------------------------------------------
+
+const GLASS_CUSTOM_KEY = 'momoos.glassCustom';
+
+export interface GlassCustom {
+  enabled: boolean;
+  r: number;          // 0-255
+  g: number;          // 0-255
+  b: number;          // 0-255
+  bgAlpha: number;    // 0-1 (卡面不透明度)
+  textAlpha: number;  // 0-1 (主文字 · muted 自动 = textAlpha * 0.787)
+}
+
+function readGlassCustomFromStorage(): GlassCustom | null {
+  try {
+    const raw = localStorage.getItem(GLASS_CUSTOM_KEY);
+    if (!raw) return null;
+    const j: unknown = JSON.parse(raw);
+    if (
+      typeof j === 'object' && j !== null
+      && typeof (j as GlassCustom).enabled === 'boolean'
+      && typeof (j as GlassCustom).r === 'number'
+      && typeof (j as GlassCustom).g === 'number'
+      && typeof (j as GlassCustom).b === 'number'
+      && typeof (j as GlassCustom).bgAlpha === 'number'
+      && typeof (j as GlassCustom).textAlpha === 'number'
+    ) {
+      return j as GlassCustom;
+    }
+  } catch {
+    // bad JSON / LS 不可用 · 静默回退
+  }
+  return null;
+}
+
+function writeGlassCustomToStorage(c: GlassCustom | null): void {
+  try {
+    if (!c) localStorage.removeItem(GLASS_CUSTOM_KEY);
+    else localStorage.setItem(GLASS_CUSTOM_KEY, JSON.stringify(c));
+  } catch {
+    // LS 不可用 · 静默
+  }
+}
+
+export function applyGlassCustom(c: GlassCustom | null): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement.style;
+  if (!c || !c.enabled) {
+    // 关闭 / 恢复默认 · removeProperty 让 themes.css 的 color-mix 公式回来
+    root.removeProperty('--glass-bg');
+    root.removeProperty('--glass-text');
+    root.removeProperty('--glass-text-muted');
+    root.removeProperty('--glass-text-shadow');
+    return;
+  }
+  const { r, g, b, bgAlpha, textAlpha } = c;
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const tRGB = lum < 0.5 ? '255, 255, 255' : '20, 20, 28';
+  const textMutedAlpha = textAlpha * 0.787;
+  const textShadow = lum < 0.5
+    ? '0 1px 2px rgba(0, 0, 0, 0.45)'
+    : '0 1px 2px rgba(255, 255, 255, 0.55)';
+  root.setProperty('--glass-bg', `rgba(${r}, ${g}, ${b}, ${bgAlpha})`);
+  root.setProperty('--glass-text', `rgba(${tRGB}, ${textAlpha})`);
+  root.setProperty('--glass-text-muted', `rgba(${tRGB}, ${textMutedAlpha})`);
+  root.setProperty('--glass-text-shadow', textShadow);
+}
+
 // v3-G chunk 3b — 状态条显示开关。SettingsPanel [角色] section 控；默认 on。
 const SHOW_STATE_PANEL_KEY = 'momoos.showStatePanel';
 
@@ -381,6 +463,10 @@ interface AppState {
   // v3-A — UI 主题（8 套，见 styles/themes.css）
   theme: ThemeKey;
   setTheme: (theme: ThemeKey) => void;
+
+  // 2026-06-20 · 玻璃外观自定义(全局覆盖 · 切主题保留 · null = 走主题默认)
+  glassCustom: GlassCustom | null;
+  setGlassCustom: (v: GlassCustom | null) => void;
 
   // 2026-06-02 · 全局场景背景层(壁纸,跨角色共享 · localStorage 持久化)
   globalScene: GlobalScene | null;
@@ -717,6 +803,17 @@ export const useAppStore = create<AppState>((set) => ({
     writeThemeToStorage(theme);
     applyThemeToDom(theme);
     set({ theme });
+    // ★ 坑 1:切主题会让 morandi/watercolor 的 [data-theme=...] 块重写
+    // --glass-text 等(themes.css:240-244)· 必须 re-apply 用户覆盖盖回去。
+    applyGlassCustom(useAppStore.getState().glassCustom);
+  },
+
+  // 2026-06-20 · 玻璃外观自定义
+  glassCustom: readGlassCustomFromStorage(),
+  setGlassCustom: (v) => {
+    writeGlassCustomToStorage(v);
+    applyGlassCustom(v);
+    set({ glassCustom: v });
   },
 
   // 2026-06-02 · UI redesign step 1

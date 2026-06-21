@@ -31,6 +31,7 @@ import {
   ThemeSection,
 } from '../SettingsPanelLegacy';
 import UserProfileSection from '../UserProfileSection';
+import GlassAppearanceSection from './GlassAppearanceSection';
 import TwoPaneShell, { type PaneSection } from '../TwoPaneShell';
 import {
   deleteBackground,
@@ -181,6 +182,9 @@ export default function SettingsPanelV2({ showToast }: SettingsPanelV2Props) {
           {/* 2026-06-02 · UI redesign step 1 · 全局场景背景层(壁纸)选择 ·
               主题(8 套色)只换 --color-* token,场景独立于色之上。 */}
           <SceneSection />
+          {/* 2026-06-20 · 玻璃外观自定义(色环 + 不透明度 + 文字对比)·
+              全局覆盖叠在主题之上 · 切主题保留 · 可恢复默认。 */}
+          <GlassAppearanceSection />
         </div>
       ),
     },

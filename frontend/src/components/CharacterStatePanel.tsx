@@ -89,10 +89,11 @@ const CharacterStatePanel = memo(function CharacterStatePanel({
   const intimacy = state.intimacy ?? 0;
 
   // intimacy 0-100 → 进度条颜色温度(蓝→绿→粉)。
-  // Round 4 ④ 后续(2026-06-04):饱和度 70% → 40% 降跳,跟蓝壁纸 + 暖角色不打架。
-  // 数字本身改 var(--color-accent) 跟主题主色绑,见下方 JSX(不再消费 intimacyColor)。
+  // 2026-06-04:饱和度 70% → 40% 降跳跟蓝壁纸 + 暖角色不打架。
+  // 2026-06-20 punchier(玻璃外观自定义配套微调):40%/60% → 52%/50% ·
+  // 数字本身仍 var(--color-accent) 跟主题主色绑(见下方 JSX)。
   const intimacyHue = 200 - Math.round(intimacy * 1.5); // 200 (cool blue) → 50 (warm pink)
-  const intimacyBarColor = `hsl(${intimacyHue}, 40%, 60%)`;
+  const intimacyBarColor = `hsl(${intimacyHue}, 52%, 50%)`;
 
   const containerStyle: React.CSSProperties = {
     position: 'absolute',
