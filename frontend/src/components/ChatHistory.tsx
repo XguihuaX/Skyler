@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef } from 'react';
 import { useAppStore, type ChatMessage } from '../store';
 import { stripThinking } from '../lib/textFilters';
+import { formatBubbleTime } from '../lib/format_time';
 
 // v3-G chunk 2 / 2.6 / 4: proactive trigger.name -> 灰字前缀 label。
 // 加新 trigger 时在这里 append 即可。映射不到 → 通用兜底 "✨（主动陪伴）"。
@@ -44,6 +45,11 @@ const Bubble = memo(function Bubble({ m }: { m: ChatMessage }) {
       ? PROACTIVE_PREFIX[m.proactiveTrigger ?? ''] ?? '✨（主动陪伴）'
       : null;
 
+  // 气泡下方本地时间小字。created_at 缺失(老消息)→ 空串 → 不显;同时
+  // 不抢主视觉:text-[10px] muted。user 侧右对齐、assistant 侧左对齐,与
+  // 气泡同侧贴齐。
+  const timeLabel = formatBubbleTime(m.created_at);
+
   return (
     <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
       {proactivePrefix && (
@@ -77,6 +83,14 @@ const Bubble = memo(function Bubble({ m }: { m: ChatMessage }) {
           />
         )}
       </div>
+      {timeLabel && (
+        <span
+          className="text-[10px] mt-0.5 px-1"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {timeLabel}
+        </span>
+      )}
     </div>
   );
 });

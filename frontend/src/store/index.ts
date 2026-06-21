@@ -34,6 +34,11 @@ export interface ChatMessage {
   // 终为空。流式期间由 useWebSocket 从 WS chunk 的 proactive_trigger 字段
   // 写入；历史加载时由后端 conversations API 透传。
   proactiveTrigger?: string;
+  // 气泡时间小字数据源。历史加载侧 = 后端 chat_history.created_at(naive UTC
+  // 字串 "YYYY-MM-DD HH:MM:SS"); WS 创建侧 = 客户端 new Date().toISOString()
+  // (带 Z)。前端 lib/format_time.formatBubbleTime 同时兼容两种格式。
+  // 老消息可能缺,容错为 undefined → Bubble 不显时间小字。
+  created_at?: string;
 }
 
 // V2.5-C2 — ConversationList collapse persistence

@@ -190,6 +190,7 @@ export function useWebSocket(): UseWebSocketReturn {
             ts: performance.now(),
             // ASR 永远是用户主动语音输入，不是 touch / proactive
             kind: 'normal',
+            created_at: new Date().toISOString(),
           });
         }
         break;
@@ -234,6 +235,7 @@ export function useWebSocket(): UseWebSocketReturn {
             // 所以 streaming 气泡只可能 'normal' / 'proactive'。
             kind: msg.proactive ? 'proactive' : 'normal',
             proactiveTrigger: msg.proactive ? msg.proactive_trigger : undefined,
+            created_at: new Date().toISOString(),
           });
           s.setStreamingMessageId(id);
         } else {
@@ -630,6 +632,7 @@ export function useWebSocket(): UseWebSocketReturn {
       streaming: false,
       ts: performance.now(),
       kind: 'normal',
+      created_at: new Date().toISOString(),
     });
     console.log(
       `[FRONT] send text len=${content.length} attachments=${atts.length} ` +

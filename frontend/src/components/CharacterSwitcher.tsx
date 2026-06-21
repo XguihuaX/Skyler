@@ -160,6 +160,7 @@ export default function CharacterSwitcher() {
                                 ts: 0,
                                 kind: r.kind ?? 'normal',
                                 proactiveTrigger: r.proactive_trigger ?? undefined,
+                                created_at: r.created_at ?? undefined,
                               })));
                             } catch (err) {
                               console.error(
