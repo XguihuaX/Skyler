@@ -410,6 +410,18 @@ characters table(DB)  ·  id · name · live2d_model · voice_model (JSON) · ..
 
 详 `docs/adding-new-tts-model.md`(3 例:GSV trained / GSV zeroshot placeholder / Fish 新 model + schema 字段表 + 排错)。Trained model 8 步:server rsync weights + 16 emotion ref · 本地 rsync .lab · 编辑 tts_models.json · backend restart(pydantic validate)· 前端 dropdown 自动显示 · PATCH character voice_model · chat 验证。
 
+#### Fish provider 收口(INV-9 + INV-12)
+
+零样本 reference 参考音频路径走 `voice_model.reference_audio_path`(per-character)+ `fish_temp`(0.0-1.0,默 0.2)。三段一等公民配置:
+
+| 段 | 实现 | 锚 |
+|---|---|---|
+| Provider class | `FishTTS` 用 fish-speech `get_package()` 双 API | `backend/tts/fish.py` |
+| user_override 层(INV-12)| Fish key / model / 参数的 user 级覆盖 + 4 endpoints(GET / PUT / DELETE / status)| `backend/routes/fish_config.py` |
+| Cost cap(INV-9 §7)| daily / monthly cap 在 TTS 调用前 check;超 → 直接拒 + WS event `tts_cost_cap_exceeded` 给前端 toast | `backend/utils/cost_estimator.py::check_fish_cost_cap_exceeded` · `backend/routes/ws.py:911-935` |
+
+观测:每次 fish synth 走 `tts_call_log`(同 §7.1)· cost 估算 by char-count × per-provider price · cap 状态 = `{today_cost, daily_cap, month_cost, monthly_cap}`。
+
 ### 5.8.6 网易云 audio source 双路径 + mpv subprocess(INV-16/17/18,2026-05-29~31)
 
 > 接管必读:加新音乐 capability / 改 mpv spawn args / 升 mpv 版本 / 改 weapi payload 前必读。详 `docs/SESSIONS/2026-05-30-to-31.md` + `docs/netease-music-setup.md`。
@@ -701,6 +713,8 @@ Round 3 重做:
                      浅底深字 0 1 2 rgba(255,255,255,.65)
 ```
 
+**玻璃外观自定义器**(2026-06-21 commit `16d3afa`):用户级 override 上述 token —— `iro.js` 色环出 RGB 卡面色 + alpha 滑块 + 文字对比开关。**覆盖语义**:启用后 SettingsPanelV2 把 override 值写进 `:root` style(`--glass-bg` / `--glass-text` 等)· 切主题保留(theme 切换不冲掉 override · 一键"恢复主题默认"清 override)· 拖色环视为"用户在调"自动 enabled=true。锚 `frontend/src/components/settings/GlassAppearanceSection.tsx`(色环 + alpha + 持久)+ `SettingsPanelV2.tsx:185` mount 点。
+
 ### 7.5.3 背景架构(Round 5)
 
 | 层 | 数据源 | 目录 | 写路径 |
@@ -904,7 +918,9 @@ WS 边界(`backend/routes/ws.py`):
 | WS 断开清理 | `confirm_gate.py:218` `deny_all_pending()` + `ws.py` finally | 断线前所有 pending confirm 自动 deny · holder 不挂 · LLM 看到"已取消"工具结果 |
 | 浏览器扫码登录 | `browser_login.py` 全文件 + `mcp_api.py:130-170` 两 endpoint | 见 §7.7.4 |
 
-### 7.7.7 已接 server 现状(`mcp.config.yaml`,16 entries)
+### 7.7.7 已接 server(示例 · 实际清单以 `mcp.config.yaml` / UI 为准)
+
+> 下表是示例性参考,**真实已接清单 = 本机 `mcp.config.yaml` + DB `mcp_client_state` 双源**(详 §7.7.1 loader)· 改 server 走前端 MCP Servers 面板或编辑 yaml 后重启,文档不复制 snapshot。
 
 | 类别 | 名 | 凭证 | dangerous | 状态 |
 |---|---|---|---|---|
@@ -955,6 +971,27 @@ backend/config/__init__.py         loader merge mcp.config.yaml > example
 backend/database/migrations/inv_mcp_tool_confirmation.py  ⑤ 加 require_confirmation 列
 mcp.config.yaml                    本地真名单 · gitignored
 mcp.config.example.yaml            6 范式模板 · 入库
+```
+
+### 7.7.9 服务器别名 + 搜索(2026-06-19/20 · commits `5cef7b9` + `7298ee9`)
+
+**别名 / 昵称**(server 用户起名):侧表 `mcp_client_alias`(`server_name PK · alias · updated_at`)· 独立于 yaml `enabled` / `mcp_client_state.connected`,纯展示层 override。`list_status` API 同时返 `name`(yaml 真名)+ `alias`(可空)→ 前端搜索时**两栏并查**(命中 alias 也算命中)。空 alias = 删 row(clear)。
+
+| 关注点 | 锚 |
+|---|---|
+| DB 表 + CRUD | `backend/mcp/credentials.py:137 get_alias` · `:148 set_alias`(UPSERT · 空值删) |
+| API endpoint | `backend/routes/mcp_api.py:495 PUT /mcp/clients/{name}/alias` |
+| status 透传 | `backend/mcp/client.py:841` list_status 行注入 `alias` 字段 |
+| per-server settings modal | 前端按 server 卡进入 modal · alias 编辑入口 |
+
+**搜索过滤**:前端 MCPServers 面板加 server 名搜索框(纯客户端 filter,无 API)· 同时按 name + alias 命中 · 跟 enabled 状态正交(disabled server 也可搜出)。
+
+### 7.7.10 实际接入清单查法
+
+```
+mcp.config.yaml                  # 本地真名单
+GET /api/mcp/clients/status      # runtime 状态 + alias + login + tools
+或 UI · Capabilities → MCP Servers 面板
 ```
 
 ---
@@ -1069,6 +1106,99 @@ frontend/src/components/Live2DCanvas.tsx:50                applyFraming prop
 frontend/src/components/CharacterView.tsx:52               mode==='panel' gate
 frontend/src/store/index.ts                                live2dAdjustMode + pendingFraming + savedFraming
 ```
+
+---
+
+## §7.9 桌面感知 / 控制(只读 AX MVP · 2026-06-21 commit `bf66ec3`)
+
+完整设计 + Phase 1-3 路线 → [docs/design/desktop-control.md](docs/design/desktop-control.md)。本节只描述当前 ship 部分的机制与锚。
+
+**读写分离 + dangerous_tools gating**:macos-use MCP server 提供 9 个 tool · 仅 `refresh_traversal`(读 AX 树,需 PID)在 dangerous_tools 外 · 其余 8 个写动作(`click_element` / `type_in` / `open_application_and_traverse` / `scroll` / ...)落 dangerous_tools 列,调用前 confirm gate 拦(详 §7.7.5;**但 model-driven 写触发 confirm 真弹尚未端到端验**,见 §8 Tech Debt)。
+
+**AX 树消费 capability**:`screen.read_current_screen`(`@register_capability` · CHAT_AGENT consumer)封装 "找非 Skyler 前台 PID + 调 `ext.macos-use.macos-use_refresh_traversal(pid=...)`" 的合成步骤,LLM 调用时无需关心 PID。
+
+| 关注点 | 锚 |
+|---|---|
+| capability 注册 + wrapper | `backend/capabilities/screen.py:231-310`(`read_current_screen` + macos-use `refresh_traversal` 转发) |
+| 非 Skyler 前台 PID 解析 | `screen.py` 内部 `_resolve_non_skyler_frontmost_pid`(osascript / NSWorkspace)· 大小写过滤前台时排除 `SKYLER_BUNDLE_NAME` |
+| 桥到 ToolRegistry 的常量名 | `screen.py:42 _MACOS_USE_REFRESH_TOOL = "ext.macos-use.macos-use_refresh_traversal"` |
+| LLM 行为提示注入 | `backend/agents/prompt/tool_addendum.py:111-128` 【屏幕读取】prose 段(用户说"看屏幕" → 调 read_current_screen · 别瞎编 · 别贴 source_path · 写动作未开放) |
+| 已知 bug | `screen.py` `self_frontmost` 大小写敏感 → Skyler 前台时会读自己的 AX 树 · 一行 `.lower()` fix 待 build(详 §8 Tech Debt) |
+
+**当前边界**:单 agent(折在 ChatAgent 多步 loop 里 · 无独立 worker)· 按需 / pull · AX-only · 前台一个 app · 工具层纯读。Phase 1.5(后台 app 枚举)/ Phase 2(写动作 + 确认门真验 + worker)/ Phase 3(选择性常驻监控)/ chunk 8b(VLM 截屏)详 design doc。
+
+---
+
+## §7.10 角色详情中心 Build 1(2026-06-20 commit `b75efdc`)
+
+立绘馆角色卡 → 详情 modal,把 persona 从"200 字截断 description"升级成结构化展示 + 编辑入口 + Live2D 引用。Build 1 = 第一刀,只 Tier-1 字段平铺,后续 Build 2/3 加 Tier-2 编辑 / 心情状态卡 / 占位卡。
+
+| Section | 内容 |
+|---|---|
+| persona Tier-1 | `identity / personality_core / speech_style / signature_phrases / voice_samples / forbidden_phrases / relationship_to_user` 7 字段可折叠展示(取代旧 `character.persona` 单文本) |
+| 编辑入口 | "编辑 persona" CTA → 现有 `PersonaEditorModal`(Tier-1 表单),保存后回写 `character_personas` active variant + 本面板 refetch `getActivePersona` 刷新 |
+| Live2D 引用 | 只读 `character.live2d_model` 行 + "去能力页" CTA(CapabilitiesPanel 当前不接受 deep-link,跳到面板让用户手切 Live2D Models tab) |
+| 占位卡 | 后续 Build 待加位:心情 / 状态 / 日程(DailyAgent · §7.12)/ Tier-2 编辑 |
+
+**锚**:`frontend/src/components/character/CharacterDetailModal.tsx` · `frontend/src/lib/personas.ts` `getActivePersona` · `PersonaEditorModal` 保存路径走 `PUT /api/characters/{cid}/personas/{variant}`(详 §6.9)。
+
+---
+
+## §7.11 聊天体验小批(2026-06-21 · 三 commit)
+
+三个独立 user-facing ship,合写一节 —— 各自机制清且短:
+
+**深度思考 / 联网双开关**(commit `ba835af`):聊天框右下 + 设置面板双入口同步同一 store 字段(`store.thinkingEnabled` / `webSearchEnabled` · 默 `thinking=false` 求快 first-token;`web_search` 模型原生)· 切换写 `config.yaml` 持久 · 药丸 UI(pill toggle)· LLM 调用前据状态注入 reasoning param + web search tool。锚 `frontend/src/store/index.ts:720+`(thinking store)+ `frontend/src/components/ChatInput.tsx`(簇 3 Brain 钮)+ `SettingsPanelLegacy` "深度思考" toggle。
+
+**聊天气泡本地时间戳**(commit `9d45fd1`):每条气泡左下挂 `HH:MM` 本地时区小字。数据源双兼容 —— 历史 = `chat_history.created_at`(后端 naive UTC,无 Z)+ 实时 = WS 推送的 ISO(带 Z)· 前端 `format_time.ts` 自动判别两种入参补正时区。锚 `frontend/src/lib/format_time.ts` + `frontend/src/components/ChatHistory.tsx:48+`(气泡下方小字渲染)+ `store/index.ts:37+`(气泡时间数据源注)。
+
+**角色台词浮气泡**(commit `2bc42da`):新 `CharacterSpeechBubble` 共享组件,大 / 小窗共一份取数 + 生命周期。
+
+| Mode | 状态 | 行为 |
+|---|---|---|
+| widget(桌宠 / 小窗)| 🟢 **已上** | 居中 translateY(-50%) + bg `color-mix 75%` 半透 + 文字 1.0 清 + blur 8 桌面糊化 · linger 8s · z-30 pointer-events:none |
+| panel(大窗)| 🟡 **暂关** | 代码留注释("audit_chat_panel 方案 1 冗余决策再次胜出" —— ChatHistory 已显全列表) |
+
+取数:订阅 `streamingMessageId` + `chatMessages` · 流中常显 · finalize 后 linger(widget 8s / panel 2.5s)· 下一句立即切 · 切角色 / cancel 优雅 fade · 首启不自动复活历史 · 过滤 `role='assistant' && kind in (normal,proactive)` · proactive 加灰字前缀 · stripThinking 兜底 + streaming 光标 + framer-motion AnimatePresence(0.2s ease-out)。锚 `frontend/src/components/character/CharacterSpeechBubble.tsx` + `modes/Widget.tsx:66` 挂载点 + `modes/Panel.tsx:123-126` 注释留位。
+
+---
+
+## §7.12 DailyAgent Stage 1(2026-06-19/20 · commits `df8019a` + `e7b9262`)
+
+完整方案 → [docs/design/dailyagent-plan.md](docs/design/dailyagent-plan.md)。本节只描述 Stage 1 已建部分的数据流 + 集成点。
+
+**目标**:给角色一份连贯日程(`character_daily_plans` 表,JSON 数组 5-8 个 slot),APScheduler ticker 每 5 分钟据当前 HH:MM 写 `character_states.current_activity`,让 prompt Layer C4(§3 数据流)读得到、说话时自然提及"在做什么"。Stage 1 = MVP scope = 单角色(`DEFAULT_CHARACTER_ID = 1`)+ 立绘馆只读 viz。Stage 2+ = multi-character + 真机回归。
+
+**数据流**:
+
+```
+cron 5 0 * * * + startup backfill (cron 错过)
+  └─ generate_today_plan(cid) → 一次 LLM 调用(persona blurb + 昨日 plan + 最近摘要 +
+                                                profile + 今日日历)→ JSON 5-8 slot
+       └─ INSERT character_daily_plans(character_id, plan_date, plan_json)
+
+interval 5min · daily_activity_ticker()
+  └─ _load_plan(cid, today) → find_current_slot(plan, now_hhmm)
+       └─ 命中 → update_character_state(activity=slot["activity"])      ★ 写 character_states
+       └─ 空档 → activity=""(C4 模板 `{%if states.activity%}` 自动隐藏)
+       └─ 无今日 plan → 跳过(避免清掉 <state_update> 写入的有效值)
+
+GET /characters/{cid}/daily_plan/today(立绘馆 viz 用)
+  └─ _load_plan + find_current_slot → 返 plan + 当前 slot + now_local hh:mm
+```
+
+| 关注点 | 锚 |
+|---|---|
+| 后端基座 (Stage 1) | `backend/services/daily_plan.py`(prompt 装配 / _load_plan / find_current_slot / generate / save) |
+| ticker(5min interval) | `backend/services/daily_ticker.py::daily_activity_ticker`(写 `character_states.current_activity`,0 LLM) |
+| cron + backfill 注册 | `backend/main.py:550-554`(表 migration)+ `:790-800`(APScheduler add_job · cron 5 0 + interval 300s) |
+| 立绘馆 viz endpoint | `backend/routes/character_state_api.py:56-100 GET /characters/{cid}/daily_plan/today` |
+| 前端 viz lib | `frontend/src/lib/daily_plan.ts`(`now_local` HH:MM 时间线渲染) |
+| 集成点 — prompt Layer C4 | `backend/agents/prompt/templates/layer_c_runtime.j2` `{%if states.activity%}` 行(详 §3) |
+
+**与 `<state_update>` 的归属约定**(Spec §3):Stage 1 由 ticker 拥有 `activity`;`<state_update>` 也写。ticker 每 5min 重申日程值 → 漂 5min 内纠回。真机若频繁打架再决定是否 gate `<state_update>` 的 activity 写。
+
+**当前状态**:🟡 已建未验(HOLD)· 待真机回归 + 多日 reflection 跨天连贯验证(详 design doc §5)。
 
 ---
 
