@@ -1,686 +1,183 @@
+<!-- English README — mirror of README_zh-CN.md.
+     Single source of truth for product framing is the Chinese version; this file
+     mirrors content for international visitors. Don't add features here that
+     aren't in the CN version, and vice versa. -->
+
 # 🌸 Skyler
 
-> A hackable AI companion framework — bring your own LLM, your own Live2D model, your own MCP tools. The agent core gives you a foundation. The rest is yours to sculpt.
+> A sculptable desktop AI character container — bring your own LLM, your own Live2D model, your own MCP tools. The agent core gives you a foundation; what it becomes is yours to shape.
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey) ![Status](https://img.shields.io/badge/v4--beta-🚧%20wrapping%20up-orange)
+![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
-> **Latest**: v4-beta + **INV-11 全段** (May 2026) — Persona Engineering five-layer framework + memory/conversation isolation fixes + conversation-anchored binding semantics + unified chat UI + **Mai ja TTS via self-hosted GSV mai_v4** + **9-character provider × model × voice paradigm**. See [ROADMAP](ROADMAP.md) + [docs/adding-new-tts-model.md](docs/adding-new-tts-model.md).
->
-> **2026-05-26 update**: 9 character DB rows · 3 TTS provider(CosyVoice / Fish / GSV)· 4 model · 1 Live2D model(Hiyori bound to cid=1 Mai). VoicePicker inline paradigm B(modal → inline, auto-save debounce 300ms). tts_models.json + pydantic validation + GSV 2-mode schema(trained / zeroshot future placeholder)。
->
-> *Project formerly known as MomoOS — renamed to Skyler in 2026-05.*
-
-🌐 **Languages**: **English** · [简体中文](README_zh-CN.md)
+🌐 **Languages**: **English** · [简体中文](README_zh-CN.md) · Originally MomoOS, renamed Skyler in 2026-05.
 
 ---
 
 ## What is Skyler?
 
-Skyler is a desktop AI agent with a Live2D character interface. Unlike pre-packaged VTuber apps, Skyler is built as a **container you customize** — its agent core (MOMOOS), capability registry, and proactive interaction layer give you a complete foundation, but every capability, every external integration, and every character asset is yours to swap.
+Skyler is a Live2D AI companion that lives on your desktop. What sets her apart from packaged VTuber apps is that she **isn't a stateless chat box** — she has a persona, a mood, recent thoughts, and an intimacy level with you that persist across sessions; she'll reach out on her own at the right moments, notice what you're doing on screen and bring it into conversation, and the avatar moves with what she says. The direction of the whole project is to make her **an actual character with her own inner state, living her own day** — not a tool that starts from zero on every turn.
 
-If you've ever wanted an AI companion that's actually *yours* — running locally, speaking with your character, calling your tools — Skyler is for you.
+The base layer is **a container built for you to modify**: the core, capability registry, and proactive companion layer are the foundation; every capability, every external integration, every character asset can be swapped — no layer is locked. Models, voice, conversation history all stay on your machine (local SQLite + local embeddings, no cloud dependency), nothing goes off-box.
 
-The character isn't decoration. Persona-level state (mood, recent thoughts, relationship intimacy) persists across sessions; the agent can call any tool you register and any MCP server you connect; the avatar reacts to what it says and what you do on screen. None of these layers are locked.
-
----
-
-## ⚠️ v4-beta Status (2026-05)
-
-v4-beta is a **wrap-up phase** — the goal is one character done solidly before shipping, not seven half-built ones.
-
-**Currently focused on Mai (`cid=1`, riding the Momo shell + Hiyori model, with a Sakurajima Mai persona core) as a single-character, Chinese-only companion.**
-
-Fixed and verified on-device this cycle:
-
-- **Mai ja voice restored via GSV mai_v4** (INV-11 Stage 1, 2026-05-26) — the earlier "reverted to Chinese-only" status is superseded. Mai (`cid=1`) now runs on a self-hosted GPT-SoVITS server (`106.75.224.167:9880`) with the `mai_v4` model + 16-emotion bank (LLM emits emotion → server routes to matching ref wav); CosyVoice/Fish remain available per-character. The earlier "LLM alternates `<ja>` tags in real time" path stayed dormant; INV-11 sidestepped that uncertainty by routing the entire Japanese path through GSV server-side (`tts_language=ja` in voice_model JSON), and the F0 post-processing-translation backlog item is now obsolete. See `docs/INV-11-*.md` + Lesson #11 in `docs/LESSONS.md`.
-- **Per-character TTS paradigm shipped** (INV-11 Stage 1.5, 2026-05-26) — 9 characters can each pick provider × model × voice via an inline `VoicePicker` (paradigm B; the original modal was removed). The static registry lives in `backend/config/tts_models.json` (pydantic-validated, fail-fast on schema error, hardcoded fallback when missing). GSV models declare a `mode` field (`trained` shipping for `mai_v4`; `zeroshot` placeholder reserved for future ref-upload). Playbook for adding new models: `docs/adding-new-tts-model.md`. Text language and speech language are decoupled — subtitles stay Chinese while ja/en speech is routed via `<ja>…</ja>` / `<en>…</en>` tags; see DESIGN_LITE §6.6.5 _语音语言机制_ for the four-layer mechanism.
-- **Memory/conversation cross-talk fixed** — short-term memory upgraded from user-only slicing to **(user, character, conversation)** three-level isolation + conversation-filtered restore on restart. "Switch to Yae but it says it's Mai" and "deleted the conversation, restarted, still remembers old context" are both resolved.
-- **Conversation-anchored binding** — switching character = switch to that character's latest conversation (or create one). **Rule A**: a user-initiated turn locks its conversation at send time; the response is delivered back to the originating conversation unconditionally (not dropped even if you switch away mid-flight). **Rule B**: a system-initiated proactive message snapshots its conversation at trigger time and is validated before delivery; stale ones are dropped. `character_switch` no longer kills the in-flight turn.
-- **Unified chat UI** — the separate top-right "history" entry and the old fading dialogue bubble are both removed; conversation content is served by a single **left-side push/pull chat panel**; left conversation-list + right chat-panel both push/pull, both collapsed = pure-avatar Galgame immersion; window <1280px auto-degrades layout.
-- **Token cost control** — short-term memory hard-capped at the last 25 turns (= 50 messages, `SHORT_TERM_MAX_TURNS=25`); tool-result injection truncated to 4000 chars. Multi-round tool calls no longer push a single request to tens of thousands of tokens.
-
-**Known limitations (listed honestly — this is the roadmap):**
-
-- Other characters (Yae Miko etc., `cid=2/3/...`) are currently **empty skeletons** with no full persona; switching to them feels hollow. v4.1 (F1) fills real personas one by one.
-- **Long-term memory chain — audit complete, remediation shipped (code-verified), pending real-device regression** — the wrap-up audit concluded: the root cause was the fact-only extraction prompt + sparse/casual chat legitimately yielding `[]` (not a broken chain), plus a sub-bug where purge didn't reset the extractor pointer. A remediation chain shipped (bounded rolling-summary layer + extractor-pointer self-heal/reconcile + extraction-prompt rebalance + tombstone) and is code-verified against real diffs. **Companionship/functional quality is not yet validated — pending real-device regression + friend-test (acceptance gate; CC does not self-certify).** See the "Memory & Personality" note below and DESIGN §五·补 + §十五之 Z.5.1.
-- LLM first-response is slow (still 5–10s with VPN off) — an independent model + network performance issue. With binding semantics locked, "slow" and "cross-talk" are now decoupled; slowness degrades to a pure UX concern, optimized separately later.
-- **GSV local-host migration is in progress** (branch `gsv-thin-and-global-server`, uncommitted) — moving Mai's TTS from the cloud autodl GPT-SoVITS box to a local 5070ti machine on the LAN. Connectivity is through (`trust_env=False` proxy bypass + LAN server URL), real audio synthesizes (not stub), but Chinese output sounds off (likely cross-lingual: `mai_v4` is a Japanese-trained voice forced to read Chinese via `tts_language=zh`). Next pass continues in a separate session; until that lands, treat GSV as in-progress, not architecture-stable. See ROADMAP § *GSV 本地 TTS 迁移*.
+*(Honest note: this is a one-person project, currently validated primarily on macOS Apple Silicon.)*
 
 ---
 
-## Who is this for?
+## A glimpse
 
-Skyler is built for **hackers who want an AI character of their own**:
+<!-- TODO: real screenshots under docs/assets/. A Live2D-driven product README has to be visual. -->
 
-- You're comfortable with the command line and can write a bit of Python
-- You care about owning your data (everything runs locally — SQLite, sentence-transformers, no cloud lock-in)
-- You like the idea of a character-driven AI, not a sterile chatbot
-- You'd rather have a framework you can extend than a polished app you can't change
-
-If you want a pre-packaged VTuber experience, check out [Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber).
-If you want a serverless personal agent platform, check out [Hermes Agent](https://github.com/NousResearch/hermes-agent).
-
-**Skyler sits between them** — a desktop, character-driven agent you actually own.
-
----
-
-## What makes Skyler different
-
-### 1. Hackable Capability Registry
-
-Every built-in capability is registered through a single `@register_capability` decorator. Internal tools (calendar, clipboard, screen awareness), external MCP servers (filesystem, brave-search, Notion), and your own skills are **first-class citizens** — the LLM agent can't tell them apart and shouldn't have to.
-
-Adding a new skill is five lines. Adding an external MCP server is one config entry. There's no plugin API to learn beyond a decorator and a JSON schema.
-
-### 2. Bidirectional MCP
-
-Skyler is both an MCP **client** (consuming any MCP server) **and** an MCP **server** (exposing its capability registry, character state, and memory to Claude Desktop, Cursor, Claude Code, or any other MCP client).
-
-The client side is config-driven (Notion-style): a `mcp.config.yaml` entry adds a server, the MCP panel toggles it on, and the LLM sees its tools the next turn. Supports **stdio / streamable HTTP / SSE** transports; per-server credentials live in a local DB and fill via a modal; servers that need a browser scan-code login (e.g. Xiaohongshu via `rednote-mcp`) get a "登录 / 重新登录" button that drives a subprocess instead of an env-var modal; tools marked `dangerous_tools` go through a per-call confirmation gate (you accept in the UI before the call executes — reject and the LLM sees a "canceled" tool result without breaking the stream).
-
-Currently wired servers (out of 16 entries):
-
-- 🗺 **amap** — Chinese map / weather (SSE, official + stdio fallback)
-- 📈 **akshare** — A/HK/US stock market data (read-only)
-- 📧 **email** — IMAP/SMTP (QQ auth code / Gmail app password), `send_email` gated
-- 🧠 **xmind** — mindmap generator
-- 📰 **rss-reader** — feed reader (self-hosted RSS, RSSHub for CN sites)
-- 🌐 **fetch** — web pages → markdown
-- 🐙 **github** — full API, 12 write/delete tools gated behind confirm
-- 📕 **xhs** (`rednote-mcp`, read-only) — Xiaohongshu search / note / comments via scan-code login
-- 🚂 **trip12306** — disabled by default (12306 geo-blocks non-CN IPs at TLS layer)
-
-Plus the built-in `filesystem` / `everything` examples. Your AI character becomes a node in the MCP ecosystem, not an island.
-
-### 3. Persona-level state machine
-
-Most agent frameworks track task state. Skyler also tracks **character state** — LLM-driven accumulation of mood, attention, current activity, recent thoughts, relationship intimacy. The state isn't a hardcoded prompt; it evolves as you interact.
-
-This is what makes Momo / Mai feel like a specific person rather than a generic tool. It's also the foundation for the long-term roadmap item we care most about: persona-level learning (the character grows with you, not just gets more capable).
-
-### 4. Persona Engineering five-layer framework (v4-beta)
-
-A character definition is not a blob of free text. v4-beta introduces a five-layer prompt framework (format contract / mode / persona / context / dialogue) + a multi-variant persona schema, Tier-1 (identity / personality / speech style) + Tier-2 (taboo / lore / emotion triggers / voice samples). Mai is the reference implementation of this framework (full Tier-1+2, see `docs/mai_prompt.md`).
-
----
-
-## Comparison
-
-|  | Skyler | Open-LLM-VTuber | Hermes Agent |
-|---|---|---|---|
-| Form factor | Desktop + Live2D | Desktop + Live2D | CLI + messaging gateway |
-| Hackability | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ |
-| Character system | ⭐⭐⭐⭐ persona five-layer framework + state machine | ⭐⭐⭐ Live2D + persona | ❌ |
-| Proactive engagement | ⭐⭐⭐⭐ broadcast + trigger pack | ❌ reactive only | ⭐⭐⭐ cron |
-| MCP integration | ✅ bidirectional | ✅ client only | ✅ workspace |
-| Self-improving learning | ❌ on roadmap | ❌ | ⭐⭐⭐⭐⭐ |
-| Messaging gateway (Telegram/Discord) | ❌ on roadmap | ❌ | ⭐⭐⭐⭐⭐ |
-| Training data export | ❌ on roadmap | ❌ | ⭐⭐⭐⭐⭐ |
-| Local-first / no cloud lockin | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-
-Skyler is honest about its gaps. The right-most three rows are real — Hermes does them better today, and we're not going to pretend otherwise. The middle four rows are where Skyler earns its place.
-
----
-
-## Quick Start
-
-```bash
-git clone https://github.com/<your-handle>/skyler.git
-cd skyler
-
-# ── Backend ───────────────────────────────────────────
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-# Edit .env — at minimum:
-#   DASHSCOPE_API_KEY=sk-xxx
-#   DATABASE_URL=sqlite+aiosqlite:///./skyler.db
-# Optional (for netease music mpv-first 真闭环 · 2026-05-31 已通):
-#   NETEASE_MUSIC_U=<browser cookie · 见 docs/netease-music-setup.md §二>
-uvicorn backend.main:app --reload
-# Backend at http://127.0.0.1:8000
-
-# ── Optional 系统依赖 (媒体/音乐能力) ──────────────────
-# brew install mpv             # netease 后台真闭环播 · 0.41+ 验过 (mpv-first)
-# brew install nowplaying-cli  # media.* 跨 source 控制 (NCM 客户端/Spotify/etc · 看不见 mpv 是常态)
-
-# ── Frontend (in another terminal) ────────────────────
-cd frontend
-yarn install
-yarn tauri dev
-# First Rust build takes 5–15 min; subsequent starts are fast.
-```
-
-Default LLM is Qwen via DashScope (works in mainland China without VPN). To switch providers, edit `config.yaml` — Skyler uses LiteLLM internally, so DeepSeek / OpenAI / Anthropic / local Ollama all work with a one-line change.
-
-## Live2D Asset Management
-
-Skyler ships with Live2D's official sample model **Hiyori** (in `frontend/public/live2d/hiyori/`) plus a **Yae demo skin** (in `frontend/public/live2d/yae/`), so the app works out of the box. To swap in your own character:
-
-```bash
-# Place your model under:
-frontend/public/live2d/<slug>/<slug>.model3.json
-
-# Option A: copy assets into the slug dir
-cp -r /path/to/MyChar/* frontend/public/live2d/my-char/
-
-# Option B: symlink (saves disk, easier to update)
-ln -s /path/to/MyChar frontend/public/live2d/my-char
-
-# Then in CharacterManagerDrawer → set Live2D model = my-char
-```
-
-The frontend's `live2d_scanner` picks up new slugs on next launch. To verify your model loads correctly:
-
-```bash
-yarn live2d:probe my-char
-# Expected: [OK] version=3 (Cubism SDK 4.0)
-```
-
-Only **Cubism 4** is supported in the current pixi-cubism4 runtime (`frontend/src/lib/live2d/runtimes/pixiCubism4.ts`); moc3 version ≥ 5 logs a console.warn and falls back. See [docs/live2d-setup.md](docs/live2d-setup.md) for motion map config and emotion binding.
-
-### Live2D performance layer (2026-06-14, commit `c14065b`)
-
-Single `beforeModelUpdate` hook on the SDK's `internalModel` runs three model-agnostic enhancements every frame (SDK emit timing = after motion / expression / eyeBlink / focus / breath / physics / pose accumulate, before `model.update()` renders):
-
-- **Head focus gain ±15°** — `autoFocus: false` + custom `window.mousemove` listener computes canvas-normalized `(x, y) ∈ [-1, 1]` → `focusController.focus(x * 0.5, -y * 0.5)`. SDK multiplies by 30 internally → ±15° max head turn (original ±30° was too dramatic). Existing 4-channel gaze reset reused unchanged.
-- **Body sway on Y/Z** — slow phased sine on `ParamBodyAngleY/Z` at ±1.5°, periods 5.4s / 7.3s, phase offset 1.7 rad. `BodyAngleX` left to SDK breath (which already runs ±4° / 15.5s there). Models without these params silently no-op.
-- **Per-model watermark removal (`bingtang` model)** — every frame `addParameterValueById('Paramheadxy', 30) + ('Paramheadxy3', 30)` reproduces the model's own `shuiyin1/2.exp3.json` expressions (original author's "press 1/2 to hide watermark" mechanism). Uses `add` not `set` so it composes safely with `red.exp3` which shares `Paramheadxy`. Other models silently no-op (model id list is hardcoded for now; per-model config TBD if more models bring different watermark IDs).
-
-**On-disk Live2D models** (in `frontend/public/live2d/` — slugs gitignored by default; whitelist after IP review): `hiyori` (default), `yae`, `ailian` (Cubism 5, runtime-incompatible, pending Cubism 5 fork — see ROADMAP), `bingtang`, `baizi`, `kafuka`, `阿芙洛狄忒/fense`. The last (Aphrodite/fense by 灵境 Sanctuary) is the newest addition (2026-06-14): moc3 v4, 6 motions, 5 expressions, standard `ParamMouthOpenY` (lipsync drives it via the hardcoded `LIPSYNC_PARAM_ID` constant — zero code change). Two small data-level patches applied in-place: `Groups[EyeBlink].Ids` populated with the two standard eye-open params, and `Motions` group key changed from `""` to `"Idle"` so the SDK's auto-idle picker finds the 6 motions.
-
----
-
-## Features
-
-Here's what Skyler currently does. None of these are locked — every layer is built to be swapped out, extended, or replaced.
-
-### 🎬 Entry animation(2026-06-07~08 · commits `f4fe120` + `3068849`)
-
-- **Beat 0 power-on preamble**(~2.36s)— dark hold 0.5s → 双线 ±55° pivot 1.3s → flare → 0.76s 门式拉开 · cubic-bezier(.42,.04,.2,1)· 中性暖白线(独立 token · 不跟角色色)· reduce-motion 跳
-- **Beat 1 boot-log** — 等宽 mono · 真实 `BootTracker` snapshot 21 行(真 ms / 真名) · 顶 telemetry strip · 右锚 SVG wireframe + 弧 HUD · per-line ●/○ glyph + 距离分层 · engine 起步晚 3s 让进度 0% 起爬
-- **appReady 4 路 gate** — embedding + whisper + ws + live2d(无 VAD)· 没就绪停在真实 warming 态 · 永不假 100%
-- **加载完成 latch** — engine done 真触发 → `> SYSTEM READY ✓` accent glow 脉冲 + 600ms 桥 → Beat 2 暖揭幕(crossfade 2.8s)
-- **Beat 2 暖揭幕** — 当前角色 splash · 标题级联(SKYLER · 角色名 · EN · 寄语「」)· 14 花瓣落 · 「輕觸進入」呼吸 · **dismiss = Enter / Space / window click**(Meta/Shift/Ctrl/Alt/Esc/方向/F* 全拒,bisect 实证 Cmd 修饰键误触 cut)
-- **小窗→大窗闪修** — `main.tsx::bootstrap` 在 React render 前 await Tauri `applyModeWindowProps` · 直接以正确 mode 大小起
-- **持久"上次选的角色"** — `users.current_character_id`(v4 migration)· `ws.character_switch` 真 handler 持久 · App 启动读 profile fallback chars[0]
-- 60s safety net 兜底 engine 真死;reduce-motion / 非 Tauri / DB 失败全有兜底链
-
-### 🎴 Character Gallery deal animation(立绘馆发牌入场)
-
-- `CharacterGallery` `introStage: 'stack' | 'stage-up' | 'reveal'` 三态机 · 650ms stack(bg/HUD/fan 全收) → stage-up(bg/HUD 升起 0.9s · fan 仍收) → reveal(fan wrapper 0.6s 升起)
-- Gate:roster 没就绪(`characters.length === 0`)停 stage-up 等 · 不假展开
-- Replay 按钮(右下 ↻)· FanLayout 一字未改(framer-motion vs 外部 stagger 冲突 · per-card 错峰甩入 Tech Debt TD-B)
-
-### 🎙 Input & Output
-- **Voice input** with two modes:
-  - **Manual mode** — click to start recording, click again to send
-  - **VAD mode** — silero MicVAD (self-hosted ONNX, web build, `@ricky0123/vad-web`); click to activate; auto-detects speech; auto-sends on speech-end; configurable `positiveSpeechThreshold` + `redemptionMs` in **Settings → Capabilities → ASR / VAD**
-  - **Mode switch is single-source** (LS) — store reads localStorage on init, setter writes back; switching to manual auto-pauses the silero engine via a `useEffect` in `useAudio` (Round 5, 2026-06-05; no more residual "still listening" desync from the old lazy-hydrate path). One intermittent "still listening" edge case still open — see Known Problems
-- **Mic button** state-aware (2026-06-05): icon switches by mode (Mic / AudioWaveform), highlight = actually listening (manual: `recording`; VAD: `vadState ∈ {active, recording}`)
-- **ASR result preview** — recognized text shown above input box in real time via `asr_result` WS message; persists into chat history
-- **Streaming output** — text and audio arrive sentence by sentence
-- **TTS** — 3 provider paradigm (INV-11 Stage 1.5, 2026-05-26): CosyVoice (DashScope, default + cloned voice 双轨) · Fish Audio (cloud, reference upload per-character) · GSV (GPT-SoVITS, self-hosted). Edge-TTS legacy fallback. Per-character `voice_model` JSON resolves provider × model × voice; registry in `backend/config/tts_models.json`. **Mai 双 cid** (commit `1b25881`): cid=1 = name=Momo + persona 内核=Mai + GSV `mai_v4` ja(16-emotion bank) / cid=101 = name=樱岛麻衣 + 同 Mai persona + **Fish `s2-pro` ja**(reference upload) — two TTS-provider A/B routes for same character. VoicePicker UI is inline (paradigm B) with auto-save (debounce 300ms). Add new models via `docs/adding-new-tts-model.md`. See DESIGN_LITE §14 character truth table.
-- **Auto-mute mic** when the assistant is speaking (prevents feedback loop)
-- **Tool-call transition** — when the agent calls a tool, it first emits a short transition line ("let me check…") and the input area shows a contextual loading pill ("checking calendar…") so you're never left wondering whether it's frozen. chunk 14 producer/consumer + chunk 6b TTS pipeline implement sentence-by-sentence streaming, verified smooth on-device in chunk 15.
-
-### 🧠 Memory & Personality (three layers)
-
-> **v4.0.0 update (supersedes the earlier "0 rows / may not be active" audit note)**: the audit is complete. Root cause: fact-only extraction prompt + sparse/casual chat → LLM legitimately returns `[]`; sub-bug: purge didn't reset the extractor pointer. The remediation chain (bounded rolling-summary layer + extractor-pointer self-heal/reconcile + extraction-prompt rebalance + tombstone) is shipped and code-verified against real diffs. Functional/companionship quality is pending real-device regression + friend-test (acceptance gate). The prose below describes the design; see DESIGN §五·补 + §十五之 Z.5.1 for the v4.0.0 closure record.
-
-- **Layer 1 — short-term** — in-process short-term buffer, isolated by **(user, character, conversation)** three levels, last N turns per turn (hard-capped at the last 25 turns = 50 messages, `SHORT_TERM_MAX_TURNS=25` for token cost control); when a conversation exceeds 60 messages (`SHORT_TERM_MAX`) the rolling-summary fold worker engages; on restart, restored from the `chat_history` table **filtered by conversation** (no longer cross-conversation / cross-character bleed)
-- **Layer 2 — long-term facts** — `memory` table, designed main write path is a server-side worker (`MemoryExtractor`, runs every 5 min, 5-stage quality filter [length / `SUSPICIOUS_TAG` / confidence ≥ 0.5 / tombstone / cosine dup], 4-category `entry_type`, 4-state `extraction_source` provenance tag); the `save_memory` tool is the "user explicitly asked to remember" entry; retrieval uses a forgetting-curve score `score = relevance * (1+log(1+ac)) / (1+age*decay)` with threshold gate. **✅ v4.0.0: audit concluded, remediation shipped & code-verified (rolling-summary layer + pointer self-heal + prompt rebalance + tombstone); pending real-device regression — see note above.**
-- **Layer 3 — user profile** — `users.profile_data` JSON schema (`profession` / `current_projects` / `interests` / `recurring_topics` / `communication_style` / `active_hours` / `language_preferences`). A strict validator hard-rejects projection language; daily cron regenerates. The legacy `profile_summary` fallback was retired in commit `c1d65ff` (2026-05-19) — `profile_data` is now the sole source; `users.profile_summary` column remains as an empty placeholder (`[RETIRED]` annotated, not yet DROP COLUMN). **User profile is shared across characters (one impression of you); per-character isolation of event/relationship-type long-term memory (the F8 ownership tiering) is a v4.1 multi-character item.**
-- **Activity timeline** — parallel to `chat_history`: every app/URL session you have (with idle-filtered duration) gets persisted. The character can reference today's activity in conversation ("looks like you spent 3h in VS Code — same project as yesterday?"). 30-day retention by default.
-- **Memory / conversation viewer** — unified into the **left-side push/pull chat panel** (v4-beta UI unification, see below); `entry_type` tab (fact / preference / event / commitment) + `extraction_source` badge + confidence display
-- **Memory toggles** — long-term memory, profile, activity awareness, web search, activity timeline — each independently switchable in Settings
-
-### 🤖 Multi-Agent Intelligence
-- **ChatAgent direct flow** — LiteLLM tool calling drives memory + built-in tools + MCP tools in a single LLM round-trip (no separate planner needed)
-- **Real MCP tool integration** — extensible `ToolRegistry`; bidirectional (Skyler is both client and server)
-- **LiteLLM unified LLM** — DeepSeek / Qwen / OpenAI / Claude (config switchable)
-- **Web search** — model-native (Qwen Max / DeepSeek), toggled via `enable_search`
-
-### 🎭 Multi-Character Conversations (conversation-anchored)
-- **Conversation-anchored** — switching character = switch to that character's **latest conversation** (or create one); one conversation is 1:1 bound to one character; character identity is derived from the conversation
-- **Rule A (user-initiated)** — a turn locks its conversation the moment it's sent, and the response stays bound to that conversation for its whole lifecycle; even if you switch away mid-flight, the reply is delivered back to the originating conversation unconditionally (not dropped)
-- **Rule B (system-initiated)** — a proactive message snapshots its conversation at trigger time and is validated before delivery; if it's stale (you've switched away) it is silently dropped, never surfacing in the wrong conversation
-- **Per-character voice** — `character.voice_model` JSON: cosyvoice slim schema `{provider, model, voice, instruct_supported, tts_language?}` or fish/gsv full schema (model defaults spread from `tts_models.json`: `gpt_weights` / `sovits_weights` / `server_url` / `emotion_bank_dir` / `inference_params` / etc); empty falls back to global default
-- **Known limitation** — v4-beta only Mai (`cid=1`) has a full persona; other characters are empty skeletons, filled one by one in v4.1 (F1)
-
-### 🎨 Chat UI (Round 3/4/5 floating-glass companion mode, 2026-06-01~05)
-
-The old v4-beta "push/pull chat panel + left conversation list" layout has been **fully replaced**. The companion view is now:
-
-- **A full-window wallpaper** as the base layer (Live2D character is transparent, only the model renders — no per-character background scrim, no `bg-base` strip on the sides). `SceneBackground` is the sole renderer, anchored to the Panel root `absolute inset-0`.
-- **Floating glass widgets** on top: TopBar / Sidebar dock (vertical-centered, left:20) / ConversationList (collapsed by default, expand via dock icon) / ChatHistoryPanel (top-right, **resizable both width & height** via a bottom-left drag handle, persisted to store + LS) / ChatInput (bottom capsule, maxWidth 680) / **mood badge** (top-left, default = emoji + word, hover/click to expand to full intimacy + thought card).
-- **A unified glass token system** in `themes.css` (`--glass-bg` / `--glass-radius` 16 / `--glass-blur` 12 / `--glass-border` / `--glass-shadow` lift / `--glass-text` + light-theme override). All 6 widgets share one set — adjust one token, every floating element follows.
-- **System status overlay** (Round 5 ②): a fifth nav item in the dock (Gauge icon) opens a 5-card dashboard — Voice (live store: recordingMode / vadState / confidence bar / threshold marker) / Connection (WS + AI status + `/api/health` poll 5s) / Models (LLM/TTS active providers + ASR config) / Character & Scene (current character + state + wallpaper source) / Resources (RAM/CPU/network poll 3s).
-
-### 🎨 UI: 8-Theme System
-Settings → UI lets you switch between:
-
-| Theme | Vibe |
+| Floating-glass companion mode | Character gallery / detail |
 |---|---|
-| 🌫️ Morandi | warm minimal cream |
-| 🌆 Dusk *(default)* | dreamy purple twilight |
-| 🌊 Glass | glassmorphism cool |
-| 🌸 Watercolor | pastel pink |
-| 🌌 Aurora | deep-sea green-teal |
-| 🌷 Sakura | sakura night |
-| 🌃 Cyber | cyber crimson |
-| 💜 Lavender | misty lavender |
+| ![companion](docs/assets/companion.png) | ![gallery](docs/assets/gallery.png) |
 
-All components use `var(--color-*)` from `styles/themes.css` (no hardcoded Tailwind colors). Persisted in `localStorage`. First-paint flash prevented by applying `data-theme` on mount.
+| Main chat + Live2D | MCP / capabilities |
+|---|---|
+| ![chat](docs/assets/chat.png) | ![mcp](docs/assets/mcp.png) |
 
-`lucide-react` icons across all components.
-
-### 🖼 Wallpaper (Round 5, 2026-06-05)
-
-Wallpaper is **fully decoupled from character** — switching character does not change the wallpaper anymore. The image is **global**, set once in **Settings → UI → 🖼 Scene Background**.
-
-- **Thumbnail grid picker** (click-to-apply, no "Save" button) — bundled samples in `frontend/public/backgrounds/` (read-only, ships with the app) + user uploads in `<appData>/backgrounds/` (writable, via `platformdirs.user_data_dir('com.skyler.momoos', appauthor=False)`, aligned with Tauri 2's `appDataDir()`).
-- **Upload / delete** — POST `/api/backgrounds/upload` (multipart, sanitize, dup-suffix `-1`/`-2` à la Finder, 200 MB streaming cap with 413 + half-written cleanup); DELETE `/api/backgrounds/{name}` (user-only, path-traversal double-guard). Backend serves user files via StaticFiles mount `/userdata/backgrounds/`.
-- **Format whitelist** — `.jpg/.jpeg/.png/.webp` (image) · `.mp4/.webm` (video) · everything else ignored.
-- **Independence from theme** — themes only swap `--color-*` tokens; wallpaper lives at z-0 underneath the glass widgets and stays put when you switch themes.
-
-> The legacy `character.background_path` DB column and Pydantic model are kept dormant (zero migration) — see Tech Debt in ROADMAP if you want to repurpose for a future "per-character default + global override" mode.
-
-### 🔔 Proactive Engagement
-- **Trigger pack** — `lunch_call` / `dinner_call` / `bedtime_chat` / `long_idle` always on; `wake_call` ⇄ `morning_briefing` are mutually exclusive (choose one via `config.proactive.mode`). Momo reaches out when it matters, not on every poll.
-- **Activity-based triggers** — `ide_open` / `music_playing` / `long_focus` / `url_tech_doc` / `late_night_ide` — fast-path classification on context, with a slow-path LLM judge for ambiguous cases (5+ min dwell, multi-gate throttle, daily cap, idle gate so it stops when you walk away)
-- **Invite-conversation pattern** — proactive isn't just push; the trigger can open a short greeting and wait for your response, then route into a regular conversation
-- **Binding guarantee (v4-beta)** — proactive messages follow Rule B: validated against the current conversation before delivery; once you switch away, stale messages are silently dropped and never surface in the wrong character's conversation
-
-### 🛠 Tool ecosystem
-- **Calendar** — Apple EventKit (default, zero-network) + Google Calendar (optional)
-- **Music** — netease (2 dispatcher × 14 actions: `netease_web` 7 [daily_recommend / personal_fm / play_song / play_playlist / play_playlist_by_id / like_current / search] + `netease_local` 7 [play_song / play_playlist / pause / resume / stop / next_in_queue / now_playing] · mpv-first 真闭环 / URL Scheme fallback) + macOS media control 5 actions (next_track / previous_track / play_pause / now_playing / set_volume — works with Apple Music / Spotify / YouTube / NCM 客户端). **Audio source priority** (2026-05-31 INV-18): session 用过 mpv-first → 后续控制首选 `netease_local.*` · 否则 fallback `media.*` · 用户明确"系统级"直接 `media.*`
-- **Bilibili** — 11 capabilities (search / video info / subtitles for AI summary / etc.)
-- **Xiaohongshu** — passive URL parser only (red line locked in code: no scraping / search / feed)
-- **Docx** — read / write / append, sandboxed under `~/Documents/Skyler/docs/`
-- **Notion** — via official `@notionhq/notion-mcp-server` MCP integration
-- **Clipboard helper** — ring buffer of last 50 items (24h TTL, never persisted), `get_recent` / `summarize` / `translate`
-- **Screen awareness** — active app + browser URL + page text (with 19-entry blocklist guarding banks / email / social / localhost)
-- **And custom skills** — see [Extending Skyler](#extending-skyler)
+> How the project grew (version × feature evolution) → [docs/EVOLUTION.md](docs/EVOLUTION.md).
 
 ---
 
-## Architecture
+## Recent updates (2026-06)
 
-Skyler's architecture isn't incidental. Every major choice — the Capability Registry, bidirectional MCP, persona-level `character_states`, the activity timeline — is a direct consequence of the positioning. A hackable character framework requires first-class extension, ecosystem participation, and persona persistence. If you want to know *why* a piece is shaped a certain way, see [DESIGN_LITE.md](DESIGN_LITE.md) (current source of truth) or [docs/archive/DESIGN.md](docs/archive/DESIGN.md) (historical institutional memory; 5,206 lines, frozen 2026-05-19).
+> Full capability status → [ROADMAP.md](ROADMAP.md); version evolution → [docs/EVOLUTION.md](docs/EVOLUTION.md).
 
-```
-User input (voice / text)
-  ├─ [VAD mode]  Web Audio API speech detect → MediaRecorder
-  │              silence > 1.5s → stop → send audio
-  ├─ [Manual]    user click → MediaRecorder start/stop → send
-  └─ [Text]      typed and sent
-
-  → ASR        faster-whisper (backend) → asr_result pushed to frontend
-  → ChatAgent  context assembly + LiteLLM tool calling
-                ├─ short_term: (user, character, conversation) 3-level isolation, cap 25 turns (= 50 messages)
-                ├─ memory tools: save / delete / list / compress (LLM-driven)
-                ├─ built-in tools: ToolRegistry (MCP-extensible)
-                ├─ capabilities: @register_capability auto-injects into ToolRegistry
-                └─ web search: model-native (Qwen Max / DeepSeek)
-  → emotion    first sentence parses <emotion>X</emotion> → locks turn emotion
-  → TTS        get_tts_engine(voice_model) → CosyVoice / Edge / SoVITS
-                (v4-beta Mai = Chinese-only path)
-  → Output:    streamed text chunks + per-sentence audio chunks + asr_result preview
-                (delivered to the originating conversation, Rule A/B)
-
-Capability Registry:
-  @register_capability decorator → CapabilityRegistry singleton
-    ├─ Consumer.CHAT_AGENT  → auto-derived OpenAI schema → ToolRegistry → ChatAgent
-    ├─ Consumer.SCHEDULER   → APScheduler cron / interval triggers
-    └─ Consumer.WEBHOOK     → /api/webhooks/n8n/{trigger} (Bearer + HMAC auth)
-  GET /api/capabilities → frontend CapabilityPanel (cards by category, health dots)
-
-Two-layer integrations:
-  backend/integrations/<service>.py     low-level client (OAuth, retry, health)
-  backend/capabilities/<service>.py     5-line @register_capability per action
-
-Bidirectional MCP:
-  ┌─────────────────────────────────────────────────────────────────┐
-  │  CapabilityRegistry  ←  decorator  | runtime  | aggregator      │
-  │                                                                 │
-  │  Source 1: @register_capability    (built-in: time / calendar) │
-  │  Source 2: MCP client (consumes external servers, e.g.          │
-  │            filesystem, brave-search, Notion)                    │
-  │  Skyler-as-server: POST /mcp exposes the registry to            │
-  │            Claude Desktop / Cursor / Claude Code (Bearer auth)  │
-  └─────────────────────────────────────────────────────────────────┘
-
-Persona-level state:
-  character_states table  ← mood / intimacy / current_thought / current_activity
-  <state_update> LLM tag protocol (parallel to <emotion>)
-  daily intimacy_decay cron
-  shared user profile (cross-character impression of you)
-
-Conversation-anchored binding:
-  switch character → that character's latest conversation (or new); identity derived from conversation
-  Rule A: user-initiated → lock conversation at send, response delivered back unconditionally (not dropped)
-  Rule B: system-initiated → snapshot at trigger, validate current conversation before delivery, drop if stale
-  character_switch not in turn scheduler → never kills the in-flight reply
-
-Activity timeline:
-  ActivityWatcher (30s poll)
-    → (app, url, idle_flag) tuple change → session boundary
-    → SessionWriter persists to activity_sessions table
-    → ChatAgent system-prompt injection ("user did X today for Yh")
-    → 5-stage privacy gate (blocklist / dedup / idle-filter / explicit delete / local-only)
-```
+- **2026-06-21** · Desktop awareness (read-only) shipped — character can read the foreground window's UI tree (macOS AX) and answer from evidence; read-only. Write-action capability is built but the confirm gate isn't verified yet — recommend keeping it off manually until it is.
+- **2026-06-21** · Chat experience: deep-thinking / web-search dual toggle + bubble local-time stamp — chat box + settings entry, default fast (thinking off), flip on when you want depth; local-time tag under each bubble.
+- **2026-06-20** · Glass-skin customizer + character-detail center Build 1 — companion-mode glass widget auto-tunes contrast to wallpaper, persists across theme switch; gallery surfaces persona / mood / state and lets you edit persona inline.
+- **2026-06-17** · Local voice via GSV migration — self-trained `mai_v4` + 16 emotions moved from cloud onto a LAN-local box; inference no longer crosses the public internet.
 
 ---
 
-## Tech Stack
+## What makes it different
 
-- **Backend**: Python 3.10 / FastAPI / SQLAlchemy (async) / APScheduler / LiteLLM / faster-whisper / sentence-transformers / pyobjc (macOS-only bits)
-- **Frontend**: Tauri 2 / React 18 / TypeScript / Vite / Tailwind / Zustand / lucide-react / pixi-live2d-display (Cubism 4; moc3 ver ≥ 5 falls back with console.warn)
-- **TTS**: 3-provider paradigm (CosyVoice / Fish Audio / GPT-SoVITS self-hosted) per-character, registry in `backend/config/tts_models.json` (pydantic-validated). Edge-TTS legacy fallback. Mai (`cid=1`) currently runs GSV `mai_v4` with 16-emotion bank (ja). Inline VoicePicker UI (paradigm B, auto-save). See `docs/adding-new-tts-model.md`.
-- **ASR**: faster-whisper (local)
-- **LLM**: LiteLLM (Qwen / DeepSeek / OpenAI / Claude / local Ollama — config switchable)
-- **DB**: SQLite + Alembic migrations
-- **MCP**: stdio + streamable HTTP, bidirectional
-- **Embeddings**: sentence-transformers (paraphrase-multilingual)
-- **Platform**: macOS Apple Silicon primary; Linux/Windows partial
+### 1. Character mechanism: a persistent "self" for the character (core)
 
----
+This is where Skyler actually puts effort — and the part hardest to copy. Most companion chatbots re-invent their mood, current activity, and how today's going on every turn — they drift, contradict themselves. Skyler treats the character as **an entity with persistent inner state**, in four layers:
 
-## Extending Skyler
+- **Persona (who she is)** — five-layer prompt framework + multi-variant schema (Tier-1 identity / personality / voice + Tier-2 taboo / lore / emotion triggers), not a wall of free text.
+- **Persistent state (how she is now)** — mood / intimacy / current activity, maintained in a state layer that the model reads as **input**, not improvised each turn.
+- **DailyAgent (what kind of day she's having)** — gives the character a coherent daily routine, so "what she's doing" has continuity instead of being fabricated on the fly.
+- **Context arbitration (turning state into reaction)** — composes inner state + your input into the response she should have right now.
 
-Skyler is designed to be extended. Four extension paths cover the common cases.
+In a line: take "tracking who I am, what kind of day I'm having" off the LLM's unreliable improvisation and put it on a persistent, rule-governed state layer.
 
-### 1. Adding a skill (internal capability)
+> *Current status: persona system (Mai complete, second persona slot in progress) + persistent state fields + `<state_update>` + state-aware proactive engine already running. **In progress**: actually feeding state back into generation + DailyAgent + context arbitration — upgrading the layer from "log-only" to "state-driven." This character-mechanism track is the core direction of the project.*
 
-Drop a file in `backend/capabilities/`, decorate a function, and the LLM picks it up on next restart:
+### 2. A composable capability registry
 
-```python
-# backend/capabilities/weather.py
-from backend.capabilities.registry import register_capability, Consumer
+Each built-in capability registers with a single `@register_capability` line; built-in tools (calendar / clipboard / screen awareness), external MCP servers, and your own skills are **fully peer**, the LLM can't tell them apart. New skill = 5 lines of code; new MCP server = one config entry.
 
-@register_capability(
-    name="weather.current",
-    description="Get current weather for a city. Use when user asks about weather.",
-    consumers=[Consumer.CHAT_AGENT],
-    parameters={
-        "type": "object",
-        "properties": {
-            "city": {"type": "string", "description": "City name, e.g. 'Tokyo'"}
-        },
-        "required": ["city"],
-    },
-)
-async def get_current_weather(city: str) -> dict:
-    # call your API of choice, return JSON-serializable dict
-    return {"city": city, "temp_c": 18, "condition": "cloudy"}
-```
+### 3. Safe by design (gates for an agent that can act)
 
-That's it. No registration call, no plugin manifest. The decorator + JSON schema is the contract.
-
-See [docs/skills-extension-guide.md](docs/skills-extension-guide.md) for the full pattern (error handling, health checks, multi-consumer).
-
-### 2. Connecting an external MCP server
-
-Add an entry to `config.yaml`:
-
-```yaml
-mcp_clients:
-  - name: filesystem
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/Documents"]
-    enabled: true
-    expose_via_skyler_server: false   # don't re-expose to Claude Desktop
-```
-
-On restart, the MCP client connects, discovers tools, and reverse-registers them as `ext.filesystem.<tool>` capabilities. The ChatAgent picks them up automatically.
-
-Works with any MCP server: brave-search, Notion (`@notionhq/notion-mcp-server`), Anthropic's reference servers, or your own. See [docs/mcp-client-setup.md](docs/mcp-client-setup.md).
-
-### 3. Swapping the Live2D model
-
-See [Live2D Asset Management](#live2d-asset-management) above. The frontend's `live2d_scanner` auto-discovers any model placed in `frontend/public/live2d/<slug>/<slug>.model3.json`. Motion maps and emotion bindings are per-character; see [docs/live2d-setup.md](docs/live2d-setup.md).
-
-### 4. Replacing the LLM provider
-
-Skyler uses LiteLLM. **Two paths** — DB-driven is primary, `config.yaml` is fallback (since `bugfix-3.1`):
-
-**Path A (recommended) · DB ai_providers row** — Settings → 能力 → AI Providers: pick from 6 enabled models (currently `deepseek/deepseek-v4-pro` active · Qwen 3.6 Max preview / Plus / Flash · Qwen 3.5 Plus · deepseek-v4-flash inactive but enabled). DB row toggle. Effective immediately, no restart. See DESIGN_LITE §15 LLM truth table.
-
-**Path B (fallback only) · `config.yaml`** — only kicks in when no DB ai_providers row is active. Edit:
-
-```yaml
-default_model: dashscope/qwen3.6-max-preview   # LiteLLM model string with provider prefix
-planner_model: dashscope/qwen-turbo             # planner/activity_judge (not in ai_providers table)
-```
-
-Local Ollama models, on-prem deployments, custom endpoints — all one config field away. No code changes.
+The capability registry covers both native capabilities and MCP tools uniformly; write / mutating tools go into `dangerous_tools` with a confirm gate before invocation; desktop control **separates read from write** — reading the UI tree is safe; write-action capability is built but the confirm gate hasn't been verified end-to-end yet, so keep it off manually until it has. When an agent can call external tools and read or control your desktop, this layer is a requirement, not decoration.
 
 ---
 
-## What Skyler is NOT
+## Honest positioning
 
-- Skyler is **not** an out-of-the-box VTuber app. If you want pre-packaged streaming/character UX, use [Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber).
-- Skyler does **not** have self-improving skill learning today. Skills don't refine themselves from use. If that's critical, [Hermes Agent](https://github.com/NousResearch/hermes-agent) does this well. It's on our long-term roadmap as *persona-level learning* (the character grows, not just the skill catalog).
-- Skyler does **not** ship messaging gateways (Telegram / Discord / etc). On the medium-term roadmap. Today, Skyler is desktop-only.
-- Skyler does **not** export your conversation data as training data. On the long-term roadmap as a "train your own small model on your character" capability.
-- Skyler is **not** competing with general-purpose agent frameworks like LangChain or AutoGen. It's specifically a *character-driven desktop agent*. If you don't want the character layer, you don't want Skyler.
-- v4-beta does **not** open the full multi-character experience yet — currently focused on Mai as a single Chinese-only character. Other characters' personas, Japanese voice, and the long-term memory chain are all v4.0.0/v4.1 wrap-up items, listed honestly in "v4-beta Status" above and in the roadmap.
+Skyler sits in the gap between two mature projects:
 
-We list these honestly because the gaps matter. They're also the roadmap.
+- **[Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber)** — a polished, install-and-go VTuber companion app. Want something ready-made? Pick that — it's more mature than Skyler.
+- **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** (Nous Research) — a server-side personal-agent platform with a self-improving skill loop. Want a pure agent platform? It's more specialized.
+
+Skyler aims at the space neither occupies: **desktop, character-driven, hackable down to the agent core, ownership stays with you**. The architecture choices follow from that gap — not from copying anyone's feature list.
+
+**Where Skyler is honestly still short**: one-person project; primarily validated on macOS; only Mai has a complete persona right now; packaging (dmg / auto-update) not done; long-term memory quality awaiting on-device regression. For a finished feel, the two above are steadier; Skyler's value is in that **hackable + character-mechanism** gap.
+
+---
+
+## What it can do (overview)
+
+> Which items are 🟢 verified / 🟡 in progress / ⚪ planned — see [ROADMAP § Current Capability Status](ROADMAP.md). This is just the broad strokes.
+
+- **Conversation** — voice (VAD auto / manual) + text, sentence-by-sentence streaming; multi-character conversation anchoring, switching characters doesn't cross wires or drop replies; deep-thinking / web-search dual toggle.
+- **Voice (TTS)** — self-trained voice (GPT-SoVITS `mai_v4` + 16 emotions) + multi-provider (CosyVoice / Fish); voice can be Chinese / Japanese, text and voice languages decoupled; local Whisper ASR.
+- **Memory** — short-term (user / character / conversation) three-level isolation + rolling summary + long-term fact extraction (forgetting curve + tombstones) + cross-character user profile + activity timeline.
+- **Proactive companion** — scheduled greetings + screen-aware conversation starters; multi-layer throttle + idle gate, shuts up when you walk away.
+- **Desktop awareness** — reads the foreground window's UI tree (macOS AX, read-only) and answers from what's actually on screen.
+- **Live2D** — performance layer (idle micro-motion / head-follow / blink-breathe / lipsync) + multi-model swap + composable framing.
+- **Tools / MCP** — built-in calendar (Apple + Google) / NetEase Music / Bilibili / docs / clipboard / Xiaohongshu (read-only) / Notion + connect any external MCP server; dangerous operations confirm-gated.
+- **Multi-modal** — file input / output; image input (read depends on the active model's multi-modal capability, no persistence yet).
+- **Interface** — main window / transparent desktop pet, two modes + 8 themes + floating-glass companion mode (contrast customizable) + boot animation + character gallery.
+- **Observability** — usage / resource / boot-time monitoring + anomaly highlight.
+
+> Only Mai has a complete persona today; a second independent character is being built (Live2D model in place; persona / voice / portrait to follow). The rest are skeletons (filling in one at a time).
+
+---
+
+## How to run it
+
+### Quick start (macOS)
+
+Prereq: Node 18+ (22+ recommended) · Rust 1.75+ · Xcode CLT · Python 3.10+.
+
+```bash
+git clone <your-repo-url> Skyler && cd Skyler
+
+# Backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # fill at least DASHSCOPE_API_KEY
+uvicorn backend.main:app --reload   # http://127.0.0.1:8000
+
+# Frontend (separate terminal)
+cd frontend && npm install && npm run tauri dev
+# First Rust build: 5–15 min, fast after that
+```
+
+Default LLM is Qwen via DashScope (no proxy required from inside CN). Switch provider in one config line — internals route through LiteLLM, so DeepSeek / OpenAI / Anthropic / local Ollama all work.
+
+### Extending Skyler (four paths)
+
+1. **Add a skill** — drop a file under `backend/capabilities/`, decorate a function; restart, and the LLM can call it.
+2. **Connect an external MCP server** — add an entry to `config.yaml`, restart; tools auto-discovered and registered as `ext.<server>.<tool>` capabilities.
+3. **Swap a Live2D model** — drop assets under `frontend/public/live2d/<slug>/`, bind it via CharacterPanel. Cubism 4 only.
+4. **Swap the LLM** — one field in `config.yaml`, any LiteLLM-supported provider.
+
+### Architecture at a glance
+
+```
+User input (voice / text) → ASR (local Whisper)
+  → ChatAgent: context assembly + LiteLLM tool calling
+      ├─ Short-term memory: (user, character, conversation) three-level isolation
+      ├─ Memory tools (LLM-driven save/recall)
+      ├─ Capabilities = @register_capability → ToolRegistry (extensible via MCP)
+      └─ Web search (model-native)
+  → Emotion parsing → TTS (CosyVoice/Fish/GSV)
+  → Streaming text + per-sentence audio (delivered to originating conversation)
+```
+
+Three foundations: **capability registry** (decorator → singleton, schema auto-exported) · **bidirectional MCP** (client + server) · **persona-level state** (`character_states` + `<state_update>` tag protocol). Why each layer is shaped the way it is → [DESIGN_LITE.md](DESIGN_LITE.md) (design source of truth).
 
 ---
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the full picture (P1 / P2 / P3 / 5070ti-triggered tracks below are the current week's view; INV-11 全段 闭环段 lists shipped stages 0 / -1 / 1 / 1.5).
+Full → [ROADMAP.md](ROADMAP.md). In a line:
 
-- **v4.0.0 wrap-up (in progress)**: long-term memory chain audit ✅ (remediation shipped, code-verified; pending real-device regression) → Stage3 Tauri packaging / dmg / dogfood / tag. _TTS per-user daily char cap + main-chat throttle moved out of v4.0 scope, **deferred** until multi-user testing — `tts_call_log` observability is already in place; no enforcement gate yet._
-- **P1 (本周候选)**: Conversation-vs-Character paradigm decision / Proactive 污染 short_term long-term fix / 句子并发 TTS pipeline (chunk 15 复活) / Persona 蒸馏 Mai 三层
-- **P2 (~2 周)**: GSV server GPU 持久化 / ASR whisper preload offline fix / 加新角色 yae_v1 (走完整 json config trained mode flow) / Migration v2 force upgrade (Lesson #11) / UI polish (当前 voice 高亮 / TTS 语言 dropdown 上移 / search box)
-- **P3 (长线)**: INV-12 Stage 3 frontend universal TTS config (Stage 1.5 已 cover 大部分) / Memory v4.1 (20k buffer / RAG fallback / character cognition · 友测后触发) / Phase 3 streaming + H3 fix
-- **5070ti 触发** (PM 已订 · 等到货): zero-shot GSV mode 真实施(本地 server · 不需 SFTP) / 多 character GSV trained model 本地 train / LLM 本地化 (qwen2.5-7b-instruct 4bit ~5GB) / Skyler 全本地化 (去云端依赖)
-- **Medium-term**: filling the honest gaps above (messaging gateway, training data export, capability marketplace)
-- **Long-term**: persona-level learning (`character_states` that actually grow)
-- **Long-vision**: a small, loyal hobbyist ecosystem around hackable AI characters on the desktop
-
----
-
-## ⚠️ Known Problems / 已知问题
-
-> **VAD "still listening" intermittent edge case** (Round 5 derived, **open**) — Two surface root causes have been fixed (Round 5, 2026-06-05): (1) `recordingMode` store-init now reads localStorage directly so the old AsrVadSection `useEffect[]` lazy hydrate can't flip the store back to `'vad'` when the user opens Capabilities; (2) a new `useEffect` in `useAudio` watches `recordingMode` and auto-calls `toggleVad()` when it flips to `'manual'` while the silero engine is still `active`, so the engine is paused via the same race-safe path as the mic button. **But PM has still observed intermittent "mic seems to be listening in manual mode" on-device.** The full root cause is not yet pinned down. Diagnostic instrumentation is in place: the System status overlay → 🎙 Voice card shows live `vadState` badge, ConfidenceBar with `positiveSpeechThreshold` marker, and recording flag — use it to capture the repro. Tracked as **P1** in ROADMAP.
-
-按优先级排列。日常运行不阻塞，但未来需要处理。详细 backlog 散落条目散见 [ROADMAP.md §Tech Debt & Backlog](ROADMAP.md#tech-debt--backlog) / [docs/archive/DESIGN.md §十四之B](docs/archive/DESIGN.md)；本块是 manual 验收期间发现的活跃 issue 汇总。
-
-### 中
-
-1. **7 个 pre-existing test failures**（2026-05-11 chunk 6b hotfix-2 audit 发现）
-   - 文件：`test_chat_agent` / `test_database` / `test_integration` / `test_llm_client` / `test_memory_agent` / `test_memory` / `test_ws_helpers`
-   - 根因：chunk 0–4 累积过程中漏维护，引用已删/改名 API（`upsert_personality` / `DEFAULT_MODEL` / `_personality_to_dict` / `_run_plan`）
-   - 影响：每次 hotfix 的 "0 regression" 声明带 false positive（实际新代码 0 regression，但旧测试仍红）
-   - **2026-05-19 更新**：commit `c1d65ff` 删除 `backend/agents/memory.py` / `backend/agents/planner.py` / `backend/scheduler/task.py` 整文件后，`test_memory_agent.py` 引用的源模块已不存在，问题**更严重**但仍未修；7 文件 currently 未触
-   - 修法：扫 7 文件改成当前 API / 删过时测试
-   - 工程量：1–2 小时
-
-2. ~~**`_build_messages` 性能退化 1000x**~~ ✅ chunk 9 Part 0 已优化（2026-05-12）
-   - 旧现象：chunk 1.6 → v3-H chunk 1 首条消息 4ms → 4487ms
-   - 真根因：embedding 模型 preload 未完成时 lazy load 阻塞首条消息（10s）；不是 per-turn 退化
-   - chunk 9 Part 0 渐进优化（3 项零风险）：
-     - 短输入（< 10 chars）跳过 memory 检索：~67ms → 0.47ms（**~140x**）
-     - embedding LRU + TTL 缓存：~67ms → 0.01ms（**~6700x**，cache hit）
-     - device=auto → cpu（mps 与 cpu 短文本 median 相同但 cpu 更稳）
-   - 残留风险：模型 preload 未完时首条消息仍 lazy load（10s）—— chunk 10 / backlog "preload-gate 或 not-ready 跳过"
-
-### 低
-
-3. ~~**网易云 mpv 真播降级 url_scheme**~~ ✅ 2026-05-31 INV-16/17 闭环
-   - 旧现象:NCM 客户端弹出但不自动播,用户手动点(理想是 mpv 后台真播)
-   - 旧根因 1(weapi 400):自实现 `NeteaseClient.get_song_url` payload `br=320000` 在 NCM 2024 API rotation 后全 400 — **Patch A** (commit `06436d8`) 改 `level=exhigh`/`encodeType=flac` 真通 (轮 1 trial)
-   - 旧根因 2(pyncm 切换):**永久判死** — `pyncm` PyPI 下架 + GitHub repo 404,自维护 weapi sign 为唯一路径(详 `docs/netease-music-setup.md` §七)
-   - 旧根因 3(mpv subprocess):**INV-17** 三 fix (commit `0a23866`) — `--media-keys=yes` mpv 0.41 rename fatal · stderr DEVNULL → PIPE 防黑盒 · sticky pause 跨 loadfile 防御
-   - 实证:PM 真机 2026-05-31 `daily_recommend → mpv 后台播 Reaching Light` ✅ autoplay=true / backend=mpv
-   - 详 `docs/SESSIONS/2026-05-30-to-31.md`
-
-3.5. **Audio source trade-offs**(2026-05-31 INV-18 凌晨现场)
-   - **Mode B(NCM 客户端 autoplay)死路**:macOS NCM 客户端最新版 `orpheus://` URL Scheme 仅跳转不自动播,`nowplaying-cli play` 兜底不稳定。`netease_web` 在 mpv 缺时仍走此 fallback 但 autoplay=false
-   - **Mode C(MediaRemote 看不见 mpv)系统限制**:macOS MediaRemote framework 长期不识别 backend spawn 的 mpv 进程,`media.now_playing` 返 null 是常态(非 bug)。**Patch D** (commit `06436d8`) 解 = `netease_local.now_playing` 自维护 `_current` state,LLM 走 fallback 路径仍能拿到当前在播
-   - **expectation gap**:mpv 后台播无 UI(无歌词/动画) vs PM 习惯的 NCM 客户端完整 UI。4 选项 A/B/C/D 待 PM 拍板,详 `docs/netease-music-setup.md` §八
-
-4. **MCP 凭证 V1 plaintext 存 SQLite**（v3.5 chunk 7 衍生 backlog）
-   - 现状：`mcp_credentials` 表明文存 API key；与 `.env` 风险等价（SQLite 文件在 `~/.skyler/` 已具系统级权限隔离）
-   - 升级路径：接 OS keyring（macOS Keychain / Windows Credential Manager / GNOME Keyring）或 master password 派生加密
-   - Touchpoint：`backend/mcp/credentials.py` `get_env` / `upsert` 内部加 cipher layer，外部 API 不变
-
-5. **`config.yaml` 双写源**（v3.5 chunk 7 audit 发现）
-   - 前端 SettingsPanel 通过 `setConfigField` 写 `config.yaml`（`tts.enabled` / `memory.long_term_enabled` / `search.enable_search` 等），git HEAD 不感知 → 用户改 settings 后 `git status` 显示 dirty
-   - 修法：拆静态配置（git 版本控制）vs 运行时设置（DB 表存，参照 chunk 7 `mcp_client_state` pattern）
-   - 与第 6 条同性质，建议 v4 一起整改
-
-6. **`characters.yaml` vs DB 双源真相**（v3-E1 留 v4 Scheme C 修）
-   - 当前 Scheme B（DB 主 + YAML fallback）—— `_build_messages` 优先 DB persona，YAML fallback
-   - **2026-06-01 更新**：yaml 仅含 **5 个内建角色**（八重神子 / 默认 / 荧 / 凝光 / 神里绫华），非 DB 全集；`cid=99/100/101` 等仅 DB seed，不在 yaml
-   - 计划 Scheme C（v3-G 末或 v4）：删 yaml、DB 单源、迁移脚本、`prompt_manager` 改 DB-backed
-   - **2026-05-19 更新**：原条目含的 `switch_character 改 DB query` 已不再适用 —— `switch_character` LLM tool 在 commit `71b6e99` 已整体下线（schema 不暴露给 LLM；前端切角色走 WS `character_switch` 帧）；该 backlog 性质已从"接线修复"变为"yaml 退役 + prompt_manager 单源化"
-
-7. **超长 B 站字幕分段总结**（v3.5 chunk 6a 衍生 backlog）
-   - 现状：`bilibili.get_subtitles` 返完整字幕全文不截断
-   - MVP 接受：qwen3.6-plus / claude / deepseek 都 200k+ context；B 站常见 5–30 分钟视频字幕 1–3k 字够安全
-   - 升级路径：滑动窗口分段 → 各段单独总结 → 终极合并总结（map-reduce 风格）
-   - Touchpoint：`backend/integrations/bilibili.py` `get_subtitles` 末尾加 `_segment_and_summarize` 可选 wrapper
-
-8. **cosyvoice WS 建链 5s 超时**（v3-G' 衍生 backlog）
-   - 现状：dashscope SDK 默认 5s WebSocket 建链超时（`speech_synthesizer.py:526` 写死 `self.__connect(5)`，无外部参数化入口）
-   - 影响：弱网 / 跨境 / VPN 抖动场景下经常 `TimeoutError`，单句 TTS 直接失败
-   - 修法（择一）：（A）生产侧 monkeypatch（hack 痕迹）/（B）`_blocking_synthesize` 退避重试 / （C）升级 dashscope SDK 看上游是否暴露 timeout 参数 / （D）迁 SDK 的 streaming_call + 自管连接池
-
-9. **Python 3.10 + `google-api-core` 兼容窗口**
-   - `google-api-core` 已宣布 2026-10-04 起停止支持 Python 3.10
-   - 影响：到期前 Google Calendar 集成依赖会卡在旧版本，安全补丁停摆
-   - 修法：升级到 Python 3.11+（`pyproject.toml` / setup guide / CI 同步）
-
-10. **剪贴板内容写入 log（隐私）**（chunk 3a 起）
-    - 现状：clipboard watcher 调试日志会带 content preview；生产环境若 log 级别开 INFO 可能记录剪贴板敏感内容（密码 / token 等）
-    - 修法：watcher / capabilities 内部 log 改成 hash / length / type，content 仅 DEBUG 级（默认 WARNING+ 不记）
-
-11. **`users.profile_summary` legacy 字段未来清理**（v3.5 chunk 11 衍生 backlog）—— **2026-05-19 commit `c1d65ff` 大部分已闭合**
-    - **已闭合**：`chat.py` fallback 已删；`services.get_profile_summary / update_profile_summary` 已删；`users_api.py /profile_summary` 全套 endpoints 已删；`memory_api.py` bare `/profile` 已删；`ws.py` `_compute_profile_summary` / `_regenerate_profile_summary` 整段 217 行已删；`conversations_api.py` delete 路径 kick 已删；`prompts.py` PLANNER 段已删
-    - **保留**：`users.profile_summary` 列保留为空列（`models.py:24-28` 加 `[RETIRED]` 注释），未 DROP COLUMN
-    - **剩余工作**：1 个 migration（DROP COLUMN）—— 可作单独小刀处理；估 < 30 分钟
-
-12. **MemoryExtractor worker 调参 backlog**（v3.5 chunk 10 衍生）
-    - 现状：worker 默认 ``interval_seconds: 300`` / ``batch_size: 50`` / ``min_confidence: 0.5`` / ``dup_threshold: 0.9`` —— 全是初始猜测值，未跑长跑数据
-    - 待观察：
-      - interval 5 分钟在重度使用日是否过密（一天 ~288 次 qwen-turbo 调用 ≈ ¥3-5/天，量级可接受但有省空间）
-      - min_confidence=0.5 偏松还是偏紧：实测样本中 LLM 自评 0.8-0.9 居多，0.5 主要拦截"硬猜测"。如果发现漏召回，调到 0.4；如发现噪音多，调到 0.6
-      - dup_threshold=0.9 vs 0.85：cosine 0.85 已经语义近似，可能更保守
-    - 修法：跑一周后回看 ``extraction_source='worker'`` 的入库率 + 用户在 drawer 手动删除率，迭代默认值
-
-13. **MemoryExtractor LLM judge 默认开关**（v3.5 chunk 10 衍生）
-    - 现状：``llm_judge_enabled: false``——第 5 道 filter（再调一次 qwen-turbo 问"这条值不值得记 YES/NO"）默认关
-    - 理由：上线时不知道前 4 道闸（schema + 长度 + SUSPICIOUS + confidence + dup）已经能挡多少噪音，先不开避免成本翻倍
-    - 待观察：若 drawer 里出现"明明 confidence 0.9 但人类一看就没价值"的 entry 多了，开开看
-    - 修法：set ``memory.extractor.llm_judge_enabled: true`` 即激活（fail-open，judge 抛错时 accept）
-
-14. **chunk 8b 完整屏幕感知留 backlog**（v3.5 chunk 8a 衍生）
-    - 现状：chunk 8a 只做"看得到 app 名 + 浏览器 URL + 公开页面正文"。**不**截屏 / **不** OCR / **不**装浏览器扩展
-    - 缺失场景：能感知到 Chrome 在啥 tab，但看不到代码编辑器里到底在写什么；YouTube 视频只能拿 URL + 标题，不能"看到画面"
-    - 修法（chunk 8b）：Tauri Rust 端 ``CGDisplayCreateImage`` + 像素差预过滤 + VLM provider 抽象（Qwen-VL-Plus 主选）；同时浏览器扩展拿 DOM 而非 URL（绕开 Tauri webview 限制）
-    - 工程量：2-3 天 / 8-10 commits，单独 session
-
-15. **Windows / Linux 平台 activity_monitor 不可用**（v3.5 chunk 8a 衍生）
-    - 现状：activity_monitor 全函数返 None；ActivityWatcher 仍然跑（不抛错），但 listener 拿不到任何 change → smart trigger 永远 skip
-    - 跨平台一致性：与 v3 阶段 macOS-only 整体策略一致（[DESIGN §二十](docs/archive/DESIGN.md)）
-    - 修法：Windows 用 win32gui ``GetForegroundWindow`` + UIA / Chrome DevTools Protocol 拉 URL；Linux X11 ``_NET_ACTIVE_WINDOW`` + 浏览器扩展。两边都是单独工程，留 v6+ Windows 客户端阶段处理
-
-16. **CC restore-user-tweaks 流程非幂等 backlog**（hotfix-8 副产，2026-05-13）
-    - 现象：chunk 8a commit 9 docs commit 期间 "restore user's runtime tweaks" 通过 shell ``cat >> file << EOF`` heredoc 拼接,对**已存在**的目标 key 不做幂等检测。结果工作树 ``config.yaml`` 出现 duplicate ``activity_watcher:`` block,Rust ``serde_yaml`` strict parse 报 ``parse yaml: duplicate entry`` 让所有 Tauri ``write_config_field`` 失败
-    - hotfix-8 闭环了实例修复(删 duplicate + ``.gitignore`` 备份保护),但**根因机制**仍在:未来 hotfix 期间任何 restore 流程仍可能引入 duplicate
-    - 修法 backlog:
-      - cc-task spec 中描述的 restore 操作前先 ``grep "^<key>:" file`` 检测,存在则 skip append
-      - 或用 ``yq merge`` 声明式合并工具替代 shell heredoc
-      - 测试期间用 strict YAML loader(自实现 ``StrictLoader`` mimic serde_yaml,见 ``tests/test_hotfix7_tts_toggle.py`` pattern)而非默认 permissive ``yaml.safe_load``
-    - 优先级低（用户授权后才动 config.yaml；非高频路径），工程量 < 1 hr
-
-17. **记忆表层历史债（v4.0.0 §5.8 → 表层重构 pass，立项）**
-    - 现状：`memory` 表混存"持久事实"（`expires_at` NULL）与"时效提醒"（`expires_at` 有值）；`type`（5 类 CHECK）与 `entry_type`（4 类）双列并存；supersede 无自身机制（新旧事实共存不替换）；`expires_at` signature 接受但 caller 全传 None；墓碑 check 无类型感知（可能误压合法重建的新提醒）
-    - 来源：v4.0.0 记忆线收口审计副产（与第 6 条 `characters.yaml` 双源、第 11 条 `profile_summary` 清理同性质）
-    - 修法：留待**表层重构 pass**（建议并入/紧随表结构重构那一局）—— 详 DESIGN §十五之 Z.5.1 移交清单 + §十四之B RT-1~5
-    - 优先级：结构债，日常不阻塞；不在 v4.0.0 ship 范围
-
-18. ~~**todos 整套**~~ ✅ commit `c1d65ff` 退役（2026-05-19）—— `add_todo / delete_todo / search_todo` LLM 工具链路自 v3-C 已退出主流程（PlannerAgent/MemoryAgent dead path），实际无任何写入源；`backend/agents/planner.py` / `backend/agents/memory.py` / `backend/scheduler/task.py` 整文件删；`/api/todos/*` endpoints 删；`services.py` 中 4 个 todo 函数删；`prompts.py` PLANNER 段死代码删；提醒能力由 `apple_calendar.create_event`(macOS EventKit) 承担。`todos` 表 + `Todo` ORM 保留空表 + `[RETIRED]` 注释，未 DROP TABLE，可作后续单独小刀。
-
-19. ~~**`switch_character` LLM tool silent failure**~~ ✅ commit `71b6e99` 下线（2026-05-19）—— 旧 `prompt_manager.switch_character` 仅认 yaml 5 个角色名，DB cid=1/99/100/101/102 切不动 silent failure。修法：`ToolRegistry.register("switch_character", ...)` 删除；prompts.py / tool_addendum.py 引导文字删；函数体 + schema 暂留 `backend/tools/builtin.py` 不动。前端切角色走 WS `character_switch` 帧（与此 tool 无关），不受影响。
-
-> ~~**用户画像污染**~~（"温柔陪伴 / 亲密关系 / 细腻敏感" 等反推词写入 profile_summary）✅ chunk 11 治本（2026-05-12）—— LLM 输出严格按 JSON schema，validator hard-reject 违规输出，注入用机械模板而非 LLM。
->
-> ~~**LLM hallucinate save_memory**~~（chunk 9 跨角色共享后放大）✅ chunk 10 治本（2026-05-12）—— memory 入库主路径改成 server-side worker（每 5 分钟 batch 提取 + 10 道 filter），``save_memory`` tool 降级为"用户明确说要记"的显式入口；entry 上打 ``extraction_source`` 区分来源，MemoryManagerDrawer UI 角标可见。
->
-> ~~**MCP Settings 一条 capability 一行 → 列表过长**~~ ✅ UX-001 治本（2026-05-12）—— ``ExtensionsSection`` 改 accordion，每 server 默认折叠成单行（含 ``X/Y cap`` 角标）；展开后看 capability 列表 + 单 cap toggle。新增 ``mcp_tool_state`` 表 + ``PUT /api/mcp/clients/{name}/tools/{tool}/enabled`` 路由持久化 per-tool override；server 关时所有 tool toggle 自动 disable 不需要清表（``_connect_one`` 时根据 override skip register 即可）。
->
-> ~~**情绪 UI 被 TopBar 挡**~~ ✅ UX-001 治本（2026-05-12）—— Panel 模式 ``CharacterStatePanel`` ``top: 12px`` 落在 TopBar (h-10 / z-50) 的 0-40px 范围内被压住。改 ``top: 48px`` 让状态条整体放到 TopBar 下方右侧，z-index 维持 30（不需要浮到 TopBar 之上盖 CharacterSwitcher dropdown）。
->
-> ~~**chunk 8a 切 VSCode 等 IDE 无主动消息**~~ ✅ hotfix-6 治本（2026-05-12）—— 根因是 ``_IDE_APPS`` 集合用 ``app.lower()`` 精确匹配，但 macOS NSWorkspace 返 ``"Code"``（CFBundleName），chunk 8a 默认列表只有 ``"visual studio code"`` 和 ``"vscode"`` 漏掉了实际名字。补全 IDE 集合（``code`` / ``code - insiders`` / ``cursor`` / ``windsurf`` / ``zed`` / JetBrains 整族 / Apple 编辑器 / 命令行家族）+ 触发链 6+ 条 INFO 级 log（``app detected`` / ``app changed`` / ``classify`` / ``throttled`` / ``skipped`` / ``proactive trigger fired`` / ``proactive trigger sent``），用户可在 backend.log 自我诊断为什么 trigger 没出。
->
-> ~~**MCP Settings 重新出现"全展开 + 平铺一长串"假象**~~ ✅ hotfix-6 防回归（2026-05-12）—— 用户切回 Skyler 后短暂看到旧形态（dev bundle hot-reload 缓存问题，代码本身 UX-001 已正确 gate）。把 ToolList 抽成独立 sub-component + 加 5 条结构断言锁死 ``useState<Set<string>>(new Set())`` / ``client.tools.map`` 出现次数 ≤ 1 / ``isExpanded`` gate 存在 / ``setExpanded`` 调用次数 == 2，未来 refactor 时硬性拦截"默认展开"回退。
->
-> ~~**CapabilityPanel 67 cap 平铺一长串 + MCP banner 信息重复**~~ ✅ UX-002 治本（2026-05-12）—— 把 SettingsPanel 内嵌的 CapabilityPanel 内 67 capability 全部 accordion 化 + 删除 CapabilityPanel 顶部 ``MCPServerBanner`` / ``MCPClientsSection``（与 SettingsPanel 底部 ``ExtensionsSection`` 信息重复，UX-001 + hotfix-6 已是更精致的 MCP 入口）。calendar Google OAuth footer + 测试简报按钮从单 capability card 抽到 category-level header（calendar 全 8 cap 共享同一 OAuth 状态）。新 ``CapabilityRow`` 通用 accordion 组件 + ``_briefDesc`` 长 description 截断 + ``{N} cap`` category 计数 badge。Settings 高度从 N 屏缩到 ~1-2 屏。
->
-> ~~**proactive trigger 路径 `<state_update>` tag 字面泄露到 widget**~~ ✅ hotfix-7 治本（2026-05-13）—— `backend/proactive/engine.py` 两个 stream 函数 ``run_trigger``（morning_briefing / lunch_call / dinner_call / activity-based 5 个 label）+ ``run_wake_call_trigger``（wake_call stage 2）漏挂 ``_parse_state_update``，state_update raw tag 直接进 ``text_chunk`` push。修法：两个 stream loop 各补一处 ``_parse_state_update`` + apply（与 ws.py 主路径 ``_apply_and_push_state_update`` 同语义，新 ``_apply_proactive_state_update`` helper 用 ``connection_manager.push``）。**外加最后一道 ``strip_all_for_tts`` 兜底**，作为 hotfix-1 4 道防线的第 5 道防回归 —— 每个 ``text_chunk`` push 前都走 strip，正常路径 idempotent no-op，任何 parser 漏点或未来新 LLM 标签格式也不会让 raw tag 进前端。``_strip_format_tags`` 持久化前 strip 链也从只覆盖 3 档（emotion / motion / thinking）升级到 5 档完整（加 state_update + tool_call fallback）。
->
-> ~~**SettingsPanel TTS toggle 写入失败显示 "undefined"**~~ ✅ hotfix-7 治本（2026-05-13）—— 真因：Tauri ``invoke('write_config_field', ...)`` 在 Rust 端 ``Result<(), String>`` 返 ``Err(msg)`` 时 JS reject 收到的是**plain string** 不是 Error 对象。前端 catch ``(e as Error).message`` 走 string 上无属性 → 返 undefined → toast "TTS 写入失败：undefined"。修法：``setConfigField`` 用 try/catch 包 invoke + ``typeof e === 'string'`` 分流 + ``throw new Error(...)`` 重新抛；``/api/config/reload`` 失败带 HTTP status + body.slice(0, 120) 摘要；前端新 ``extractErrorMessage(e: unknown)`` 三档兜底 helper（string / Error / object），``remoteToggle`` + ``writeField`` 失败 toast 改用 helper 不用 ``(e as Error).message``。
->
-> ~~**config.yaml 出现 duplicate `activity_watcher:` block 让 Tauri 写入全失败**~~ ✅ hotfix-8 治本（2026-05-13）—— 根因是我自己的锅:chunk 8a commit 9 docs commit 期间 "restore user's runtime tweaks" 流程**非幂等** —— restore 脚本对一个**已经含** activity_watcher block 的快照又 ``cat >> EOF`` 第二次追加,工作树出现两个 bit-identical block。Python ``yaml.safe_load`` 永久 permissive(silently 取最后一个)所以 backend lifespan / 测试都没暴露;Rust ``serde_yaml`` strict parse 直接 ``parse yaml: duplicate entry`` Err,导致所有 Tauri ``write_config_field`` 调用失败。**hotfix-7 暴露了真因**(error normalize 让 toast 显示具体 error 而非 undefined)。修法:删除 233-270 重复 block + ``.gitignore`` 加 ``config.yaml.backup-before-*`` pattern + 测试用自实现 ``StrictLoader`` mimic serde_yaml 验证。
->
-> ~~**chunk 8a `_IDE_APPS` 中文 macOS 漏 `'终端'` localizedName**~~ ✅ hotfix-8 治本（2026-05-13）—— hotfix-6 commit 3 修过一次 _IDE_APPS 但只覆盖英文 macOS NSWorkspace localizedName(``Code`` / ``Cursor`` 等);中文 macOS 系统下 ``NSWorkspace.frontmostApplication.localizedName`` 对**有 zh-Hans lproj 的 Apple 原生 bundle**(``Terminal.app``)返 ``'终端'`` 而非 ``'Terminal'``。补全 _IDE_APPS 加 ``'终端'`` + ``'terminal'`` + 第三方终端(iTerm2 / Alacritty / WezTerm / Warp / Kitty / Hyper)整族 9 个 alias。**audit finding**(隐式 skill 沉淀): 只有 Apple 自家原生 app 在中文 macOS 上 localize CFBundleDisplayName;第三方编辑器 / IDE / 终端 bundle 不带 zh lproj,中文系统仍返英文名 —— 未来扩展集合无需为 VSCode / Cursor / JetBrains 等加中文 alias。
->
-> ~~**CapabilityPanel category 标题固定 + 多 provider category 内 capability 平铺**~~ ✅ UX-003 治本(2026-05-13)—— UX-002 把 67 capability 改单行 accordion 后 Settings 仍 N 屏。UX-003 三层 accordion 全栈:layer 1 — 9 个 category 标题改 ``<div role="button">`` (避免嵌套 ``<button>`` 非法 HTML),整行可点 + Enter/Space 键盘,默认 ``useState<Set<string>>(new Set())`` 全折叠;layer 2 — 多 provider category(calendar 3 provider / mcp_external 2 / media 4)按 ``_extractProvider(capName)`` 自动分组(``ext.X.Y`` 拼回 ``ext.X``,其他取首段),provider row 默认折叠,展开后渲染 capability list。单 provider category(其他 6 个)跳过二层与 UX-002 行为一致;layer 3 — UX-002 CapabilityRow 单 cap 行内 description/谁能调/触发等。``PROVIDER_DISPLAY = {media: 'media_control'}`` 映射避免与 category title MEDIA 视觉撞名。Settings 高度从 ~2 屏 → ~1 屏。
->
-> ~~**情绪 UI 在 Panel 右上角挡住聊天历史按钮**~~ ✅ UX-003 治本(2026-05-13)—— UX-001 commit 3 修过情绪条 top offset(``top: 12px → 48px`` 避开 TopBar)但仍 ``right: 16px``,与 modes/Panel.tsx 内 ``<button className="absolute top-4 right-4 z-30">[ScrollText] 历史</button>`` (打开聊天记录抽屉)视觉重叠 + hover 互相覆盖。UX-003 commit 3 改 ``right: 16px → left: 16px``,左上角实测完全空闲(CharacterView ``absolute inset-0 z-0`` 满铺背景无 positioned 元素),挪过去无冲突。Widget 模式不动(无 TopBar/无历史按钮)。z-index 30 维持(不浮 TopBar 之上避免反向遮 CharacterSwitcher dropdown)。
->
-> ~~**chunk 8a activity trigger 只覆盖硬编码白名单(IDE/音乐/技术文档),普通网页/Twitter/招聘页等无主动陪伴**~~ ✅ chunk 8a-ext 治本(2026-05-13)—— 加 ``ActivityJudge`` 慢路径:用户停同一 app/URL 5+ min 时调 qwen-turbo 让 LLM 判断 ``{speak: bool, reason, topic_hint}``,yes 走现有 proactive engine fire ``activity_judge_chime_in`` 主动开口,no 静默。三重门防滥用:``min_stay_minutes`` (5) + ``judge_throttle_minutes`` (10) + 共享 ``fire_throttle`` (30 min)。共享 ``daily_cap`` (5/天) 计数器(快慢路径同一 counter,total 主动消息严格 ≤ cap)。``topic_hint`` 作 anchor 注入主 LLM (ChatAgent) system prompt 让 Momo 知道往哪个方向搭话(不强制,LLM 仍自由发挥)。markdown fence 容错 + ``speak`` 字段 bool/string/int 多形态容忍 (chunk 10/11 同模板)。LLM 异常 silent None + 记账 throttle 防 retry storm。``SettingsPanel [活动感知] section`` 加二级 toggle"智能陪伴 — qwen-turbo 判断"默认 ON 可关。新 ``activity_judge.py`` (337 行) + ``activity_smart.judge_poll_handler`` + ``activity_watcher.register_poll_listener``。
->
-> ~~**chunk 8a `get_active_app` 用 `NSWorkspace.frontmostApplication` 在 headless backend 进程缓存于启动那一拍,30 min 后切多少次 app 都报启动时的 frontmost(`app='终端' url=—`),所有屏幕感知 / 主动陪伴 / chunk 14 activity timeline 数据全错**~~ ✅ hotfix-10 治本(2026-05-13)—— ``NSWorkspace.sharedWorkspace().frontmostApplication()`` 通过 ``distributed notifications`` 接收 frontmost 变化事件,dispatch 这些事件需要 ``NSRunLoop`` 在主线程跑;headless Python 进程(daemon / 子进程 / 任何非 GUI 应用)没有 NSRunLoop,事件永远不被 deliver → 内部缓存永远是启动那一拍的值。经典 macOS pyobjc 坑。**实测证据**:用户启动 backend 时 Terminal frontmost,之后切 Safari / Chrome / 任何 app,backend log tick=2 到 tick=27 持续 30+ 分钟全是 ``app='终端' url=—``。修法:走 ``osascript -e 'POSIX path of (path to frontmost application)'`` 子进程,每次 fork 不依赖 parent RunLoop,osascript 自己起完整 AppleScript 环境查 frontmost,返完即退;延迟 30-80ms,与 chunk 8a-ext V2 ``ioreg`` + chunk 8a browser tab AppleScript 同 pattern,**零新依赖**。**副作用 — 返英文 bundle 名**(``"Terminal"`` / ``"Code"`` / ``"Safari"``)而非 NSWorkspace.localizedName 在中文 macOS 上返的本地化中文名(``"终端"`` / ``"Safari浏览器"``)。所有下游 ``_IDE_APPS`` / ``_BROWSER_APPS`` / ``_MUSIC_APPS`` frozenset 已涵盖英文 keys,hotfix-6/8 加的中文别名(``"终端"``)post-fix 转为 dead code 但**不删**(backward compat + 历史文档价值)。chunk 14 LLM-facing 注入文本(``format_today_activity_for_prompt``)走单独 ``_APP_DISPLAY_NAMES`` mapping(``Code → "VS Code"`` / ``Terminal → "终端"``)解决中文 macOS 用户阅读体验,DB / stay_key / capability return 一律英文 bundle 名保跨 locale 稳定。**audit 副产物 bug**:``_BROWSER_APPS`` 含 ``"safari 浏览器"`` (带空格),但真实 macOS NSWorkspace 返 ``"Safari浏览器"`` (无空格) — 那条中文别名在 hotfix-10 **之前就已经是无效代码**,中文 macOS Safari 用户 pre-hotfix-10 ``get_browser_url()`` 一直返 None。hotfix-10 incidentally 通过英文 bundle 名绕过这条 bug。**138 PASS** 跨 6 个 chunk 8a / 8a-ext 测试文件 / 0 regression。
->
-> ~~**chunk 8a `get_chrome_active_tab` / `get_safari_active_tab` 不查 frontmost,Chrome 后台开着 bilibili 时 stay_timer 仍把 bilibili 算作 active URL,触发 judge 让 Momo 主动聊"看到你在看招聘"**~~ ✅ hotfix-9 治本(2026-05-13)—— chunk 8a 的两个 raw AppleScript helper(``tell application "Google Chrome" to get URL of active tab of front window``)只要 Chrome 进程跑且有窗口就返 URL,**不**查 Chrome 是不是 macOS frontmost。下游 ``ActivityWatcher.snapshot()`` 直接信任这个返值塞进 ``state.browser``,``_detect_changes`` 不重置 ``_url_dwell_start``,``get_current_stay_info`` URL 优先返 ``key=url:bilibili duration=300s+``,chunk 8a-ext judge 调 qwen-turbo 看到"停 5+ min" → fire ``activity_judge_chime_in`` → Momo 主动聊招聘 → 用户错愕"为啥跟我聊我没在看的东西"。**audit 决定**:修法选 activity_monitor 层包 wrapper 而不是 AppleScript 内嵌 ``frontmost of (process X of system events)`` —— 后者需要 Accessibility 权限(NSAppleEvents 之外又一道弹窗,UX 不友好);前者用 ``NSWorkspace.frontmostApplication.localizedName`` 零额外权限,与 chunk 8a ``get_active_app`` 同源。新 ``backend/integrations/activity_monitor.get_browser_url() -> Optional[Tuple[browser, url, title]]``:先 ``get_active_app()`` 拿 frontmost localizedName,在 ``_BROWSER_APPS`` frozenset(Chromium 系 / WebKit / Gecko 中英文 alias 全覆盖,对齐 hotfix-8 i18n 教训)命中才路由对应 AppleScript;非命中 / 识别但无 impl(Firefox/Edge/Arc 等) → None。raw primitives 保留作既有 9 单元测试 + 内部工具。**stay_key 逻辑不动** —— ``get_current_stay_info`` 既有"URL 优先,无 URL fallback app"正确,只要上游 ``snapshot.browser=None``(非浏览器 frontmost)``_detect_changes`` 自然把 ``_url_dwell_start`` 重置到 0,stay 自动 fallback ``app:VSCode``。``backend/capabilities/screen.{get_browser_url, get_browser_content}`` LLM capability 同接 wrapper,LLM 通过 capability 问"用户看什么 URL"时也获得 frontmost 语义。**137 PASS** 跨 7 个 chunk 8a / 8a-ext 相关测试文件 / 0 regression。
->
-> ~~**chunk 8a-ext 慢路径 judge 在"人离开电脑但前台不变"(开会去了 / 锁屏睡觉)时仍 fire,Momo 对着空椅子自言自语**~~ ✅ chunk 8a-ext V2 治本(2026-05-13)—— 加键鼠 idle 第 4 道闸:``backend/integrations/activity_monitor.get_idle_seconds()`` 跑 ``ioreg -c IOHIDSystem`` 子进程,正则抽 ``HIDIdleTime`` 字段(纳秒)/ 1e9 转秒。``maybe_judge`` 在 ``_record_judged`` 之后、``_build_judge_prompt`` 之前查 ``get_idle_seconds() > idle_threshold_seconds`` (默 300s),命中 → logger.info 标"away from computer" + return None,**LLM 没跑、不烧 token、不 chime in**;throttle 已经记账避免 idle 闸 on/off 之间反复 retry。**audit 决定:选 ioreg 而非 ``pyobjc-framework-Quartz`` 因为零新 pip 依赖**(复用 chunk 8a osascript subprocess 范式 + timeout 2s + ``check=False`` + silent None fallback)。跨平台 graceful:非 macOS / ``shutil.which("ioreg") is None`` / ``TimeoutExpired`` / 异常 / 非零 returncode / 正则不匹配 → 全部 silent None,调用方按"假定活跃"维持 V1 行为(linux/windows 不挡)。``SettingsPanel`` 在智能陪伴 toggle 下条件渲染 ``<input type="number" min=0 max=3600 step=30>`` (仅 judge 开时显示,关时无意义不暴露),blur/Enter 触发 PATCH ``judge_idle_threshold_seconds``,backend ``max(0, min(3600, v))`` clamp 防 UI 误输入,0 = 关闸保留老 V1 行为。新 ``backend/integrations/activity_monitor.py`` ``get_idle_seconds`` (+70 行) + ``backend/proactive/activity_judge.py`` ``get_idle_threshold_seconds`` + idle 闸 (+27 行) + ``tests/test_chunk8a_ext_v2_idle.py`` 21 case 全 PASS(V1 30 + V2 21 = 51 PASS / 0 regression)。
-
----
-
-## Prior art
-
-Skyler exists in a landscape where two open projects already define edges of it:
-
-- **[Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber)** — the polished VTuber companion experience. A great pre-packaged app if that's what you want.
-- **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** by Nous Research — a serverless personal-agent platform with self-improving skill loops.
-
-Both are excellent at what they aim to be. Skyler is aimed at the gap between them — desktop, character-driven, hackable down to the agent core, and owned end-to-end by the user. The architecture choices follow from that gap, not from a checklist of competitor features.
-
-Where they're ahead of Skyler today is in [Comparison](#comparison) above — listed honestly so you can pick the right tool.
-
----
-
-## Project Status
-
-**v4-beta wrap-up phase + INV-11 全段 ship (May 2026).** Persona Engineering five-layer framework + memory/conversation three-level isolation + conversation-anchored binding semantics + unified chat UI + Mai ja TTS via self-hosted GSV mai_v4 + 9-character provider × model × voice paradigm are shipped and verified on-device.
-
-Remaining v4.0.0 wrap-up items: long-term memory chain audit ✅ (remediation shipped & code-verified; pending real-device regression) → TTS/conversation cost gates → Stage3 packaging & release. P1/P2/P3 + 5070ti-triggered tracks see ROADMAP. The full implementation log (every chunk, hotfix, UX iteration) lives in [ROADMAP.md](ROADMAP.md) — that's the honest history.
+- **Now** — v4.0.0 wrap-up (long-term memory on-device regression → packaging release)
+- **Next** — demo video · character mechanism (state read-back + DailyAgent) · image-input persistence · desktop write-action confirm gate · seven-character real personas · memory architecture v2 + RAG
+- **Later** — context arbitration · persona-level learning · screen VLM · Live2D AI director · Cubism5
 
 ---
 
 ## License
 
-Currently **All rights reserved** (no LICENSE file). Will switch to a permissive license (MIT or Apache 2.0) when the repo goes public — note: any Live2D models bundled later will carry their own Live2D Inc. licenses, which are *not* covered by Skyler's eventual project license.
+Code is currently **All rights reserved** (no LICENSE file); on public release will switch to a permissive license (MIT / Apache 2.0).
 
-### Live2D model license
-
-During development Skyler ships with the official Live2D sample model **Hiyori** (under `frontend/public/live2d/hiyori/`), illustrated by Kani Biimu, plus a **Yae demo skin** (under `frontend/public/live2d/yae/`) for testing per-character `motion_map_json` rebinding. The Hiyori model is distributed under the **Live2D Free Material License Agreement** — development, learning and small-scale commercial use are permitted; medium-to-large enterprise commercial use requires a separate written license from Live2D Inc. The Yae demo skin carries its own upstream license terms.
-
-A later release will swap Hiyori out for an owned/commissioned model. At that point the bundled model is governed by its own original license, *not* Skyler's eventual project license.
+**Live2D models are separate** — the development build bundles the official Hiyori sample (Live2D Free Material License, small-scale commercial OK; mid/large enterprise commercial use requires written authorization from Live2D Inc.) plus a Yae demo skin (per its upstream license). Future builds will switch to owned / commissioned models; those will remain under their own licenses and are **not** covered by the Skyler project license. Any assets you add yourself, you're responsible for licensing.
 
 ---
 
-## Contributing
+## Deeper reading
 
-Not currently accepting external contributions while the project is in private development. See you when we go public.
+- [DESIGN_LITE.md](DESIGN_LITE.md) — design source of truth, anchored to code
+- [ROADMAP.md](ROADMAP.md) — current capability status + near-term plan
+- [docs/EVOLUTION.md](docs/EVOLUTION.md) — version × feature evolution matrix
+- [docs/research/persona-schema-comparison.md](docs/research/persona-schema-comparison.md) — persona-card schema research (vs SillyTavern)
+- [docs/design/character-mechanism.md](docs/design/character-mechanism.md) — character-mechanism design seed
+- [docs/design/dailyagent-plan.md](docs/design/dailyagent-plan.md) — DailyAgent (Brick 2) full design
+- [docs/design/desktop-control.md](docs/design/desktop-control.md) — desktop awareness / control roadmap
+- [docs/PM-CC-PROTOCOL.md](docs/PM-CC-PROTOCOL.md) — how I work with Claude Code

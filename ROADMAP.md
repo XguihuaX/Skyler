@@ -1,441 +1,165 @@
-# 🗺️ Skyler Roadmap
+<!-- 给用户审阅的新 ROADMAP(对应 ROADMAP.md)。落库前:
+     ① CC 把所有状态 badge 回代码核;② 完整时间线已移出 → docs/EVOLUTION.md(版本×功能矩阵)+ IMPLEMENTATION_LOG.md;
+     ③ 深 chunk 历史 + 详细 Tech Debt 由 CC 迁到 IMPLEMENTATION_LOG,这里只留近期计划 + 当前状态 + 前瞻。 -->
 
-> Skyler 是一个**可塑型 AI 角色容器** —— 桌面端、角色驱动、能拆到 agent 内核、所有权归你。这条路线图按四条支柱组织,版本号 / chunk 罗列见末尾 [Implementation Log](#implementation-log-historical)。
+# 🗺️ Skyler · ROADMAP
 
-> **状态(2026-06-15)**:v4-beta 收口阶段后期 + **进入动画 + 持久角色 + 立绘馆发牌入场 ship**(Beat0 上电预补 + Beat1 boot-log + Beat2 暖揭幕 + 加载完成 latch + 「輕觸進入」 dismiss;`users.current_character_id` 持久;立绘馆 stack→stage-up→reveal 三态机)+ **大窗陪伴 UI 重做 ship**(全窗壁纸 + 浮动玻璃组件 + 心情小标 + 系统状态页)+ **背景架构解耦**(壁纸跟角色脱钩 + appData 用户上传)+ **VAD/ASR desync 部分根治**(三道闸:store-init LS + silero 切手动自动 pause + manual→vad 重入修;仍有手动模式偶发"在听" known issue,见 P1)+ **Live2D 表演层 ship**(commit `c14065b` · 转头 GAIN ±15° + 身体微晃 + 冰糖去水印 · 单 `beforeModelUpdate` hook 复用 · 详 §Live2D 表演层 + 阿芙洛狄忒 · DESIGN_LITE §7.6)+ **阿芙洛狄忒 fense 模型上线**(moc3 v4 + 6 motion + 5 expression + ParamMouthOpenY 标准命名 lipsync 零代码)。**GSV 本地 TTS 迁移 IN PROGRESS** —— 分支 `gsv-thin-and-global-server` 未 commit · 连接通 / synth 出真音 ✓ / 中文音色跨语种飘待查(详 §GSV 段)。INV-11 全段 ship + Persona Engineering 五层框架 + 记忆/对话三级隔离 + conversation 锚定绑定语义。**9 character · 3 TTS provider(cosyvoice / fish / gsv)· 6 LLM 可切 / 现役 deepseek-v4-pro · 4 Live2D model on-disk(hiyori + yae + 冰糖 / 神宫白子 / 艾莲 / 卡芙卡 / 阿芙洛狄忒 / 等 v4 一组 · 妮可 / 知更鸟 / 秧秧 / 妮可 等 v5 等 Cubism 5 runtime · 7/9 角色 fallback hiyori)**。下方进入动画闭环段 + Live2D 表演层 + GSV IN PROGRESS + Now / P1 / P2 / P3 + 5070ti 触发 + 5 项 doc-only 决策见各小节。
-
-**Legend**: ✅ shipped · 🚧 in progress · 📋 planned · 🔬 research
+> 一眼看清:现在每块能力到哪一步、接下来做什么。
+> 项目怎么一步步长出来的(版本 × 功能)→ [EVOLUTION.md](docs/EVOLUTION.md)。
+> 完整 chunk / hotfix 级实施日志 → [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)。
 
 ---
 
-## 进入动画 + 持久角色 + 立绘馆发牌全段闭环(2026-06-07~08 · UI 入场新范式)
+## 近期计划
 
-| 主题 | 状态 | Notes |
+**Now —— v4.0.0 收口**
+- 长期记忆链路真机回归 + friend-test(验收门,CC 不自证)
+- Stage3 Tauri 打包 / dmg / dogfood / tag
+
+**Next**
+- **demo 视频**(锁定里程碑,作品集核心交付)
+- **角色机制 Brick 1+2** —— 状态读回 + DailyAgent 切片(见下「核心专项」)
+- **新角色 TTS:Fish 挂载** —— Fish S2-Pro provider + 可插 provider 层**已通**(GSV / CosyVoice / Fish);Next = 给新角色真挂上 + per-character 选择验收
+- **第二个独立角色(`cid=100`)** —— 完整 persona + 立绘 + 音色(先挂 Live2D + 默认,全套后续)
+- **图片输入持久化** · **桌面写控件确认门验证** · **七角色真 persona** · **记忆架构 v2 + RAG 第 4 层**
+
+**Later**
+- **角色机制 Brick 3+4** —— 状态加规则 + 上下文仲裁(见下)
+- **Persona Schema v2** —— 修死字段(`relationship_to_user` 等 load 了不进 prompt)+ 文档漂移 + 借交换式 voice_samples;详 [docs/research/persona-schema-comparison.md](docs/research/persona-schema-comparison.md)
+- **persona-level learning** · **屏幕视觉 VLM** · **多模态图片输出(ComfyUI)**
+- **Live2D AI 导演 + 贴纸系统 + 公参表** · **Cubism5** · **整体 UI 升级**
+- **messaging gateway**(Telegram / Discord)· **凭证进系统钥匙串** · **DESIGN_LITE 更新**(单独 pass)
+
+---
+
+## 当前能力状态
+
+> 🟢 已验 · 🟡 在做 / 已建未验 · 🔴 有 bug · 🔵 想升级 · ⚪ 计划 / 未实现。状态回代码核。
+
+### 角色(= 核心「角色机制」)
+- 🟢 Persona 五层框架
+  - 🟢 Tier-1(身份 / 性格 / 语气)+ Tier-2(禁忌 / 设定 / 情绪触发 / voice samples)+ 多 variant
+  - 🟢 Mai(`cid=1`)完整 persona(参考实现)
+  - 🟡 第二个独立角色搭建中(`cid=100` 槽位,Live2D 挂上、默认;人格 · 音色 · 立绘后续)· `cid=101` = Mai 日语变体(独立)· ⚪ 其余空骨架
+- 🟡 角色状态层(FSM)—— **弱 / 花架子**
+  - 🟡 mood / intimacy / current_activity / current_thought 字段 + `<state_update>` 写入
+  - 🟢 intimacy 每日衰减 cron
+  - ⚪ 规则演化 · 🟡 状态部分读回(C4 段已注入 mood/intimacy/activity,影响力 / 范围待评)
+- 🟡 DailyAgent(连贯的一天)—— Stage1 + 立绘馆日程 viz 已建,HOLD 未验;设计 → [docs/design/dailyagent-plan.md](docs/design/dailyagent-plan.md)
+- ⚪ 上下文仲裁(状态 + 输入 → 反应)
+- ⚪ persona-level learning
+- 🟢 角色详情中心(立绘馆内看 persona / 心情 / 状态 + 编辑 persona)
+- 🟢 多角色 conversation 锚定(切角色不串台、回复不丢)
+
+### 记忆
+- 🟢 短期记忆(用户 / 角色 / 对话 三级隔离 + 滚动摘要)
+- 🟡 长期事实记忆(事实抽取 + 遗忘曲线 + 墓碑,代码核验;陪伴质量待真机回归)· ⚪ RAG 第 4 层
+- 🟢 用户画像(跨角色一份印象)· 🟢 活动时间线(30 天,可被角色引用)
+- ⚪ 记忆架构 v2(一角色一永久对话流)
+
+### 对话
+- 🟢 语音 / 文字皆可 · 🟢 逐句流式(文字 + 按句音频)
+- 🟢 tool 调用过渡话 + loading pill(不卡 30s 沉默)
+- 🟢 assistant 说话时自动静音 mic(防回声)
+- 🟢 深度思考 / 联网双开关(聊天框 + 设置双入口,默认关思考求快)
+- 🟢 聊天气泡本地时间戳
+
+### 多模态(输入 / 输出)
+- 🟢 语音输入:VAD(silero,阈值可调)/ 手动录音 / 本地 whisper ASR + 实时回显
+  - 🔴 手动模式偶发"麦还在听"间歇 bug(诊断仪器已就绪)
+- 🟢 语音输出 TTS:多 provider(GSV / CosyVoice / Fish)+ per-character 选择;自训 `mai_v4`(本地,16 情绪,ja);文本 / 语音语言解耦
+  - 🔵 字幕恒中文 → 多语言
+- 🟢 文件输入 / 输出
+- 🟡 图片输入(传图 → 喂当前主模型;⚪ 持久化:现仅存"[图片]"占位,重启丢图)
+- ⚪ 图片输出(接 ComfyUI / anime)
+
+### Live2D
+- 🟢 表演层(待机微动 / 转头看你 ±15° / 眨眼呼吸 / 口型同步)
+- 🟢 模型管理(多模型可换 + 扫描接入,Cubism 4)· 🟢 取景层(构图缩放 / 移动)
+- 🟡 情绪 → 表情(`<emotion>` 驱动)
+- 🟡 角色台词气泡:🟢 桌宠(widget)已上 · 🟡 大窗(panel)暂关留复活
+- ⚪ 统一管理:动作库 + 选择策略 · AI 导演(一情绪同调 动作+表情+贴纸)· 原创贴纸通道 · 公参表
+- ⚪ Cubism5
+
+### 桌面感知 / 控制(UIA)
+
+> 完整设计 + Phase 1-3 路线 → [docs/design/desktop-control.md](docs/design/desktop-control.md)。
+
+- 🟢 文本级屏幕感知(active app + 浏览器 URL + 页面正文,19 条隐私黑名单)
+- 🟢 只读 AX 读屏(`read_current_screen`,macos-use,06-21 真机验)
+  - 🔴 self_frontmost 大小写 bug(Skyler 前台会读自己的树;一行修待 build)
+- 🟡 桌面写控件(macos-use 8 工具:click / type / open / scroll / ...)
+  - 🟢 已建 + DB enabled + ChatAgent 可调
+  - 🟡 确认门 model-driven 触发**未验**(安全门)
+- ⚪ 屏幕视觉 VLM(AX 盲区 fallback)
+
+### 主动陪伴
+- 🟢 到点问候(早 / 午 / 晚 / 睡前,trigger pack)
+- 🟢 活动触发(快路径分类 + 慢路径 LLM judge)
+- 🟢 防滥用(多重 throttle + daily cap + idle 闸)
+- 🟡 据角色状态搭话(待角色机制深化)
+
+### 工具 / MCP
+- 🟢 MCP 双向(client 消费外部 server + server 暴露自身能力)
+- 🟢 服务器搜索 + 别名 · 🟢 per-tool 开关 + dangerous_tools gating(框架)
+- 🟢 内建集成:日历(Apple + Google)/ 网易云 / B站 / 文档读写 / 剪贴板 / 小红书(只读)/ Notion
+- 🟢 web 搜索(模型内置,可开关)
+- 🟢 危险操作二次确认门(框架在;model-driven 写触发未验)
+- 🟡 凭证明文 → ⚪ 进系统钥匙串
+- ⚪ 图片生成(ComfyUI)· ⚪ skill 系统
+
+### UI / 界面
+- 🟢 双模式(大窗 Panel / 透明桌宠 Widget)· 🟢 进入动画(4 路健康 gate)
+- 🟢 立绘馆(发牌入场 + 角色详情)· 🟢 浮玻璃陪伴态(玻璃外观自定义,对比度可调)
+- 🟢 8 套主题 · 🟢 全局壁纸(跟角色解耦)· 🟢 系统状态浮层
+- 🟢 各管理面板(MCP / Live2D / 角色 / 音色)· 🔵 整体视觉升级
+
+### 可观测 / 启动
+- 🟢 用量 / 资源 / 启动耗时监控 + 异常高亮 · ⚪ 成本面板 + 缓存命中率
+- 🟢 启动健康检查(embedding / whisper / ws / live2d 四路 gate)· 🟢 持久"上次角色"· 🟢 Tauri 框架
+- ⚪ dmg 打包 / 自动更新 / CI release
+
+---
+
+## 核心专项:角色机制(角色判断状态机)
+
+> 项目最核心的差异化方向 —— 把现在"弱 / 花架子"的角色状态,做成一套真正驱动反应的**判断管线**:
+> 感知 / 输入(UIA · 活动 · 用户消息)→ 状态(persona + FSM + DailyAgent)→ **上下文仲裁(判断)** → 反应。
+> 完整管线设计 → [docs/design/character-mechanism.md](docs/design/character-mechanism.md)(设计种子,本节只列"做什么 + 什么时候")。
+
+分四步走,emergent 不 big-bang(每块基于已有砖):
+
+| Brick | 内容 | 阶段 |
 |---|---|---|
-| ✅ **进入动画 (LoadingScreen) Beat0/1/2 + appReady 4 路 gate** | shipped + 真机 ✓ | commits `f4fe120` / `3068849` · `frontend/src/components/loading/`(LoadingScreen + loading.css)+ `frontend/src/lib/loading/`(engine + types + companionLoading config)+ `frontend/src/hooks/useLoadingSequence.ts` · **三拍架构**:Beat 0 power-on preamble(dark hold 0.5s + 双线 ±55° pivot 1.3s + 0.76s 门式拉开 + flare · cubic-bezier(.42,.04,.2,1)· 中性暖白线 token 独立) / Beat 1 boot-log(等宽 mono + 真实 BootTracker snapshot 21 行 + 顶 telemetry + 右锚 SVG wireframe + 弧 HUD + per-line glyph 分层) / Beat 2 暖揭幕(角色 splash + 标题级联 + 花瓣 + 「輕觸進入」呼吸) · **appReady 4 路 gate**:embedding + whisper + ws + live2d(无 VAD)· **加载完成 latch**:engine done 真触发 → `> SYSTEM READY ✓` glow 脉冲 + 600ms 桥 → Beat1→Beat2 crossfade 2.8s · **dismiss**:Enter / Space / window click(Meta/Shift/Ctrl/Alt/Esc/方向/F* 全拒,Cmd 误触 bisect 实证 cut)· **engine 起步晚 3s** 让 boot-log 0% 起爬 · reduce-motion 跳 preamble 直 'done' · 60s 安全网兜底 engine 真死 · **删旧视频 splash**(`SplashOverlay.tsx` + `frontend/public/splash/intro.mp4`) |
-| ✅ **`main.tsx` 预 resize 修小窗→大窗闪** | shipped + 真机 ✓ | commit `3068849` · `bootstrap()` async 包 `createRoot` · React render 前 `await applyModeWindowProps(persistedMode)` · Tauri 窗口直接以正确 mode 大小起 · 不再 350×500 → 1100×750 闪一下 · 非 Tauri 环境 try/catch 吞 · App.tsx mount useEffect 同套 safety net 保留(幂等) |
-| ✅ **持久"上次选的角色" · `users.current_character_id`** | shipped + 真机 ✓ | commit `f4fe120` · DB migration `v4_users_current_character.py` 加 `current_character_id INTEGER NULL`(软引用 · 不设 FK · 指向已删角色静默回落 Momo)· `backend/routes/ws.py:_persist_current_character` helper · `character_switch` **真 handler**(endpoint loop)调用持久(bisect 实证 `_handle_message` 内同名分支是 dead code · helper 在那也调一次作保险防新入口漏)· `_resolve_conv_char` 三级兜底链:incoming → `users.current_character_id`(校角色存在)→ Momo by name · `GET /api/users/{id}/profile` 返新字段 · App.tsx mount 优先用持久 id(校 chars 有效)· 失败/无效 fallback `chars[0]` |
-| ✅ **立绘馆发牌入场 §3 三态机** | shipped + 真机 ✓ | commit `3068849` · `CharacterGallery.tsx` `introStage: 'stack' \| 'stage-up' \| 'reveal'` 三态机 · 新文件 `frontend/src/components/character/galleryIntro.css` · 650ms stack(bg/HUD/fan 全收) → stage-up(bg/HUD 升起 0.9s · fan 仍收) → reveal(fan wrapper translateY/scale/opacity 升 0.6s)· gate:roster 没就绪(`characters.length === 0`)停 stage-up 等 · replay 按钮(右下 ↻) · 删底部 hint "点边卡切换 · 点中心卡查看详情" · **FanLayout 一字未改**(framer-motion inline transform vs 外部 stagger 冲突;per-card 错峰甩入 tech debt) |
-| ✅ **能力页 GSV / Fish provider 卡 · 测试连接 re-arm** | shipped + 真机 ✓ | commit `18453e8` · 后端新 endpoints `gsv/ping` + `fish/key_status` · 前端能力页 GSV / Fish provider 卡片(行列表 + 可折叠)· "测试连接" 按钮 + result re-arm 状态机 |
-| ✅ **小窗打字输入 + 心情标右上裸显对齐** | shipped + 真机 ✓ | commit `aa2050a` · widget 模式 chat 输入丸支持打字 · 心情标(CharacterStatePanel)右上对齐裸显(不撑卡)|
-| ✅ **VAD 手动态三道闸 + manual→vad 重入** | shipped + 真机 ✓ | commit `729cd9f` · 三道闸 = ① 手动态 silero callbacks(`onSpeechStart`/`onSpeechEnd`/`onVADMisfire`)early-return 防偷送 voice · ② useEffect 自愈 fallback 翻 vadState='sleep' · ③ `recoverStream` 兜底 pause silero 引擎 · 配合 manual→vad 重入修(`recordingMode==='manual' && vadState==='sleep'` 时切回 vad 自动 toggleVad)· **注:仍有手动模式偶发"麦还在听"间歇 bug 未根治** · 已修 5 个根因(LS desync + 自动 pause + 三道闸)· 真因待用 🎙 VoiceCard 现场抓 |
+| **1 · 状态真读回** | mood / current_activity 进 prompt、真影响生成(最便宜的第一步) | Next |
+| **2 · DailyAgent 最小切片** | 每天生成连贯日程 → ticker 驱动 current_activity(Stage1+viz 已建,HOLD;设计 [dailyagent-plan.md](docs/design/dailyagent-plan.md)) | Next |
+| **3 · 状态加规则** | mood / energy 衰减 / 转移,成真 FSM | Later |
+| **4 · 上下文仲裁** | 状态 + 输入 → 判断当下该有的反应(判断管线的"判断点")| Later |
 
-> 详 git log Range `f4fe120..3068849` · 关联 Lesson #38(React effect 死锁修法)· 关联 Tech Debt 表"进入动画衍生" 8 条。
+> 前置:CC 先只读 dump `character_states` 现状(状态是否读回生成),定 Brick 1 是"补"还是"从头"。
 
 ---
 
-## Live2D 表演层 + 阿芙洛狄忒(2026-06-14 · commit `c14065b`)
+## 已知问题 / 技术债(摘要)
 
-| 主题 | 状态 | Notes |
-|---|---|---|
-| ✅ **Live2D 表演层 · pixiCubism4 runtime hook** | shipped + 真机 ✓ | commit `c14065b` · `frontend/src/lib/live2d/runtimes/pixiCubism4.ts`(+158 −1)· 全部 3 件事走单一 `internalModel.on('beforeModelUpdate', ...)` hook 复用(SDK emit 时机 = motion / expression / eyeBlink / focus / breath / physics / pose 全 add 完后 + model.update 渲染前):① **转头 GAIN ±15°** —— `Live2DModel.from autoFocus: false` + 自接 `window.mousemove` 算 canvas-normalized [-1,1] · `focusController.focus(x * 0.5, -y * 0.5)` · SDK 内 ×30 = ±15°(原 ±30° 过头)· 4 通道 gaze reset 复用 ② **身体微晃** —— `addParameterValueById('ParamBodyAngleY/Z', sin)` · ±1.5° · 错相周期 5.4s/7.3s · phase 1.7 rad · BodyAngleX 留给 SDK breath · 缺 BodyAngle\* 模型 silent no-op 自动跳 ③ **冰糖去水印** —— 每帧 `addParameterValueById('Paramheadxy', 30) + ('Paramheadxy3', 30)` 复刻模型自带 `shuiyin1/2.exp3.json`(原作者机制 = "按 1/2 键去水印")· 用 `add` 不 `set`,SDK 按 Min/Max 夹值,不破 red 表情共用 Paramheadxy 的几何 · 其它模型 silent no-op · per-model 水印列表配置化留后 · **方向修正第 3 版**(前 2 版按字面 set 0 实为水印"开",真机两次没用) |
-| ✅ **阿芙洛狄忒 fense 模型上线** | shipped + 真机 ✓ | `frontend/public/live2d/阿芙洛狄忒/fense/` · moc3 v4(2.22 MB)· 6 motion(jingya/kaixin/shengqi/shuijiao/wink/yaotou)+ 5 expression(axy/heilian/kuku/lianhong/shengqi)· lipsync 零代码(coreModel 含标准 `ParamMouthOpenY` · `pixiCubism4.ts::LIPSYNC_PARAM_ID` hardcode 兜底直接命中)· 2 处数据级 patch(在 `.gitignore` 排除的 model 目录内 · 本地生效不入 git):`Groups[EyeBlink].Ids: [] → ["ParamEyeLOpen","ParamEyeROpen"]`(自动眨眼)+ `Motions group key: "" → "Idle"`(SDK 找 `groups.idle` 命中 6 motion 自动随机循环)· ParamBodyAngleX/Y/Z 3/3 全在 · 身体微晃直接工作 · License:灵境 Sanctuary · 免费 · 个人/企业/公会均可 · 允许直播 · 严禁二次修改 |
+> 完整列表 + 历史债 → [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)。本节只列当前活跃大项。
 
-> 详 DESIGN_LITE §7.6 · 关联 §7.6.3 反义命名陷阱(冰糖 cdi3.json Name "水印开关" 反义 · `30=关 0=开`)· 关联 Tech Debt 表"Live2D 表演层衍生"。
-
----
-
-## Live2D 取景层 framing(2026-06-16~17 · commit `79f9f2f` · 已 ship + 真机 ✓)
-
-> 触发由来:每个 Live2D 模型原生比例 / 站位不同 · 没统一构图。给用户「放大 + 下移让脚出框 = **半身锚底**」绕开「接地阴影 + 比例」两个最难合成的问题。挂**模型**(model_key = scanner slug · 不挂 character)· 共用 slug 角色共享 framing。
-
-| 主题 | 状态 | Notes |
-|---|---|---|
-| ✅ **per-model framing(取景)+ Live2D 管理组件 + widget 全身** | shipped + 真机 ✓ | `79f9f2f` · 12 文件 / +938 / -9 · 新表 `live2d_model_settings`(model_key=slug PK · `inv_live2d_model_settings.py` 幂等 CREATE TABLE)· 路由 `GET/PATCH /api/live2d/models/{model_key}/settings` merge 透传(其它键如 `param_map`/`director` 留位不动)· backend + frontend 双 clamp(scale ∈ [0.3, 5.0] / offset ∈ [-2000, 2000])· `pixiCubism4._fit` 改 `baseScale × framing.scale + base + offset`(叠加不替换 · L497-503)· 加 `setFraming(handle, framing)` 接口 · UI `Live2DManagerSection`(scope=slug · scale 滑块 + X/Y 数字框本地 text state + 重置/保存 + 留位 ②③)· 拖拽 / wheel / 滑块实时预览 → store `setPendingFraming` → useEffect → `runtime.setFraming` · 保存后 `setSavedFraming(new) → setPendingFraming(null)` 顺序防闪回 stale · `applyFraming` widget gate(`CharacterView` `mode==='panel'`)→ **小窗永远 DEFAULT 全身 base fit**(不吃 framing) |
-
-**真机验过 5 + 3 条**(`79f9f2f` 全过):每模型各自取景 / 共用 slug 角色共享 / 重启仍在(DB + mount fetch + setFraming)/ 全身能调半身锚底(`scale>1 + offsetY 下移 + 容器 overflow:hidden` 已成立 → 脚出框)/ 切到不同模型 framing 正确加载 / widget 不吃 framing 永远全身 / offset 持久(`baseFramingRef` → `store.savedFraming` 修)/ X/Y 数字框可清空可打负号(本地 text state + editing ref)。
-
-合 main 时 `pixiCubism4.ts` 跟 §7.6 表演层 c14065b 的 sway/水印 hook 走 union 解(两侧各加独立字段到相邻位 · framing 写 PIXI 位置 / sway 写 Cubism 参数 · 两条独立通道不互相 stomp · merge `89b9f4e` 真机验过共存)。
-
-> 详 DESIGN_LITE §7.8 · 容器留位 `param_map` / `director` 见 §17.1 (parked / 决策层未实现)。
+- **桌面写控件确认门未验(安全)** —— 8 写工具当前 enabled,但"LLM 主动调写工具时确认 modal 是否弹"从未验证。定姿态前建议默认关。
+- **`screen.py` self_frontmost 大小写 bug** —— Skyler 前台问"看屏幕"会读自己的树;一行修待 build + 验。
+- **Persona schema 死字段** —— `relationship_to_user`(必填)/ `capability_overrides` / `style_preset` load 了但 0 模板引用;skill 文档与真实列漂移。归 Persona Schema v2,详 [研究报告](docs/research/persona-schema-comparison.md)。
+- **图片无持久化** —— 重启后历史只剩"[图片]"占位。
+- **VAD 手动模式"麦还在听"间歇 bug** —— 表层根因已修两个,仍偶发;诊断仪器已就绪待复现。
+- **长期记忆陪伴质量未验** —— 代码核验完成,待真机回归 + friend-test。
+- **GSV ops 坑** —— server 重启重置 `tts_infer.yaml` 到 CPU(需 SSH 修);失败 latch `FAILED_KEYS` 需双重启恢复。
 
 ---
 
-## MCP 能力层 batch(2026-06-15~17 · 已 ship + 真机 ✓ · 4 MCP commit + merge `89b9f4e`)
+## 端点迁移
 
-> 状态(2026-06-17 合 main):
-> - **已 ship + 真机端到端验**:holder-task / SSE / 配置分文件 / confirm gate / browser_login(xhs rednote-mcp 扫码 → cookie → list_tools 4 只读 tool → search_notes 实搜小红书)/ batch2 全套(自校验 + 45s + queue + deny_all_pending)+ 12306 / mail 真机过
-> - **4 MCP commit**(同分支跟 GSV 一起 push · 整批 4 MCP + 1 GSV = 5 commit):
->   - `834fbac` MCP-A holder-task 模型
->   - `2e5b914` MCP-B ③ SSE + ④ 配置拆 mcp.config.yaml
->   - `e805d34` MCP-C ⑤ confirm gate(dangerous_tools 弹框)
->   - `ab7f94a` MCP-D batch2 + browser_login + WS 边界 + list_status schema 修
->   - merge `89b9f4e`(union 解 main.py + pixiCubism4.ts 跟 framing 同活)
-> - **永不入 commit**(本地):`mcp.config.yaml`(gitignored 真名单)+ `config.yaml`(workaround TD-G)
-> - **触发**:5070ti 局域网到货前的 capability 拓宽窗口期 · 顺手 reconcile 旧 npx-on-call entry 的稳定性 · 跟 GSV 批同分支但代码无交集(GSV 不动 `backend/mcp/*` · MCP 不动 `backend/tts/*`)
-
-| 主题 | 状态 | Notes |
-|---|---|---|
-| ✅ **② holder-task 模型(解 anyio 跨-task cancel-scope)** | shipped + 真机 ✓ | `834fbac` · `backend/mcp/client.py` · `_ClientHandle` 加 4 字段(`stop_event/ready_event/holder_task/connect_error`)· 新 `_holder_task` L142(async with AsyncExitStack 的 enter + `ready_event.set` + `await stop_event.wait()` + 自然退栈 **全在同一 task**)· `_start_holder` L400+ / `_stop_holder` L427+ 外部接口(set stop_event + await)· 解原 `stack.aclose` 跨 task raise `Attempted to exit cancel scope in a different task`。真机过:enable/disable 反复无残留 task / lifespan shutdown 并发 set stop_event + gather holder · 一个挂不卡整个 shutdown |
-| ✅ **③ SSE transport(Amap)** | shipped + 真机 ✓ | `2e5b914`(含 ④)· `client.py:42` `sse_client` import + `_holder_task` 内 `elif transport_kind == "sse"` 分支 · `mcp.client.sse.sse_client(url, headers)` · `url` 内 `${VAR}` 展开 · cred-aware(SSE 走 URL 含 key)· `mcp.config.yaml` amap entry SSE 主 / `amap-stdio` 兜底 |
-| ✅ **④ 配置分文件(mcp.config.yaml ↔ example)** | shipped + 真机 ✓ | `2e5b914` · 新建 `mcp.config.example.yaml`(入库 · 6 范式齐:stdio+uvx / stdio+npx / env_required / dangerous_tools / SSE / browser_login)+ `.gitignore` 加 `mcp.config.yaml`(本地清单) · `backend/config/__init__.py:40 load_config_yaml()` merge:`mcp.config.yaml > example > none` · 整段替换 `mcp_clients` + `mcp_server` 两 key · `backend/routes/mcp_api.py:28 _MCP_CONFIG_PATH` POST/DELETE 写新文件 · `config.yaml` 删 mcp 段(workaround TD-G 长期 modified · 真删但永不 commit) |
-| ✅ **⑤ per-tool confirm gate(dangerous_tools)** | shipped + 真机 ✓ | `e805d34` · migration `inv_mcp_tool_confirmation.py`(ALTER TABLE mcp_tool_state ADD COLUMN require_confirmation · 幂等)· `backend/mcp/confirm_gate.py` 新文件(`ToolConfirmationRejected` 非 CancelledError · `register_push_callback` · `request_confirmation` 120s timeout · `resolve_confirmation` · `deny_all_pending`)· `tool_state.py` 加 `is_confirmation_required` / `seed_require_confirmation`(幂等 INSERT OR IGNORE) / `set_require_confirmation` · `ws.py` 早路由 `mcp_tool_confirm_response` + register_push_callback · 前端 `MCPConfirmModal.tsx` + `store.mcpConfirmQueue` 队列化 + `useWebSocket` enqueue/shift/clear · 真机过:dangerous tool 触发 → modal 弹 → accept/reject/timeout 三态 · `_CALL_TOOL_TIMEOUT_SECONDS = 45.0` 包 `asyncio.wait_for` 跟 confirm 物理同 `_make_handler` 同 commit land |
-| ✅ **batch2 [自校验 + 45s 超时 + queue + deny_all_pending]** | shipped + 真机 ✓ | **跨 A/C/D 三 commit · 不硬塞单 hash**(详 `ab7f94a` commit msg 尾透明化):**dangerous_tools 自校验**(`stale_dangerous` 配置有/真 list 没 · `possibly_naked` 真 list 含写操作未列 · 都 WARN 不阻断)在 `_holder_task` body 内 · 跟 seed 一起意外早 land 在 `834fbac`(MCP-A holder body 整段重写 hunk)· **45s call_tool 超时**(`_CALL_TOOL_TIMEOUT_SECONDS = 45.0` + `asyncio.wait_for` 包 call_tool · 物理同 `_make_handler` 函数体)+ **queue 化**(`store.mcpConfirmQueue` array 版 + `useWebSocket` enqueue/shift)+ **`deny_all_pending` 函数定义** land 在 `e805d34`(MCP-C)· **WS 边界调用**(`ws.py` finally `deny_all_pending` + `register_push_callback(None)` · `useWebSocket.ts` `ws.onclose` `clearMcpConfirmQueue`)land 在 `ab7f94a`(MCP-D)|
-| ✅ **batch2 [browser_login] · `auth: browser_login` 链路** | shipped + 真机 ✓ | **跨 A+D 两 commit** · `client.py` `_holder_task` ENTER 前 `cookie_ready` 检查 → raise FileNotFoundError 不开浏览器 · 早 land 在 `834fbac`(MCP-A holder body)· 其余主链 `ab7f94a`(MCP-D):`backend/mcp/browser_login.py` 新文件(`_LoginTask` 状态机 4 态 · `start_login` async subprocess + watcher · `_watch_login_proc` 10min 扫码窗 · `cookie_ready` / `get_login_status` / `is_browser_login_entry`)· `mcp_api.py` `POST/GET /api/mcp/clients/{name}/login` + `MCPLoginStatusItem`(Literal 4 态) + `MCPClientStatusItem` 加 `auth` + `login`(**Item 1 修:原 schema 没声明 → FastAPI response_model 静默剥字段 → 前端按钮不出**)· `client.py` `list_status` 出口加 `auth_kind` + `login_info` 字段 · 前端 `lib/mcp_clients.ts` + `ExtensionsSection.tsx` 按 `isBrowserLogin` 分支按钮(登录/重新登录/扫码中)|
-| 🟢 **MCP 已接 server 真机能力**(端到端验过的具体 tool · 不夹注 commit hash · 同期 `ab7f94a` 真机批次) | shipped + 真机 ✓(2026-06-16~17) | **xhs**(rednote-mcp v1)· **3 只读 tool**(`search_notes` / `get_note_content` / `get_note_comments`)+ `login`(认证 tool · stdio 内置 · 实走 CLI `init` 子命令扫码替代 · 列 `dangerous_tools: [login]` 防 LLM 自调弹浏览器)· cookie `~/.mcp/rednote/cookies.json` 4.3KB 落地 · backend 拉 stdio 启动 OK · 真机 `search_notes` 实搜小红书结果 · `command` 绝对路径 `/Users/liujunhong/.nvm/versions/node/v22.15.1/bin/rednote-mcp`(backend `.venv` 不带 nvm PATH)· **12306**(`trip12306` entry · 查询类只读)+ **mail**(`email` entry · 写类 `send_email`/`reply_email`/`forward_email` 在 `dangerous_tools` 列 confirm 拦)同期真机过 · 详 `mcp.config.yaml` entry(本地 · 永不入 stage)|
-
-> 详 DESIGN_LITE §7.7 · 关联 Tech Debt 表"MCP 能力层衍生"(下方新加)· 关联 P3 backlog "MCP marketplace"(决策 #1 旧条 · 不替代 · 是预设清单的更上层)。
+回国后从国际 DashScope 迁到国内百炼端点(`dashscope.aliyuncs.com`),账号 / Key 不通用。
 
 ---
 
-## GSV 本地 TTS 迁移(2026-06-11~17 · 已 ship `a4a2681` + merge `89b9f4e`)
+## 历史
 
-| 主题 | 状态 | Notes |
-|---|---|---|
-| ✅ **全局 server_url + DB 管理 tts_models 表** | shipped + 真机 ✓ | `a4a2681` · `backend/tts/gsv_settings.py`(全局 server_url module cache · sync sqlite 读 ai_providers + setter + cleanup `_MODEL_LOADED_KEYS`)+ `backend/tts/tts_models_cache.py`(sync cache + DB tts_models 表 + 失败 fallback `tts_models.json`)+ migration `inv_tts_models_table_and_seed.py`(CREATE TABLE + mai_v4 seed)+ `inv_voice_model_thin_strip_gsv.py`(strip cid=1 voice_model spread)+ `backend/routes/tts_models_api.py`(CRUD)+ tts_api 加 server_url GET/POST + emotion_coverage + refs · 前端 `AddGsvModelModal.tsx` + `lib/tts_models.ts` + GsvTTSCard 重做(卡顶 server_url + Save + ping · model 列表 add/edit/delete · 折叠情绪覆盖)· VoicePicker gsv 分支 thin reference · 三 tier `DB voice_model > 全局 > _DEFAULT` · 测试 `tests/test_inv_gsv_tier_and_refs.py` 33 passed |
-| ✅ **GSV httpx 客户端绕代理 + mai_v4 wav_remote_dir 改本地** | shipped + 真机 ✓ | `a4a2681` · `backend/tts/gsv.py` 3 处 httpx + `routes/tts_api.py::gsv_ping` 全加 `trust_env=False`(绕 shell `HTTP(S)_PROXY` · 不依赖 NO_PROXY)· migration 幂等 UPDATE:`wav_remote_dir` 等于旧公网 `/workspace/GSVI/mai_emotion_bank/` → 本地 host `D:/GPT-sovits/.../reference_audio/mai_v4/`(只在等于旧值时改 · 不覆盖用户改的)· seed default 同步改 · 真机:重启后连 GSV 局域网 + 载权重 + 出真实音频 |
-| 🔴 **未决:中文输出音色"不对"** | 调查中 · 下一轮另开对话 | 疑似跨语种(mai_v4 是日语训练音 · 被 `voice_model.tts_language=zh` 逼着读中文 → 音色飘)· 跟 `layer_a.j2` `voice_provider=='gsv' && voice_model_name=='mai_v4'` 段 + 渲染期 `voice_model.tts_language` 路由有交互 · **连接通 + synth 出真音 ≠ 音色对** · 框架已 ship,内容(中文音色)留下一轮 |
-
----
-
-## Round 3/4/5 全段闭环(2026-06-01~05 · 大窗陪伴 UI 重做 + 背景架构 + 系统状态页 + VAD desync 部分根治)
-
-| Round | 主题 | 状态 | Notes |
-|---|---|---|---|
-| ✅ | **Round 3 · 大窗陪伴态浮件化(全窗壁纸 + CharacterView 透明)** | shipped + 真机 ✓ | commit `4399494` · CharacterView 删 backgroundLayer + panelOverlay scrim 整段(壁纸不再被 chat main area 推开 / 不再被 character wrapper translateX 漏空 / 不再被 bg-base 半透 scrim 染色)· SceneBackground 成整窗 z-0 唯一壁纸渲染层 · 输入丸 / Sidebar dock / ChatHistoryPanel / ConversationList 全部 absolute 浮动 + glass token;角色 wrapper transform 重置到 translateX(0) 居中 |
-| ✅ | **Round 4 · 心情小标 + 对话列表折入坞 + 聊天记录可伸缩 + 玻璃 token 统一** | shipped + 真机 ✓ | commit `4399494` 同批 · ① CharacterStatePanel:默认只渲 emoji+词 · hover/click 展开完整卡 · 锚 Panel 根(整窗 left:8 top:48,不再嵌 chat main area)· ② ConvList 唤回 chip 从左上撤掉,改用 dock 上 MessagesSquare「会话列表」图标开/收 · ③ ChatHistoryPanel 右上锚定 + 左下角拖拽手柄同时改宽 + 高 · store 加 `chatHistoryHeight`(default 600,clamp [240,1200]) · ④ themes.css 加 `--glass-*` token 一套(`--glass-bg` bg-surface 50% · `--glass-radius` 16 · `--glass-blur` 12 · `--glass-border` · `--glass-shadow` lift · `--glass-text` 浅底主题翻深字)· 6 浮件共享 |
-| ✅ | **Round 5 step 1 · 背景跟角色解耦 + 缩略图选择器** | shipped + 真机 ✓ | commit `f00a3c7` · SceneBackground 只消费 globalScene(无视 `character.background_path`,切角色绝不再换壁纸)· CharacterPanel 删 per-character 背景下拉 UI(form.background_path 字段保留 round-trip 透传 DB 不动 · **dormant 字段待清,见 Tech Debt**) · SettingsPanelV2 SceneSection 改成 fetchBackgrounds() 缩略图网格 + accent 边框 + 角标选中态 + 即时生效 + 手填路径降级 `<details>` advanced |
-| ✅ | **Round 5 step 2 · 背景前端加 / 删 + 上传 200MB 上限** | shipped + 真机 ✓ | commits `f00a3c7` / `22fc8fb` · 后端 scanner 扫两处(bundled public/backgrounds/ 只读 + user appData/backgrounds/ 可写)· `platformdirs.user_data_dir('com.skyler.momoos', appauthor=False)` 对齐 Tauri 2 `appDataDir()` 默认行为 · 新 endpoints:POST `/api/backgrounds/upload`(multipart + sanitize + 重名自动 `-1`)/ DELETE `/api/backgrounds/{name}`(仅 user · path traversal 双层防御)· StaticFiles mount `/userdata/backgrounds/` · 流式累计 200 MB 上限 413 + cleanup half-written · frontend inline 确认条取代 `window.confirm`(避免 Tauri WKWebView 静默坑)· requirements.txt 加 `platformdirs>=4.0` |
-| ✅ | **VAD/ASR desync 部分根治** | shipped + 真机 ✓ | commits `bbcb119` / `6768e54` / `177451c` · ① store init 直读 LS(`recordingMode` / `vadPositiveThreshold` / `vadRedemptionMs` / `muteWhileSpeaking`)取代原 AsrVadSection useEffect[] 懒 hydrate · setter 内同步写 LS,LS = 单源(原 bug:store 硬编码 manual default + 只在用户打开 Capabilities 浮层才同步,导致上次 LS=vad 用户切浮层时被翻转)· ② useAudio 新加 useEffect 订阅 recordingMode,切手动时自动 `toggleVad()` 让 silero 走 active→sleep 同款 race-safe 路径(原 bug:onRecordingMode 仅改字段不动引擎,VAD active 时切手动 silero 仍在听 + 并行 send voice)· ③ 顺手 chore 删 `export default function SettingsPanel()` 294 行死代码 + 4 个孤儿 LS const。**注:仍有手动模式偶发"仍在聆听"间歇 bug 未根治,见 P1 known issue** |
-| ✅ | **录音按钮按模式 + 真在听点亮** | shipped | commit `b9c1dc7` · 图标按 recordingMode 切(手动=Mic / VAD=AudioWaveform)· 点亮 = "真在听"双源(手动看 recording / VAD 看 vadState∈{active,recording})· `aria-pressed` + `aria-label` · 改 ChatInput + ControlBar 两处保持一致 |
-| ✅ | **系统状态页(Sidebar Gauge → 5 卡仪表)** | shipped | commit `4cb4eec` · `ActiveOverlay` 扩 `'system'` · Sidebar 加第 5 个 nav `Gauge` 图标 · 5 cards / 2 列响应式 grid auto-fit minmax 320px:🎙 VoiceCard(实时 store 全字段 + `<ConfidenceBar />` 子组件隔离 silero 32ms 高频写)/ 🔌 ConnectionCard(WS + AI status 实时 + `/api/health` poll 5s)/ 🧠 ModelsCard(LLM/TTS active providers + ASR config + Whisper loaded,挂载拉一次 + 手动刷新)/ 🎴 CharacterCard(currentCharacter + state + globalScene + bundled/user 路径形态判)/ 📊 ResourcesCard(救活 SettingsPanelLegacy:1155 死代码 → 拆 card,poll 3s + toggle)· 关于/版本 card skip(无现成数据源)|
-
-> 详 git log Range `f00a3c7..4cb4eec` (8 commits)· 关联 Tech Debt 见底部表的"UI 重做衍生"3 条。
-
----
-
-## INV-16/17/18 全段闭环(2026-05-29~31 · 网易云 mpv-first + 系列 latent bug)
-
-| INV | 主题 | 状态 | Notes |
-|---|---|---|---|
-| ✅ | **INV-16 · 网易云 weapi schema audit + 4-patch suite** | shipped + 真机 ✓(Mode A daily_recommend Reaching Light)| commit `06436d8` · Patch A weapi `br→level/encodeType`(NCM 2024 rotation 全 400 修通)+ Patch B client diagnostics + 5 端点 isinstance 防御(NCM 风控 frequent_visit type contract)+ Patch C error 归类 3 档 + Patch D netease_local self-state now_playing(MediaRemote 看不见 mpv fallback);**audit §3 #1 pyncm 切换 → 永久判死**(PyPI 下架 + GitHub repo 404);**audit §3 #2 weapi 全 400 → 闭环 Patch A ship 2026-05-31**;**Mode B URL Scheme autoplay → 退役 dead code**(mpv-first 后不再走);详 `docs/SESSIONS/2026-05-29.md` + `docs/netease-music-setup.md` |
-| ✅ | **INV-17 · mpv subprocess latent bugs** | shipped + smoke ✓ | commit `0a23866` · `--media-keys=yes` mpv 0.41 rename `--input-media-keys` fatal · stderr DEVNULL → PIPE + `_read_stderr_tail` helper · loadfile 后 set pause False(sticky pause 跨 loadfile 防御);Lessons #35/#36/#37 沉淀;详 `docs/SESSIONS/2026-05-30-to-31.md` §2-§3 |
-| ✅ | **INV-18 · tool 路径混乱 + audio source 优先级** | shipped(待 19 actions 真机回归)| commit `d712768` · tool_addendum 删旧 3 矛盾 section + 新建【音频源优先级】3 条规则 + 【网易云本地 mpv 自动播放】整合 + 【媒体控制】fallback 定位;`now_playing` 默认顺序反转(`netease_local` 首选 / `media` fallback);PM 醒后跑 19 actions P0-P2 矩阵收口;详 `docs/SESSIONS/2026-05-30-to-31.md` §4 |
-
-> 详 `docs/LESSONS.md` (#24-#37 共 14 条新沉淀:audit 纪律 + patch stacking + 助手跳判断 + subprocess 启动)+ `docs/INVESTIGATION-INDEX.md` 主题聚类 §-4/-5/-6。
-
----
-
-## INV-11 全段闭环(2026-05-25/26 · 主线 GSV + provider paradigm)
-
-| Stage | 主题 | 状态 | Notes |
-|---|---|---|---|
-| ✅ | **Stage 0 · LLM output audit** | shipped | docs/INV-11-stage0-llm-output-audit.md · audit baseline · GSV 接入前 layer A 形态 |
-| ✅ | **Stage -1 · prompt experiment** | shipped(V3 success)| docs/INV-11-stage-minus1-prompt-experiment.md · Layer A1 ja directive 配 GSV 16 emotion 输出格式实证 work |
-| ✅ | **Stage 1 · GSV 真接入** | shipped + 真机 ✓ | `backend/tts/gsv.py` GSVTTS provider · mai_v4 emotion-aware ja TTS · `/set_gpt_weights` lazy-init + 16 emotion bank LLM 路由 · DB cid=1 voice_model 切到 gsv mai_v4 |
-| ✅ | **Stage 1.5 · 全角色 provider × model × voice paradigm** | shipped + 真机 ✓ | `backend/tts/registry.py`(pydantic + json config + GSV 2 mode schema)· `backend/config/tts_models.json`(3 provider · 4 model)· `frontend/src/components/character/VoicePicker.tsx`(inline paradigm B · auto-save debounce 300ms)· `docs/adding-new-tts-model.md` playbook · Lesson INV-11 #11-#15 沉淀 |
-
-> 详 docs/LESSONS.md(#11 fallback 阶段化 / #12 modal→inline / #13 label 真 / #14 hardcoded→json / #15 GSV 2 mode 前瞻)+ INVESTIGATION-INDEX 主题聚类 §0。
-
----
-
-## P1 (本周候选)
-
-| Status | Item | Goal | Notes |
-|---|---|---|---|
-| 📋 | **VAD 手动模式偶发"仍在聆听"间歇 bug**(known issue · 根因未抓全)| 现状:Round 5 系列已修两个表层根因(① recordingMode store-init LS desync · ② 切手动时 silero 引擎未 pause)+ 部分根治,但 PM 真机仍偶发观察到手动模式下"麦还在听"的现象 · 系统状态页 🎙 VoiceCard 已加 `vadState` badge + ConfidenceBar 作为现场诊断仪 · 下一步:用诊断仪复现 → 抓 vadState 翻转链路 + WS voice 发送链路 + silero 实例生命周期(可能涉及 onSpeechStart/End 残留触发 / stream.onended recovery 走偏 / micVadRef 实例脏)| Round 5 衍生 · 立项 |
-| 📋 | **Conversation-vs-Character paradigm 决策** | 现状:conversation 1:1 绑 character(§5.9 锚定语义);PM 提出 "一 character 多 conversation" vs "一 character 一永久 stream + RAG 远期" 选型未定 · 影响记忆架构 v2 / F8 归属分级路径 | 待 PM 拍板 |
-| 📋 | **Proactive 污染 short_term 长期 fix** | proactive 推送 turn 写入 short_term · 跟用户主动 turn 混 · 长期影响"对话连贯感";现状靠 proactive 文本压缩 mitigate · 长期解 = 分桶 + 注入分层 | 立项 |
-| 📋 | **句子并发 TTS pipeline(chunk 15 复活)** | sentence-level 并发合成 + 顺序播放 · 改善 ja TTS 长句首字延迟(现 GSV ja 7-15s 单句串行)· chunk 15 实施过但未 ship 留 backlog。**2026-05-27 INV-15 P1 Option A 部分 mitigation**(commit 534a6ca · `merge_short_sentences` 扩 zh · HOL blocking 概率降)· 完整 out-of-order / 整 turn buffer **不推荐**(UX 破) · P3 candidate:TTS_CONCURRENCY 3→5 / push_latency observability(ROADMAP:206)/ threshold tune | INV-8 §1.1 Step 6 + INV-15 §6/§8 |
-| 📋 | **Persona 蒸馏 Mai 三层** | 现 persona 把防御层(讥讽/调侃/话少)当人格本体写成常量 · 缺底色层与切换规则。重构方向:①补内核底色(被审视的孤独 + 对真实连接的隐秘渴望)②防御层标注为试探机制非本性 ③讥讽/话少由常量改为随对方真诚度变化的变量。蒸馏纪律:素材驱动、写约束非形容词、少而硬、给正反例 | 内容方向 · 立项 |
-
-## P2 (~2 周)
-
-| Status | Item | Goal | Notes |
-|---|---|---|---|
-| 📋 | **GSV server GPU 持久化** | reboot 后 tts_infer.yaml 回 cpu 已知 bug · 手动 SSH 改回 GPU + restart · 用 systemd unit + 配置 baseline 锁 | INV-11 Stage 1 衍生 |
-| ✅ | **ASR whisper preload HF_HUB_OFFLINE** ship 2026-05-27(INV-14)| 真因 = `backend/main.py:21-22` 硬编码 `HF_HUB_OFFLINE=1` + `~/.cache/huggingface/hub/` 无 whisper-small snapshot → preload 29/29 失败 / asr_result 0 次。修法 = 删硬编码 + .env `HF_HUB_OFFLINE=0` + 首次启动 HF download · cached 后稳定。**P2 主设置 re-expose AsrVadSection 已 revert**(PM 真机 verify VAD UI 一直在 Capabilities → AI Providers → ASR tab · 单入口已可达 · 主设置加冗余了)· INV-14 audit 教训记 Lesson #19(修正:audit 前先 visibility verify)。详 docs/INV-14-vad-disappeared-audit.md §7.8 | commits c2d8924(P1)+ aed67cc(P2 revert) |
-| 📋 | **加新角色 yae_v1**(走完整 json config trained mode flow)| `docs/adding-new-tts-model.md` Example 1 落地验证 · 8 步流程(server weights + emotion bank rsync + 本地 lab cache + 编辑 tts_models.json + backend restart)· dogfood paradigm 完整性 | INV-11 Stage 1.5 followup 衍生 |
-| 📋 | **Migration v2 force upgrade** | phase out GSVTTS `_resolve_weights_field` `gpt_weights/gpt_path` 字段名 fallback(Lesson #11)· DB 批量 normalize voice_model JSON schema · 老字段名 drop | Lesson #11 立项 |
-| 📋 | **UI polish**(当前 voice 高亮 / TTS 语言 dropdown 上移 / search box)| VoicePicker 增量 UX · 当前 voice radio 视觉强化 + TTS 语言挪到 model dropdown 上方(语义对齐)+ system voice 列表加 search box(7 voice 不算多 · 但 dogfood 增 system voice 后受益)| backlog |
-
-## P3 (长线)
-
-| Status | Item | Goal | Notes |
-|---|---|---|---|
-| 📋 | **INV-12 Stage 3 frontend universal TTS config** | Fish reference upload UI per-character + 通用 TTS config 编辑(覆盖 model default)· Stage 1.5 已 cover provider/model/voice 选择 · Stage 3 补 reference upload + custom 参数 | INV-12 Stage 2 backend 已 ship |
-| 📋 | **Memory v4.1**(20k buffer / RAG fallback / character cognition)| short_term cap 25 turn (=50 messages,`SHORT_TERM_MAX_TURNS=25`,代码真值) → 20k token buffer(短期 token 治理)· RAG fallback(远期记忆)· character cognition(角色独立认知)· 友测后触发 | 友测反馈驱动 |
-| 📋 | **Phase 3 streaming + H3 fix** | INV-8 §1 Step 6 instrumentation 11 log 点 + 前端 WebAudio API 序列拼接重构 + H3 +1000ms safety margin fix | 立项 backlog |
-
-## 5070ti 触发(PM 已订 · 等到货)
-
-| Status | Item | Goal | Notes |
-|---|---|---|---|
-| 🔬 | **zero-shot GSV mode 真实施** | 本地跑 GSV server · ref 本地完成 · 不需 server SFTP push · 配套 Stage 1.5 followup Part C tts_models.json `mode: "zeroshot"` schema 预留 + frontend ref upload UI(复用 Fish reference upload pattern)| GSV server 5070ti 本地化 |
-| 🔬 | **多 character GSV trained model 本地 train** | yae_v1 / 凝光 / 其他角色 GPT + SoVITS weights 本地训 · 不依赖 GPU 远程 server · 配套 tts_models.json mode="trained" 加 entry | 5070ti GPU 算力 |
-| 🔬 | **LLM 本地化**(qwen2.5-7b-instruct 4bit ~5GB) | 配 GSV ~4GB · 余 7GB buffer(假设 5070ti 16GB VRAM)· 本地推理 / Ollama / 自部署 | 性能与质量 trade-off 待评测 |
-| 🔬 | **Skyler 全本地化** | 去云端依赖 · DashScope / Fish cloud / OpenAI 全切本地 · privacy / 离线场景就绪 | 长期 vision |
-
----
-
-## 决策记录(2026-06-08 doc 治理批次 · 5 项 doc-only)
-
-> 本批次决策 = 方向已拍 / 实施未启 · 落 backlog 不进 Now 优先级。锚到现存段落(下方 backlog 表 / DESIGN_LITE / IMPLEMENTATION_LOG)。
-
-| # | 决策 | 方向 / 范围 | 状态 / 锚 |
-|---:|---|---|---|
-| 1 | **MCP marketplace · Skyler 子注册表 / opinionated catalog** | 从官方 MCP Registry + 现有目录 ingest · curate 一个"中国相关 + 高价值"子集成 Skyler 可读 manifest(对齐官方 schema)· 用户在 MCP 面板浏览预设、一键启用 · secret 本地填、永不进 catalog · 信任分层(已验证 / 社区 + 显式同意 + 绝不自动跑)· **hybrid**:深度原生 / 无 MCP 的(EventKit 日历 / 网易云 mpv)仍走现有 bespoke Capability Registry · 长尾走预设。邮件 = 首个预设(通用 IMAP/SMTP MCP + QQ 授权码),不再单独硬编码 | backlog · 方向 / 未建 · 先 reconcile「现有 Capability Registry vs 这层对外 catalog 新增的」· 锚:本 Tech Debt 表 +「MCP marketplace」条 + DESIGN_LITE §2.2 双向 MCP 旁注 |
-| 2 | **窗口自动切换 · 大窗失焦 → 小窗 + 置顶 / 点 dock → 回大窗** | 状态机:大窗+聚焦 →(blur)→ 小窗+置顶 →(dock 重新激活)→ 大窗+聚焦;手动 ⚙ 仍可强切。**要点**:~1s debounce · 可关偏好 · 置顶只给小窗;事件源 = Tauri focus/blur + macOS dock 重新激活,大头 Rust 侧 + 复用现有双模 swap | **deferred backlog**(PM 说晚点)· 顺带定清"小窗↔大窗 ⚙ 图标语义"债 · 锚:本 Tech Debt 表 +「窗口自动切换」条 · 关联 `frontend/src/lib/window.ts::applyModeWindowProps` |
-| 3 | **Sigil · 角色单线 SVG 徽章** | 每个角色一个单线 SVG 徽章(Mai=兔 / 八重=狐 / 流萤=机甲变身器 · 余待定)· 签名色描边、无填充。放加载页 —— 倾向把现有 `CyberAnchor` 换成角色 sigil(冷启动标记 = 该角色 → 溶进暖收 splash) · 复用同一份签名色源(撞色债见 Tech Debt) | backlog · 概念已定 · 卡 fork(变身器谁画)· 排在进入动画微调之后 · 全新概念 · 锚:本 Tech Debt 表 +「sigil」条 + DESIGN_LITE §进入动画(右锚替换路径) |
-| 4 | **Hermes 缓存 · 注入记忆冻结快照** | 借 Hermes Agent 的"核心记忆冻结快照":注入的记忆(摘要 + 事实 + profile)做成**会话开始时的冻结快照**(会话内改动写盘、下次会话生效)· 保 LLM 前缀缓存稳定 · 抬升当前 ~12.5% 命中率 | backlog · idea · 是现有 v4.1 prompt-caching 子轨的补强,**非替代** · 锚:`IMPLEMENTATION_LOG.md` v4.1 caching 段旁 + 本 Tech Debt 表 + DESIGN_LITE §记忆 |
-| 5 | **事实有效期 · `expires_at` 接线 + 时序版本** | 给事实层加时序有效期 —— 事实变了旧的失效但留作历史,**轻量、不上 TKG**(加有效期 / 版本字段即可)· 记忆唯一该补的缺口 | **tech-debt → roadmap** lift:从 DESIGN_LITE §8 #11 + Tech Debt 表"supersede 自身机制未实现"提升为正式 roadmap 项 · 下方 Tech Debt 表对应行改"已 lift,详 ↑决策 #5" |
-
-> 上 5 条对应 patches:DESIGN_LITE §2.2 / §进入动画 / §记忆 加旁注 · IMPLEMENTATION_LOG v4.1 caching 段补 Hermes 快照 backlog · Tech Debt 表新 5 条对应入册(见下)。
-
----
-
-## Now — v4.0.0 收口
-
-目标:把一个角色(Mai)做扎实再 ship,而不是铺开七个半成品。剩余 v4.0.0 项按序走完即 tag。
-
-> v4-beta 收口批次(2026-05-16)的"本 session 已 ship 并真机验证"7 行成就清单已剥离归档至 [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)(2026-05-19 docs 第二刀)。
-
-### 本 session 已 ship（2026-05-22）
-
-| Status | Item | Notes |
-|---|---|---|
-| ✅ | **v4.0 立绘馆 voice greeting feature** ship(独立主线 · 不挡 Phase 3)| backend(`2b597bc`)· DB character_voice_lines + 4 endpoints + StaticFiles + 31/31 tests + cid=101 6 Mai seed(canon range markers);frontend(本 session)· lib/voice_lines.ts + CharacterDetailModal onMount fetch random + play + CharacterPanel "🎙 语音问候" section(list/upload/preview/delete);PM 提前上传音频系统纯 storage+serve · 不走 TTS 预渲染。详 INVESTIGATION-10.md |
-
-### 本 session 已 ship（2026-05-19）
-
-| Status | Item | Notes |
-|---|---|---|
-| ✅ | 左侧 ConversationList 右边缘可拖拽 resize handle | commit `60dea57` (2026-05-19);改 4 文件:store/index.ts / Panel.tsx / ConversationList.tsx / ChatHistoryPanel.tsx 中 2 个;新增 `momoos.convListWidth` localStorage,clamp [160,400] |
-| ✅ | 右侧 ChatHistoryPanel 左边缘可拖拽 resize handle | commit `60dea57` (同上);新增 `momoos.chatHistoryWidth` localStorage,clamp [320,600];立绘区 flex-1 min-w-0 +Live2D ResizeObserver 自动响应 |
-| ✅ | docs 整理轮(归档第一刀 + 真源对齐第二刀 + 索引登记) | commit `dcd3327` (2026-05-19);19 份归档至 docs/archive/(R100 零字节改动) + 5 真源对齐(死链/退役同步/HEAD 锚点 c1d65ff) + INVESTIGATION-2/INDEX 登记 |
-
-### 剩余 v4.0.0 收口项(按序)
-
-| Status | Item | Goal | ETA |
-|---|---|---|---|
-| ✅ | **文档纠真(v4.0.0 记忆线收口)** | DESIGN / DESIGN_LITE / ROADMAP / README / README_zh-CN 对齐 v4.0.0 现状 + §5.8 表层债入册;DESIGN.md 大整合(双层保留 / 旧"当前"标签 / chunk 章收并)立项留待表层重构 pass | ✅ 完成 |
-| ✅ | **长期记忆链路 audit + 修复链** | audit 完结(根因=抽取 prompt 偏 fact-only + 闲聊→LLM 合法返回 [];子 bug=purge 不重置 extractor 指针)。修复链已 ship:滚动摘要层 b91505a + 902c2c2/f712625/42d1800/bfcd821/3f3be08。**代码对真 git diff 已核验;陪伴/功能质量待真机回归(验收门,CC 不自证)**。详 DESIGN §五·补 + §十五之 Z.5.1 | ✅ ship,待真机回归 |
-| 📋 | TTS 每用户日字数 cap + 主对话节流(**deferred · 移出 v4.0 范围**) | 当前已埋点 `tts_call_log` 监控用量,无强制闸;deferred 至多人测试再议 — 单人 dogfood 期烧量可控,不阻塞 v4.0 ship | v4.1+ 候选 |
-| 📋 | Stage3 — 打包发布 | Tauri build + .dmg + onboarding + dogfood + tag v4.0.0 | ~2-3 days |
-
-> **chunk 15 / UX-006 关闭说明(保留历史结论)**:UX-004 v1 曾实测某些环境体感 23s 沉默。经 4 阶段 audit + 关 VPN 真机实测,backend producer/consumer + chunk 6b TTS pipeline 已实现 sentence-by-sentence streaming,过渡语 + 最终回复语音流畅。"23s 沉默"推测为 VPN + 第一次冷启 tool 叠加偶发,非架构问题。本 session 真机复测再次确认无感知沉默。详 `docs/archive/chunk-15-*`。
-
-> **原 v4-alpha「可塑性易用」清单(Stage 2 纯前端管理资源 / chunk 13 test isolation / skill docs / Live2D swap guide / plugin registry seedling)整体下移 v4.1+**:v4-beta 收口聚焦"一个角色做扎实",可塑性打磨让位于陪伴质量。明细见 Tech Debt & Backlog。
-
----
-
-## v4.1 — Mai 之外 + 语言/记忆根治
-
-v4.0.0 tag 之后的主线。本 session 多个"治标 vs 治本"的决策都把治本压到了这里,集中一次做对。
-
-| Status | Item | Goal | Notes |
-|---|---|---|---|
-| 📋 | **v4.1+ Mai emotion marker 实测精炼刀** | 现状:`layer_a.j2` fish 子分支 Mai marker 集(冷静/挖苦/温柔/罕见/Pause)基于 Mai canon range **推测**(per INV-9 §5 ship),未做大规模 A/B 实测验证。已知 work:`[composed]` / `[teasing]` / `[sarcastic]`(per PM 部分 sweep 听感反馈);已知不 work / 怀疑 markers 待 PM 进一步实测列出。**任务**:每 marker × 多 texts(Mai 风格典型句)A/B grid,统计 listen-grade work rate;按数据精炼 marker 集(剔除不 work 的、加新 work 的、调节优先级)→ 更新 `layer_a.j2` fish 子分支 directive;同步更新 INV-9 §5 marker 集 reference。**触发**:v4.1+ Mai 产品级体验启动时(用户长时间真实对话暴露 markers 表达问题);**联动**:跟 "多 provider 扩展刀" cross-dependency — Fish / GPU fine-tune / GSV 各自 emotion 通道形态可能不同,marker 精炼需 per-provider(per INV-9 §5+§6 Hard Req 双重隔离 + per-provider Layer A1 子分支扩展) | 立项 v4.1+,reference INV-9 §5(当前 marker 集)+ INV-9 §5+§6 Hard Req per-provider 双重隔离 + ROADMAP "多 provider 扩展刀" 联动 |
-| 📋 | **v4.1+ 多 provider 扩展刀 · GPU 远程 Fish 微调 hybrid + GSV (GPT-SoVITS) provider** | INV-9 中插 sweep 实证 zero-shot from 7s reference 有硬天花板(per audit `b34ad70` Lesson INV-9 #8 stochastic 验证 + 43 WAV outputs 听感对比 Part 1/Part 2/repro);本轮 Phase 2 ship 接受 stochastic 作 Fish s2-pro 固有特性。**v4.1+ 多 provider 扩展路径**(2 sub-anchors):**(a) GPU 远程 inference** · FastAPI wrap `/tts` HTTP endpoint(任意 fine-tuned 模型 / Fish 自训 / 进阶 cosyvoice 复刻),backend 写 `RemoteFishTTS(TTSBase)` 类对接 — GPU always-on 配合 backend 直连**无冷启动延迟**;**(b) GSV (GPT-SoVITS)** · GPT-SoVITS 官方 `api.py` 直接用,backend 写 `GSVTTS(TTSBase)` provider 对接(per-provider sanitize Hard Req per INV-9 §5+§6:non-fish provider 默 strip `[bracket]` markers,GSV 沿用;若 GSV 未来加 emotion 通道,extend `_PreprocessingEngine` provider 分流加 GSV-specific 处理)。**触发**:PM GPU 资源就位 + API key 配齐。新 provider 接入沿用 INV-8 §1.2 抽象插点 A(provider factory)+ C(VoiceConfig 字段扩 per-provider);UI CharacterPanel 提供 voice_model JSON 编辑器切换 provider | 立项 v4.1+,reference `b34ad70` audit + Lesson INV-9 #8 + `tts/fish/参考音频/mai/` 完整 5min Mai 素材 |
-| 🚧 | **TTS 模块化 + Fish s2-pro 集成主线**(2026-05-22 INV-8 §1 audit closed)| Phase 1 audit 闭环:5 决策最终三档 lock(1 沿 `<ja>` 隐式 display_zh / 2 ✅ Fish refs[] mode_A only / 3 `synthesize` + 新增 `synthesize_stream` / 4 β inline `[bracket]` 待 WAV final lock / 5 本地 cost + per-user cap)+ Option A1 lock(sanitize fix + 沿 `<ja>`)+ Hard Req per-provider 双重隔离。**Phase 2** ~3-5d / ~250-300 LoC + 1 新 `backend/tts/fish.py`(TTSProvider 抽象层 fish + sanitize A1 fix + voice_config 4 字段 + layer_a.j2 `{% if provider == 'fish' %}` 子分支教 markers + 6 case unit test);**Phase 3** 流式管线(Fish WebSocket `stream_websocket` + `latency=balanced` + Step 6 11 log 点 instrumentation 合刀 + H3 +1000ms safety margin fix + 前端 WebAudio API 序列拼接重构)。详 INV-8 §1 收口 + INVESTIGATION-INDEX | 取代原 F0 "ja 后处理翻译重做" — INV-8 §1.5 实测确认 LLM 实时双语 tag 行为问题不可纯翻译绕开;直接走 Fish s2-pro `[bracket]` 自然语言情感 + 顺序流式 `<ja>` schema 更优(详 §1.5.9 4 路 Option 对比 + CC leaning A1)|
-| 📋 | **~~F0 — ja 后处理翻译重做~~**(2026-05-22 路线转向 → 上方 TTS 模块化 + Fish 集成主线)| ~~停掉 seg2-x 补丁路线,改架构:LLM 出纯中文 → TTS 前 qwen-turbo 翻日 → CosyVoice~~ | INV-8 §1.5.9 Option D 评估:翻译 layer 工程量 3-5d + Fish [marker] 集成路径需大改 + 翻译 LLM 不学 markers → 不推;路线转向 TTS 模块化 + Fish s2-pro 直出日语 |
-| 📋 | INV-8 §1 Step 6 backlog · §1.1 stage 2 instrumentation 11 log 点 | 7 后端 + 4 前端(`# DEBUG-INV8` 标记)挪 Phase 3 H3 fix 时合刀,不算独立 audit overhead;Phase 3 ship 前跑真机 log 验证 H3 +1000ms safety margin 假设(per INV-8 §1.1.2)。审完拔光 `grep -rn "# DEBUG-INV8" backend/ frontend/` + `git restore -p` | 立项 backlog,Phase 3 起手前激活 |
-| 📋 | INV-8 §1.4 Plan C 删 yaml + ssml_supported 死字段清理 | `backend/config/characters.yaml` 5 角色 ⊊ DB 9 角色,runtime 路径已不消费(仅 prompt_manager import time legacy);`ssml_supported` 字段 cid=2/3/5 voice_model JSON 有但 runtime 零消费者 — 顺手清。改 prompt_manager 改 DB lookup + 删 yaml + 清 ssml_supported 字段 ~1-2h | 立项 backlog,与 Phase 2 独立(per §1.4.9 / §1.收口.2 Q4)|
-| 📋 | INV-8 §1.4 cid=1 vs cid=101 数据迁移方案 | CC leaning **方案 B**(数据迁移 cid=1 → cid=101,Phase 2 收尾刀;~30-50 行 migration);转移 chat_history + character_states + memory + conversations,用户感知 = "Mai 升级日语"而非"切到新角色"(cid=101 = 樱岛麻衣本体 + tts_language=ja + 复刻日语 voice 已就位)| 待 PM 拍板,Phase 2 收尾刀候选 |
-| 📋 | **F1 — 七套角色真 persona** | `cid` 2/3/4/5/99/100 灌完整 persona(仿 `docs/mai_prompt.md` 的 Tier-1+2 规格)。当前除 Mai 全是空骨架 | persona-builder skill 已就绪 |
-| 📋 | **F2 — 切角色对话联动收尾** | Bug Y 切角色→对话联动放大器残余(部分已随 UI 统一的 fetchMessages 补掉),收尾 | 部分已随 v4-beta UI 完成 |
-| 📋 | **F8 — 长期记忆归属分级** | fact/profile → user_shared;event/关系型 → character_private(按 character_id);short_term 已 conv 隔离。**v4.0.0 audit 已完结、链路修复链已 ship(代码核验,功能待真机回归);"有没有"已解决,F8"分级"仍 v4.1** | v4.0.0 audit 已出结论,F8 解锁 |
-| 🔬 | **记忆架构 v2(陪伴洞察)** | 一角色一永久对话流(非工具型多对话/新对话范式)+ 近期 short_term 原文 + 远期 RAG;"重来"靠显式清空非新对话。与 F8 统一设计 | 陪伴本质的架构终局,v4.0.0 不重构以免拖死 ship |
-| 📋 | LLM 性能 | qwen3.6-plus 本身慢 + 网络;绑定锁死后"慢"与"串"已解耦,纯体验问题,独立优化(模型选型 / 流式 / 预热) | 不混进功能修复 |
-| 📋 | CosyVoice WS 弱网超时 | 建链 5s 超时(SDK 写死)弱网失败;重试包装 / SDK 升级 / streaming_call | 生产复现触发 |
-| 📋 | 测试债清理(原 chunk 13) | 遗留 7 个 **import-死符号断测**(test_chat_agent / test_database / test_llm_client / test_memory_agent / test_ws_helpers / test_memory / test_integration,v2.5-B/v3-C 时代 import 已删符号,**与功能无关**)+ fixture 隔离 + 全套 pytest 跑通。**注:`test_long_term` 不在这 7 个内,它是 Z.5(memory 0 行)的现成 repro,属 v4.0.0 critical,见下方收口批次** | 从 Now 下移 |
-| 📋 | 可塑性易用清单(原 v4-alpha Now) | Stage 2 纯前端管理三类资源 / skill docs+examples / Live2D swap guide / plugin registry seedling | v4-beta 让位陪伴质量,v4.1+ 接回 |
-| 📋 | **Persona 蒸馏重构（Mai 为先）** | 现 persona 把防御层（讥讽/调侃/话少）当人格本体写成常量，缺底色层与切换规则。重构方向：①补内核底色（被审视的孤独 + 对真实连接的隐秘渴望）②防御层标注为试探机制非本性 ③讥讽/话少由常量改为随对方真诚度变化的变量。蒸馏纪律：素材驱动、写约束非形容词、少而硬、给正反例 | 前端整理后启动 |
-| 📋 | **八重 UI 线** | 八重神子(cid=2)的真 persona 灌入 + Live2D yae 模型已就位的前端联动 / 切换体验细化（属 v4.1 F1 七套角色真 persona 的优先一员）| 立项 |
-| 📋 | **token 治理一轮** | INVESTIGATION-2 性能弹药已就绪:工具懒加载(被动池 + 主动细化,理论可省 9-10k tokens 但风险高,见 §5 懒加载地形)/ persona 字段裁剪(500-1500 tokens)/ history 窗口收缩(~600 tokens)/ ADDENDUM 压缩(74 tokens 收益微小)。优先级 / 取舍待人工拍板 | 立项 v4.1 |
-| ✅ | **prompt caching 启用**（path F · Qwen system 段，已 ship 2026-05-20） | `EXPLICIT_CACHE_PROVIDERS` 白名单 + `_inject_cache_marker` + `config.yaml prompt_caching.enabled` flag；切 `dashscope/` prefix；main_chat 真机 cold/warm cache 命中实证（WARM 5,655 cached_tokens / 99.8% 覆盖率），生产 ~27% prompt 价省；T4 实证 Qwen tools= cache_control silently strip → ROI 缩水到 ~27%（vs brief 假设 67-83%）；T5 实证 DeepSeek 自动 caching 含 tools= 96.4%，路径 D（切 DeepSeek 全量 ~75% ROI）留 v4.1 A/B 评测候选。详 INV-5 §5 |
-| 📋 | **path D · 切 DeepSeek 全量评测**（v4.1 候选，**优先级调低**） | T5 实证 DeepSeek 自动 caching 96.4% 覆盖率（含 tools=），理论 ROI ~75%。**但按 Qwen-Plus 真基线（非历史误算的 Qwen-Max 价位，详 INV-3 §10.9 archaeology 记录）重估，路径 D 切 DeepSeek 边际收益小于原估**：Qwen-Plus input 价 ~¥0.008/1k vs DeepSeek-V4-Pro ~$0.07/M token（~¥0.5/1k），DeepSeek cached ~$0.014/M（~¥0.1/1k）；按完整缓存命中算 DeepSeek 仍贵于 Qwen-Plus,且陪伴质量需 Mai 中文盲测确认。**A/B 评测仍可挂 backlog 但不在 v4.1 优先档**。详 INV-5 §4.5 + INV-3 §10.9 |
-| 📋 | **token 治理子轨 B · 工具治理实施**（v4.1 候选） | INV-4 §3 v4.1 实施清单 6 动作（P2 desc 精简 / P3 character.set_activity 退役 / P1 入口折叠 media+apple_calendar+bilibili+netease）按风险×工程量×收益排序，总省 ~6.8k tokens 子轨 B 单独；与子轨 A 5.6k cache 叠加主路径 prompt 砍 ~55%（按 Qwen-Plus 真基线绝对成本节省 ~¥0.054/turn）。详 INV-4 §3.5 |
-| 📋 | speculative cache warming | 前端 keystroke 触发预热 Qwen ephemeral cache(TTL 5min),应对用户停顿超 5min 后回到对话时的 cold start。需评估 keystroke event → 后端 warming endpoint → call_llm 空跑设计 + 预热成本 vs cold start 体验改善 | 立项 backlog |
-| 📋 | layered cache markers | 子轨 A 当前只在 stable system block 标单个 cache_control marker。若 MCP toggle / 用户切角色 / persona 变化时只 invalidate 部分前缀（如分 tools/addendum/persona/Layer A-B 各自 marker）能减少 cache miss penalty。Anthropic 支持多 cache_control marker;Qwen `dashscope/` 路径未实测。详 INV-5 §5.4 衍生 | 立项 backlog |
-| 📋 | cap naming convention 治理 | INV-4 §2.4.4 暴露 `proactive.snooze_wake_call` 是 misnomer(name 含 proactive 但行为 reactive,prefix 是 namespace 归属不是触发模式)。建议未来 cap naming 约定 namespace prefix 与 trigger 类对齐,避免 audit 误读 | 立项 backlog |
-| 📋 | DESIGN_LITE §5.7 补 model 解析路径文档 | config.yaml fallback vs DB active 当前未文档化,导致历史 model 名错位 archaeology(INV-3 §10.9) | 文档增量,低优先级 |
-| 📋 | **docs 第二刀(本刀真源对齐)** | 5 份真源 + 死链 + 退役同步 + HEAD 锚点 + 本会话新成果补录,2026-05-19 执行 | 进行中 |
-| 📋 | **v4.1+ conversation_summary 重设计** | 表名实为 `conversation_summary`(原条目 `rolling_summary` 系笔误,代码全仓 0 引用)。摘要 worker 正常运行 — `_get_or_create_state` 给每个 `(user, character, conversation)` 三元组先建空 placeholder 行(`summary_text=''`, `last_folded=0`),仅当会话 messages 超过 fold 阈值(>60 messages,`SHORT_TERM_MAX`)才回填,故空行属预期。当前 ChatAgent 部分路径走不带 summary 的模板(SESSIONS 2026-05-29 §2)。重设计方向待定 · 旧表 schema/数据保留不动 | v4.1+ 立项,详 SESSIONS 2026-05-29 §7 |
-| 📋 | **v4.1+ 角色记忆 UI**(rolling summary 重设计后)| 角色级 long-term memory + 短期 rolling summary 视化 + 用户可编辑 / 删除 · 依赖 rolling summary 重设计完成后启动 | v4.1+ 立项 |
-| 📋 | **v4.1+ Mai persona token 数失衡**(~2759 tokens · 持续调中)| 当前 Mai persona block ~2759 tokens 占整 prompt 显著比例 · PM 持续调蒸馏中 · 跟 P1 "Persona 蒸馏 Mai 三层" 相关但独立(蒸馏是内容方向 / 本项是 token 数控制)| 立项,持续 |
-| 📋 | **v4.1+ proactive cron 重构**(DB 实证几乎全 dead)| 2026-05-28 audit 实证 `proactive_actions` 表 3 天 10 行 · 几乎全 dead · 现 cron 调度逻辑没真触发 · 需 audit cron job 调度路径 + trigger 路由 + 重构 | v4.1+ 立项,详 SESSIONS 2026-05-28 §2.5 |
-| 📋 | **`v4_0_0_mai_revert_zh.py` 空转 ensure 待删** | 2026-06-01 doc 对账发现:hotfix scope(`provider IN (NULL,'cosyvoice')`)生效后,cid=1 已切到 gsv 路径,该 migration 每次 lifespan 启动 rowcount=0,纯空转。三步联动可干净删:删迁移文件 + `backend/main.py:148-151` import block + `:418-422` await 调用 | v4.1+ 清理 |
-| 📋 | **`VoiceButton.tsx` 死 stub 待删** | 2026-06-01 doc 对账发现:`frontend/src/components/VoiceButton.tsx` 是空壳(仅 className,无 onClick),全仓零外部 import;真录音键在 `ControlBar.tsx` / `ChatInput.tsx` 的 `handleMic`。留着易让 review 误以为它是真录音键 | v4.1+ 清理 |
-| 📋 | **`switch_character` 死代码注释清理** | LLM tool 已下线(`backend/tools/registry.py:99` 只 register `clear_short_term`),但 `backend/tools/builtin.py:16-25,52` 函数体 + schema 和 `registry.py:14` docstring 仍举它为例,易让后续开发以为还能 LLM-call。或加 `@deprecated` 注释,或直接删 | v4.1+ 清理 |
-| 📋 | **`character.background_path` dormant 字段待清**(Round 5 step 1 衍生)| Round 5 step 1 解耦后 SceneBackground 只消费 `globalScene`,`character.background_path` DB 列 + Pydantic 模型 + `CharacterPanel.form.background_path` 字段都保留(零迁移)· 编辑老角色时 DB 原值 round-trip 透传不被清空。**未来若做"每角色默认壁纸 + 全局壁纸覆盖"混合档**可启用;否则按 chore 清:`character_panel.tsx` 删 form 字段 + 后端 Pydantic 模型移除 + DB DROP COLUMN migration | v4.1+ 清理 |
-| 📋 | **`SystemStatusSection` 旧 export 死代码待清**(Round 5 系统状态页衍生)| `SettingsPanelLegacy.tsx:1155` 仍有 `export function SystemStatusSection()` 完整定义(挂在已退役的 SettingsPanel default 内),但 step1 系列 `chore: drop dead SettingsPanel default` 把 caller 删了 → 现在 orphan · Round 5 ② 系统状态页的 `ResourcesCard.tsx` 已"拆 card"重做同款渲染。顺手 chore:删 `SystemStatusSection` 整个函数 export | v4.1+ 清理 |
-
----
-
-## Next — 补诚实承认的缺口
-
-[README §Comparison](README.md#comparison) 和 [§What Skyler is NOT](README.md#what-skyler-is-not) 列出来的缺口,逐条挪到 roadmap。Hermes 已经验证可行,Skyler 没做不是不该做,只是优先级。
-
-| Status | Item | Goal | ETA |
-|---|---|---|---|
-| 📋 | Messaging gateway POC | Telegram bot 起步,跟桌面 Skyler 共享 character + memory | ~3-5 days |
-| 📋 | Training data export | "用你跟 Momo 的对话训练你自己的小模型"—— SFT / DPO 格式 + PII sanitizer | ~2-3 days |
-| 📋 | Capability marketplace | GitHub Pages 起步的社区 skill 索引,PR-based 提交 | ~1-2 weeks |
-
----
-
-## Later — Persona-level learning
-
-Hermes 的杀手锏是 self-improving skill loop(skill 越用越好)。Skyler 不直接 copy,而是把同样的"系统会变好"应用到**角色这一层**:
-
-| Status | Item | Goal | ETA |
-|---|---|---|---|
-| 🔬 | character_states evolution | 让 mood / intimacy / activity 长期演化形成角色 pattern(不是 hardcode 规则,是 LLM 推断出的偏好)| research |
-
-具体形式还在探索:可能加 derived field 记 pattern signal 做小步实验,再决定要不要 invest big。这是 Skyler 长期对 Hermes self-improving 的**差异化版本** —— Hermes 让 agent 更能干,Skyler 让 agent 更像一个具体的人。
-
----
-
-## Long vision
-
-桌面端建立一个**小而忠诚的可塑型 AI 角色容器爱好者生态**。
-
-- 几百到几千的核心用户,每人都改 / 扩展 / 持有自己的版本
-- 一个分散但活跃的 skill / character / Live2D 模型生态
-- 不卖订阅、不卖模型、不收数据
-- 衡量成功不是 GitHub star,是"有多少人真的把 Skyler 当成自己的角色用了一年以上"
-
-不追求大众化。不参与 VTuber 直播 / Agent 框架 / 通用助手任何一个赛道的直接竞争。
-
-### 长期技术能力扩展
-
-支撑上面愿景的基础设施。这些是真长期项,不在 12 个月窗口内。
-
-| Status | Item | Goal | Notes |
-|---|---|---|---|
-| 🔬 | autodl 部署 + sub-agent 隔离 | 长任务跑独立 context 不阻塞主对话;云端 GPU 跑 fine-tune | 借鉴 Hermes 多执行 backend |
-| 🔬 | GPT-SoVITS 后端接通 | 替换 / 补充 CosyVoice,接通自训音色路径 | 依赖 autodl |
-| 🔬 | 自定义 voice 训练 | CosyVoice fine-tune + GPT-SoVITS 角色专属模型 | 用户自训 + 接进 Skyler |
-| 🔬 | 多设备 / 跨平台 | iPhone / iPad 同步;Windows 客户端 | v6+ |
-| 🔬 | 工作模式 + Toolset by Mode | 引入 `Mode.WORK` 显式用户触发；按 Mode 切 toolset 子集（roleplay / proactive / work 各自只看到必要工具）；schema 经济上最低成本的运行态 | 远期立项，需先完成 v4.1 token 治理一轮后单独议 |
-| 🔬 | Cubism 5 运行时支持 | 升级 Live2D 渲染管线,加载 moc3 v5 模型(如艾莲) | 当前 Cubism Core 4.2 + pixi-live2d-display `_PIXI_MAX_SUPPORTED=4`(`backend/services/live2d_scanner.py:79`),v5 模型 `csmReviveMocInPlace` 返 nullptr → 黑屏。现代高质量模型越来越多是 v5,长期"用户自由加模型"必须支持。路径:换 **Cubism 5 Core**(向下兼容 v4 模型)+ 可能需切带 cubism5 binding 的 **pixi-live2d-display fork**(官方 issue #118 未修)。**触发**:出现真正需要的 v5 目标模型时再起。**第一步**:只换 Core 试加载,能渲再决定上不上 fork(`registry.ts::getRuntime` 已留 `moc3_version > 4` 分支位 + console.warn) |
-
----
-
-## AI character director(规划 · emergent 建 · 详 DESIGN_LITE §17.1)
-
-VTuber 是被人操的;Skyler 要当**操偶人** —— LLM 在 curated 素材库上做导演。同一个 `<emotion>` 信号同时驱动**三条并行通道**:① Live2D motion(模型上)② Live2D expression(模型上)③ sticker(聊天流插图 · **非模型**)。
-
-> 设计真源在 [DESIGN_LITE §17.1](DESIGN_LITE.md)(Parked 区:规划级 · 不锚现役代码)· 本段只列 brick 顺序 + 状态。每 brick 落地后从这里**转出** → 进 ROADMAP 主区 + DESIGN_LITE §7.x 当前段(`file:line` 锚改写)。
-
-**当前真实分层(三档诚实)** — 别把 brick #1 ship 读成"导演在工作":
-
-| 层 | 状态 | 锚 |
-|---|---|---|
-| **A · 性能层**("活物"基线 · SDK 物理 + 鼠标 focus 驱动 · 跟 LLM emotion 无关)| ✅ ship | brick #1 · §7.6 表演层 `c14065b` |
-| **B · `<emotion>` → expression 数据流** | 🟡 已接 · **休眠**(0 视觉)| `Live2DCanvas.tsx:148-167` 接通(sanitize → `runtime.setExpression`)· `emotionMap` 默认 `{}` · lookup miss → 无 SDK 调用 · brick #2 给具体角色填 `emotion_map_json` 才点亮 |
-| **C · director 决策层**(cooldown / weighted / 跨仓库协同 / 路由)| 📋 parked | brick #3-#5 · 0 代码 |
-
-| Brick | 内容 | 依赖 | 状态 |
-|---|---|---|---|
-| #1 | **pixiCubism4 表演层 = 性能层 A**(idle sway BodyAngleY/Z ±1.5° + head-turn focus GAIN ±15° + 眨眼 + 呼吸 + 物理/姿态 SDK 自动 idle)| — | ✅ shipped(2026-06-14 commit `c14065b` · 详 §7.6)|
-| #2 | **激活 B 层** · `<emotion>` → Live2D expression 切换(单角色试 · 现成弹药:阿芙洛狄忒 fense 5 expression `axy/heilian/kuku/lianhong/shengqi` · 锚 `frontend/public/live2d/阿芙洛狄忒/fense/expression/` + `fense.model3.json` FileReferences.Expressions · 数据驱动 · 不动 Live2DCanvas 代码)| 数据流已通(`Live2DCanvas:148-167` + `character.emotion_map_json` v3-E2 已加)| 📋 backlog · 起步砖 · 0.5d |
-| #3 | **C 层起步** · motion bank + 选择策略(tag schema · cooldown · weighted random · 防过密)| brick #2 | 📋 backlog · 1-2d |
-| #4 | **sticker bank** + 聊天流图通道 + tag schema(IP-clean 原创 · 自画/委托 · WS push `sticker_chosen` → 聊天气泡内联 `<img>`)| 角色级 sticker 素材到位 · license.txt 同 Live2D 模型纪律 | 📋 backlog · 2-3d(代码)· 素材独立 |
-| #5 | **跨仓库 director**(同 emotion 协同三通道 · 防三通道同时炸 / 同质化)| brick #2/#3/#4 都过 | 📋 backlog · 1-2d |
-| #6 | **管理 UI**(每仓库 CRUD · tag 编辑 · 预览 · 角色级 weights)| brick #5 | 📋 backlog · 2-3d |
-
-**关键纪律**:①② 在 canvas 模型上(`pixiCubism4.ts` runtime)· ③ 是聊天图通道(完全不动模型)· **三者并行不叠加,别混**。三仓库共享 tag schema 但目录 / 管理 UI 独立。sticker 必须 IP-clean(自画 / 委托,不抓互联网)。
-
-**容器留位 vs 决策层**:`live2d_settings` JSON 容器(§7.8 framing 同表)预留了 `param_map` / `director` 字段位 · PATCH merge 透传不识别。**留位是 ship 的**(framing 走的同表 + 同 merge 走通)· **决策层 B/C 是 parked**(无 motion bank 数据结构 · 无 cooldown 实现 · 无跨仓库协同)。容器位不等于 director 在工作。
-
-**触发顺序**:不抢节奏 —— 等 Mai 主线音色 / GSV 收口 / MCP 真机过完之后再起 brick #2。素材层(sticker 原创)可以跟代码并行,角色独立攒。
-
----
-
-## Tech Debt & Backlog
-
-按领域分类的活跃技术债。chunk 13 会一次性处理测试相关,其他逐条按优先级。
-
-| Area | Item | Status |
-|---|---|---|
-| 性能 | `_build_messages` 退化(chunk 1.6 4ms → v3-H chunk 1 4487ms,1000x)—— 嫌疑某 capability 在 prompt 注入做昂贵 IO | audit 待 |
-| 数据架构 | Characters 双源(`characters.yaml` + DB)—— 当前 Plan B(DB persona 为主源 + YAML fallback)。**注**:yaml 仅含 5 个内建角色(八重神子 / 默认 / 荧 / 凝光 / 神里绫华),非 DB 全集;`cid=99/100/101` 等不在 yaml,仅 DB seed。Plan C(删 yaml、DB 单源、迁移导入、`switch_character`/`prompt_manager` 改 DB-backed)deferred | v4 后期 / v4.1 |
-| 数据架构 | `config.yaml` 双写源 —— 静态 / 运行时拆,运行时进 DB 表 | v4 后期 |
-| 配置 | git update-index --skip-worktree config.yaml 当前 workaround,升级方案 A `config.local.yaml` 覆盖 | backlog 30 min |
-| 角色 | `cid=1`=Mai(借 Momo 壳 + Hiyori 模型,樱岛麻衣 persona,v4-beta 唯一真 persona);其余 `cid` 空骨架,v4.1 F1 逐个灌真 persona | F1(v4.1)|
-| 记忆 | 长期记忆链路 audit 完 + 修复链已 ship(b91505a/902c2c2/f712625/42d1800/bfcd821/3f3be08;代码核验)—— 功能/陪伴质量待真机回归(验收门) | ✅ ship,待真机回归(详 DESIGN §十五之 Z.5.1)|
-| 记忆·表层 | 异构表 facts+提醒未拆(`memory` 混存 `expires_at` NULL 持久事实 + 有值时效提醒) | 表层重构 pass(立项) |
-| 记忆·表层 | 双 type 列 cruft(`type` 5 类 CHECK / `entry_type` 4 类并存,各有真消费者) | 表层重构 pass(立项) |
-| 记忆·表层 | supersede 自身机制未实现(新旧事实共存,不替换) | 表层重构 pass(立项) |
-| 记忆·表层 | `expires_at` 未正经接线(signature 接受但 caller 全传 None) | 表层重构 pass(立项) |
-| 记忆·表层 | 墓碑 check 无类型感知(可能误压合法重建的新提醒) | 表层重构 pass(立项) |
-| Live2D | Hiyori 缺挥手/点头/鞠躬;motion3.json 自带 wav 默认禁用,未来 per-character 开关 | 切模型时重写 |
-| Live2D | emotion 视觉绑定阻塞于 `.exp3.json` 模型资产(外部依赖) | 外部 |
-| Live2D | 公参表 — per-model「概念→Cubism 参数」map · 现所有模型走 `ParamMouthOpenY` 无强制需求 · 首砖=lipsync 读 `Groups[LipSync]`(fallback `ParamMouthOpenY`)· 等出现"非标准 mouth 参数且 `model3.json` 里声明了"的模型再做 | PARKED |
-| Live2D | AI character director — 见独立段「AI character director(规划 · emergent 建)」 ↓ | 长期方向 · brick 顺序见独立段 |
-| 音色 | cosyvoice WS 建链 5s 超时(SDK 写死)—— 弱网失败;修法重试包装 / SDK 升级 / streaming_call | 生产复现触发 |
-| 音色 | Phase 2 自训音色(SoVITS / 微调 cosyvoice3) | 用户训练完成 |
-| 凭证 | `mcp_credentials` 明文存 —— 升级 OS keyring / master password 派生 | backlog |
-| 字幕 | 超长 B 站字幕分段总结(>30k 字符)—— map-reduce 风格 | 200k context 够时延后 |
-| 工具链 | skyler CLI thin client(替代 MCP 对外接口的更轻方案) | chunk 13 后 |
-| TTS 错误 | TTS timeout idx=1 偶发(chunk 14 chime in 文本到 widget 但语音没出) | 调 timeout / audit ws push 时机 |
-| Observability | 推送延迟 metric:ws.py audio_consumer send_json 前后打 perf_counter,记录每段 audio push_latency_ms + size_kb 到 log,便于 dogfood 期间快速定位音频沉默根因(chunk 15 audit 副产物) | v4.1 nice-to-have 2-4h |
-| Stage 2.2 Live2D e2e | 2.2.0 backend 29/29 + 2.2.1 frontend yarn build pass,但真机拖 .zip 完整 flow 未测(用户当时无合适 sample model)。补 5 scenario:拖 valid zip / 拒非 zip / slug 冲突重试 / 应用 / 跳过 motion_map / Live2DCanvas 渲染验证。**风险**:CC 没真机验证 Tauri WebView 上传链路,可能有 MIME / fetch 边角问题;dogfood 期间用户拖会自然暴露,补时机最佳 | v4.1 0.3-0.5d |
-| Fan UI Vitest + 视觉回归 | Fan-1 backend 34/34 已覆盖,但 frontend 全跳过 Vitest(Fan-2~5 走真机走查通过)。补:CharacterCard / FanLayout(geometry math + windowed mode + click shortest path)/ CharacterGallery(state machine browse↔detail / Esc / CTA → close)/ SplashArtDropzone(MIME/ext fallback / size limit / replace flow)。视觉回归用 Playwright snapshot 抓 fan @ N=4/5/7/10、detail open、bg cross-fade 中段。**理由**:6 个 sub-stage 每次都靠用户真机走查,迭代成本高;Vitest 套件让 layout 数学回归(stepDeg / shortestDelta / fade)瞬间发现 | v4.1 0.5-1d |
-| Fan UI tagline / interests | Fan-4 detail modal 的字段缺位决策 backlog:DB schema 加 ``tagline`` / ``interests``(JSON tags) → CharacterPanel 加编辑表单 → DetailModal 渲染。当前 detail 只显示 name / persona / character_state, 用户实测后若觉得"信息少"再补 | v4.1+ backlog 0.5-1d |
-| Skill UI | Skill .py 拖入 + 一键重启(Stage 2 原 2.3,推 v4.1+):跨 framework skill 不兼容(详 [stage-2-starting-context.md §5.1](docs/archive/stage-2-starting-context.md)),90% "装别家 skill" 场景由 MCP(Stage 2.1)覆盖;.py 拖入主要价值在 Skyler 社区共享 capability,需早期用户 base 形成后再做 | v4.1+ backlog ~5-7d |
-| Skyler-as-MCP-server | 让 Skyler 自身暴露成 MCP server,把 character_state / activity timeline / Live2D control / memory 等 capability 暴露给其他 MCP-compatible 工具(Claude Desktop / Cursor / Cline 等),让 Skyler character 跨工具可见可引用。**理由**:跨 framework skill 市场调研后,MCP 已是事实标准——各 framework 都出 MCP adapter,Skyler 从 MCP client 升级为 MCP server 是差异化方向 | v4.1+ backlog 待估(可能 1-2w)|
-| Frontend | UX-003 情绪 UI absolute viewport 锚定 bug(left: 16px 可能被父容器影响) | backlog 15 min |
-| Display name | wpsoffice 缺中文 display name(`_APP_DISPLAY_NAMES`)| backlog 5 min |
-| URL fetch | bilibili url_fetcher 5s 超时(反爬虫/UA/timeout 调整)| backlog 30 min |
-| 网易云 | **appver 2.9.7 → 3.0.x 升级**(weapi User-Agent 内嵌版本号 · 防 NCM 风控对老 appver 收紧)| 2 min · INV-16 audit 顺手项 |
-| 网易云 | **`add_to_playlist` action 暴露**(`NeteaseClient.add_to_playlist` 已实现 · 未注册成 `netease_web` action)| 5 min · INV-16 audit 顺手项 |
-| 网易云 | **19 actions 测试矩阵 P0-P2**(PM 醒后跑) | INV-18 ship 后真机回归 · P0(mpv 闭环 8 action · 含 Pit 1 验证)/ P1(Patch D + Patch B 验 6 action)/ P2(媒体控制 fallback 5 action)· 详 `docs/SESSIONS/2026-05-30-to-31.md` §5 | 立项 · PM 真机驱动 |
-| **决策 #1** | **MCP marketplace · Skyler 子注册表 / opinionated catalog** —— 详决策表 #1 · 范围:ingest 官方 Registry → curate 中国相关高价值子集 · Skyler 可读 manifest 对齐官方 schema · 用户 MCP 面板浏览 / 一键启用 · secret 本地填永不进 catalog · 信任分层 + 显式同意 + 绝不自动跑 · hybrid(原生 capabilities 不动 · 长尾走预设) · 邮件 = 首预设(IMAP/SMTP MCP + QQ 授权码) | backlog · 方向 / 未建 |
-| **决策 #2** | **窗口自动切换** —— 详决策表 #2 · 大窗 blur → 小窗+置顶 / dock 重新激活 → 回大窗 · 状态机 + 1s debounce + 可关偏好 · Tauri focus/blur + macOS dock 事件 · 复用 `applyModeWindowProps` 双模 swap · 顺带定清"小窗↔大窗 ⚙ 图标语义"债 | deferred backlog(PM 晚点)|
-| **决策 #3** | **Sigil · 角色单线 SVG 徽章** —— 详决策表 #3 · 每角色一徽章(Mai=兔 / 八重=狐 / 流萤=机甲变身器 · 余待定)· 签名色描边无填充 · 替进入动画现有 `CyberAnchor`(冷启动标记 = 该角色)→ 溶进暖收 splash · 复用同一签名色源(撞色债见下) | backlog · 概念已定 · 卡 fork(变身器谁画) |
-| **决策 #4** | **Hermes 缓存 · 注入记忆冻结快照** —— 详决策表 #4 · 注入记忆(摘要+事实+profile)做成会话开始冻结快照 · 会话内改动写盘下次生效 · 保 LLM 前缀缓存稳定抬升当前 ~12.5% 命中率 · 是 v4.1 prompt-caching 子轨补强非替代 | backlog · idea · 补强 v4.1 caching |
-| **决策 #5(已 lift)** | **事实有效期 · `expires_at` 接线 + 时序版本** —— 从下方"记忆·表层 supersede" + DESIGN_LITE §8 #11 提升 · 给事实层加时序有效期(事实变了旧的失效但留作历史)· 轻量、不上 TKG(加有效期/版本字段即可)· 记忆唯一该补的缺口 | roadmap 方向 · v4.1 |
-| 撞色 · 签名色单源 | 角色签名色目前分散:`LoadingScreen.CHARACTER_THEME`(9 cid 硬编码 · entry animation)+ Gallery 卡面颜色(各自管)+ 未来 sigil 描边 · 应抽统一 `CHARACTER_SIGNATURE_COLORS` 单源(放 `frontend/src/config/character_theme.ts`)· 决策 #3 sigil + 现有 entry animation 共消费 | doc-only 决策衍生 · sigil ship 前必处理 |
-| 进入动画衍生 · TD-A | `LoadingScreen.tsx completionLatched` `useRef` 修法 + 教训 → Lesson #38 已沉淀 · 此条仅记 "已沉淀防再踩" | ✅ 已 cover(Lesson #38) |
-| 进入动画衍生 · TD-B | **立绘馆发牌入场 per-card stagger 未做** · framer-motion inline transform vs 外部 stagger 冲突 · 当前"整扇升起"非"卡牌错峰甩" · 未来要做需加 FanLayout 单 prop `introStaggerDelay` | 低 backlog · 真机看后决定 |
-| 进入动画衍生 · TD-C | **`SettingsPanelLegacy.tsx:1603-1624` splash toggle UI dead code** · cut3 删 SplashOverlay + intro.mp4 时未顺手清 · UI 不可达但代码在 | cleanup 10 min |
-| 进入动画衍生 · TD-D | **`backend/config/prompt_manager.py` legacy yaml `_DEFAULT_CHARACTER="默认"` 链 dead path** · cut1 audit 实证 · 跟 DB id 链是两条独立 · 现役不靠它(`ws.py:_resolve_conv_char` 走 DB)· 整文件可退役 | backlog 0.5h |
-| 进入动画衍生 · TD-E | **`live2dModelEntry` hardcode dict 仅含 `hiyori` · `yae` 在 disk 但未登记** · scanner 兜底 ok 但 hardcode fallback 不全 · 加一行 `yae: 'BCSZ1.1.model3.json'` | chore 1 min |
-| 进入动画衍生 · TD-F | **进入动画"魔数"集中文档化** · 9s floor / 3s engine start delay / 600ms latch bridge / 60s safety net / 2.36s preamble · 散在两文件 · 没 design rationale 沉淀 · 真要调时找不到根 | doc-only |
-| 进入动画衍生 · TD-G | **`config.yaml` 长期 modified 不入 commit** · `git update-index --skip-worktree` workaround 是否生效未核 · 每次 commit 要 named add 避开 · 易误 `-A` 带入 · CLAUDE.md 锁了硬律 | 中 · 1h workaround 升级 |
-| 进入动画衍生 · TD-H | **Tauri pre-resize 修小窗→大窗闪 失败 case** · 纯浏览器 dev / Tauri API 不可用时 try/catch 吞 · 仍可能闪 · 不算坑要写明 | doc-only |
-| 进入动画衍生 · TD-I | **Beat 1 → Beat 2 总时长 ~13.95s · 比原始 9s 长 50%** · 累积:preamble 2.36s + engine 9s + latch 0.6s + crossfade 2.8s · PM 现接受 · 偏离最初"9s 总时"约束 · 在 §进入动画 段如实写 | doc-only |
-| MCP 能力层衍生 · TD-MCP-1 | **stdio install-once 升级** · 当前 akshare / rss-reader / xmind / 部分 amap-stdio entry 用 `npx -y <pkg>` / `uvx <pkg>` 现拉 · run-and-discard 语义 · 每次 enable 都解析 / 可能重下 · 偶发 `unhandled errors in a TaskGroup (1 sub-exception)`(holder 首连超时 + npm/uv 网络慢叠加)· trip12306 + 12306 geo-block 叠加问题相对独立 · **正解**:全局装一次(`npm i -g <pkg>` / `pipx install <pkg>` / `uv tool install <pkg>`)+ `command` 指 `which` 出的绝对路径(`backend/.venv` 不带 nvm/uv 用户 PATH · 必须绝对)· xhs 已转 rednote-mcp 绝对路径范式 · 其余 entry 沿用 npx | 中 · 半天:装 + 改 4 条 entry + example.yaml 范式注释升级 |
-| MCP 能力层衍生 · TD-MCP-2 | **holder 首连超时放宽 + TaskGroup 异常解包** · 当前 `_holder_task` 入栈失败一律 `handle.connect_error = exc` 笼统记 · anyio TaskGroup 把 sub-exception 包成 `ExceptionGroup` · UI `last_error` 字段看到 `unhandled errors in a TaskGroup (1 sub-exception)` 没诊断价值 · stdio 包冷启动可能 15-30s 触发某层超时 · **正解**:try/except ExceptionGroup 解包 → 取 `.exceptions[0]` 写真 error + holder ENTER 拆 `stdio_client` / `streamablehttp_client` / `sse_client` 三段超时窗 + per-transport 配置化超时 | 中 · 1 天 · **依赖 ② holder 真机验过 + 进 main**(干净 base) |
-| MCP 能力层衍生 · TD-MCP-3 | **auto-reconnect + health probe** · 当前 holder 死了不重连(stop_event 没人 set → holder 自然结束 / 网络瞬断 / server 进程被 OS 杀)· UI 显示 connected=true 但实际死 · 调 tool 才发现 · **正解**:holder loop 包一层 supervisor + N 秒 ping probe + N 次重连退避 + UI `last_error` 区分"connect_error / health_lost" | 中 · 1-2 天 · **依赖 ② holder 真机验过 + 进 main**(干净 base · 改写 holder 主循环) |
-| MCP 能力层衍生 · TD-MCP-4 | **`backend/mcp/client.py` 5 commit 缠在 1 文件** · ② holder-task / ③ SSE / ⑤ confirm seed / batch2 自校验+45s / browser_login 入口都同一文件改 · `git add -p` 切片不彻底易混批 · diff 难审 | 低 · 切片时手动隔离 hunk · 不重构 · 提醒为主 |
-| MCP 能力层衍生 · TD-MCP-5 | **`dangerous_tools` 名对账只 WARN 不 enforce** · 当前 `stale_dangerous` / `possibly_naked` 都只打日志 · 实际错配(配置写了 `delete_repo` 而真 tool 叫 `delete_repository`)→ confirm 不拦 → LLM 直调 → 真删 · **正解**:`possibly_naked` 升 ERROR 阻断启用 + UI 红字提示;或反向加白名单"已审过名单"+ 默认对未审过 tool 拦 | 中 · 1 天 · 等真用 github / email 写操作后再决定阈值 |
-| MCP 能力层衍生 · TD-MCP-6 | **rednote-mcp 绝对路径硬编 v22.15.1** · `mcp.config.yaml` xhs `command: /Users/.../v22.15.1/bin/rednote-mcp` · 换 node 版本时要手改 · backend `.venv` 不带 nvm PATH 没法走 `which` · **正解**:启动期 resolve(`shutil.which` 找不到 → 跑 `bash -lc 'which rednote-mcp'` 兜底)+ 配置层支持 `command_resolve: nvm` 标记;或干脆 symlink 到 `/usr/local/bin/` 系统层 | 低 · 半天 · PM 单机用现阶段可接受 |
-| 文档·已lift | 下方"记忆·表层 supersede 自身机制未实现" / "expires_at 未正经接线" 已 **lift 为决策 #5 事实有效期**(本表上方"已 lift")· 表层重构 pass 内仍含异构表 / 双 type 列 cruft / 墓碑无类型感知 3 条债 | ↑ 见决策 #5 |
-
-### 遗留测试债
-
-下列测试文件在 v3-F 接手前已经断开,import 早已删除 / 改名的符号。chunk 13 测试 pollution 修复时一并处理。
-
-| 文件 | 失败原因 | 引入版本 |
-|---|---|---|
-| `tests/test_chat_agent.py` | `upsert_personality` 函数已删 | v2.5-B |
-| `tests/test_database.py` | 同上 | v2.5-B |
-| `tests/test_llm_client.py` | `DEFAULT_MODEL` 常量改名 | v2.5-B |
-| `tests/test_memory_agent.py` | `_personality_to_dict` 已删 | v2.5-B |
-| `tests/test_ws_helpers.py` | `_run_plan` PlannerAgent 简化时移除 | v3-C |
-| `tests/test_memory.py` | `SHORT_TERM_MAX is 20` 断言过期 | v2.5-B |
-| `tests/test_integration.py` | 集成 fixture schema 已变 | v2.5-B |
-
----
-
-## Not on the roadmap(明确不做)
-
-避免后续想法漂移。
-
-- ❌ **群聊(多角色同时对话)** —— 跟单角色驱动定位冲突
-- ❌ **Bilibili 弹幕直播客户端** —— 直播场景,跟桌面角色 agent 定位无关
-- ❌ **Letta / MemGPT 等独立 memory 系统** —— 现有 SQLite + sentence-transformers 已够用
-- ❌ **WhatsApp / WeChat gateway** —— API 限制 + 商业风险(注:Telegram / Discord 在中期 roadmap,不在禁做列表)
-- ❌ **Linux Wayland 完整支持** —— 技术上几乎做不了
-- ❌ **系统操作 agent(鼠标键盘控制)** —— 跨平台 + 安全代价太高
-- ❌ **跟 LangChain / AutoGen 比拼通用 agent 框架** —— Skyler 是角色驱动的桌面 agent
-- ❌ **Settings 全局 TTS 开关** —— 只在 CharacterPanel 上 per-character 提供
-- ❌ **TTS UI 提前堆假选项** —— 下拉只显示真实可用的 voices
-
----
-
-> 历史实现日志已外迁至 IMPLEMENTATION_LOG.md
+版本 × 功能演进 → [EVOLUTION.md](docs/EVOLUTION.md)。完整实施日志(每个 chunk / hotfix)→ [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)。
