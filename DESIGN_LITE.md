@@ -5,12 +5,10 @@
 >
 > 本文档是给 Claude 对话使用的**精简版**技术设计。每次开启新会话时,把本文档粘进上下文即可。
 >
-> **当前状态(2026-06-22)**:v4.0.0 收口期 —— v4-beta 已完成、长期记忆 audit + 修复链 ship 待真机回归 + Stage3 Tauri 打包未启;期间持续小批量 ship(2026-06-13 起 Live2D framing / GSV 本地化 / MCP batch / UIA 只读 / 玻璃自定义 / 角色详情中心 / 聊天双开关+时间戳 / DailyAgent Stage1)。完整 ship 矩阵见 [docs/EVOLUTION.md](docs/EVOLUTION.md);当前能力 badge 见 [ROADMAP《当前能力状态》](ROADMAP.md#当前能力状态)。
-> - v4-alpha shipped 2026-05-13(chunk 14 + UX-004/005/007 + hotfix-3 ~ 10)
-> - **Bugfix 1-4 系列** shipped 2026-05-13/14(sanitize 加固 / Settings 拆分 / AI Providers 重构 / observability + 小窗修复)
-> - **Persona Engineering Segment 1/2** shipped 2026-05-15(5 层 prompt 框架 + multi-variant + ja tag pipeline)
-> - **v4-beta 收口批次** shipped 并真机验证 2026-05-16(回退纯中文 / short_term 三级隔离 / conversation 锚定绑定语义 / character_switch 不杀 in-flight turn / 对话 UI 统一 / token 成本治理)
-> - 下一站:文档纠真 ✅ → 长期记忆链路 audit ✅(修复链 ship,代码核验,待真机回归)→ Stage 3 v4.0.0 MVP 封装(TTS cap/throttle **移出 v4.0 范围,deferred** 至多人测试再议;当前仅 `tts_call_log` 监控,无强制闸)
+> **当前状态(2026-06-22)**:v4.0.0 收口期。
+> - 完整 ship 演进(版本 × 功能矩阵)→ [docs/EVOLUTION.md](docs/EVOLUTION.md)
+> - 当前能力 badge + 近期计划 + 已知问题 → [ROADMAP.md](ROADMAP.md)
+> - 本文档(DESIGN_LITE)只讲"为什么这层这样设计 + 代码锚",不复制状态 / 矩阵。
 
 > ⚠️ **接管必读(5 个 red flag,新 Claude 先看这个)**:
 > 1. **TTS 跨语种 / 自托管 model 路径**(INV-11 Stage 1)—— GSV provider 接入 + 自训音色 emotion bank 路由(详 §5.8.5)· `tts_language` 字段把 TTS 语种从 LLM 文本语种解耦(详 §6.6.5)· **已 supersede** v4-beta "回退纯中文" + "F0 后处理翻译" 两段旧决策(§6.5 有横幅标识)。新加 model 走 `backend/config/tts_models.json` + `docs/adding-new-tts-model.md` playbook。**当前 per-character voice_model / live2d_model / persona 取值见 DB**(`characters` + `character_personas` 表 · `PATCH /api/characters/{cid}` 运行时可改 · 详 §14 SQL recipe),不在文档中钉。
@@ -580,20 +578,21 @@ def filter_samples_by_tolerance(samples, tolerance):
 ```
 UI 滑块拖动立即生效。**`cliche_tolerance` 数值本身 LLM 不响应**(LLM 模仿样本胜过响应抽象参数),靠 filter 实际改变 LLM 看到的样本集合。
 
-### 6.5 跨语种 TTS pipeline(ja / en tag)—— ⚠️ 历史决策 · 已被 INV-11 supersede
+### 6.4.5 schema 死字段(load 了但 0 模板引用)
 
-> **⚠️ 历史决策横幅**:本节描述 v4-beta "Mai 回退纯中文" + "v4.1 F0 后处理翻译重做" 两段旧路径,**已被 INV-11 Stage 1(2026-05-26)GSV provider + `tts_language=ja` 解耦机制 supersede**(详 §5.8.5 + §6.6.5)。原文留作历史档案,**不代表当前架构**;批 3 准备搬到 §16 归档区。
->
-> **v4-beta 收口决策**(历史 · 已 supersede):ja 中日交替链折腾多版(strong directive / 集中模式禁止 / Segment2-2 修复)稳定性仍不达标(LLM 实时自己交替标 ja 的不确定性无法根除)。v4.0.0 当时决定"回退纯中文",人格不动。下面的 ja 链描述对应代码**保留但休眠**(sanitize boundary set 仍含 ja/en,见 §5.6)。
-> **v4.1 F0 = 后处理翻译架构重做**:LLM 出纯中文 → TTS 前 qwen-turbo 翻日 → CosyVoice。把"LLM 实时交替标 ja"彻底移出链路。**不要再给 ja 交替打补丁。**
+当前装配链(`renderer.py` + `layer_*.j2`)**未消费** 3 个字段(load 进 `LoadedPersona` 但 prompt 模板不引用):
 
-旧 ja 链(休眠,F0 复用参考):
-- `voice_model.tts_language='ja'` 时 Layer A1 注入 ja directive,强约束"中日交替"格式
-- LLM 输出:`"中文句。"<ja>「日本語句。」</ja>"中文句 2。"<ja>...</ja>`
-- 禁止集中模式 `[中文全段] + [<ja>日语全段</ja>]`(sentence-level TTS 看不到跨句 tag,会 fallback 中文给日语 voice 念,音色错乱)
-- `extract_tts_text(text, 'ja')` 提取 ja 段送 TTS
-- `strip_ja_en_tags_for_subtitle` 删 ja 留中文给字幕
-- Bugfix-Segment2-2(2026-05-15)修了"LLM 偏好集中模式"问题
+- `relationship_to_user`(Tier-1 **必填**!填了白填 —— 当前 Mai 的 `companion / slow / intimacy=20` 没进上下文)
+- `capability_overrides`(Tier-2)
+- `style_preset`(Tier-2)
+
+且 persona-builder skill 文档声明的 Tier-2 字段(`preferences / taboo / emotion_triggers`)与真实列(`taboo_topics / lore / capability_overrides / style_preset`)漂移 —— `preferences` 和 `emotion_triggers` 实际嵌在 `lore` JSON 内,无独立列。
+
+详尽对比(vs SillyTavern V2/V3)+ 修法建议 → [docs/research/persona-schema-comparison.md](docs/research/persona-schema-comparison.md)。归 Persona Schema v2 backlog(详 ROADMAP《Later》)。
+
+### 6.5 [历史] 跨语种 TTS pipeline · 已 supersede → [§16.2](#162-历史决策档案已-supersede)
+
+原 v4-beta "回退纯中文" + "v4.1 F0 后处理翻译重做" 两段决策内容已归档至 §16.2。当前 ja 路径走 §5.8.5(GSV provider)+ §6.6.5(`tts_language` 字段解耦)。
 
 ### 6.6 完整 persona 装配机制(dogfood pattern)
 
@@ -603,7 +602,7 @@ UI 滑块拖动立即生效。**`cliche_tolerance` 数值本身 LLM 不响应**(
 
 **Token 量级**:满字段 zh persona ~9k chars(Layer C 段),跟 multi-variant Segment 1 baseline 比 +30~40%,在预算 ≤+50% 内。
 
-> **当前限制**:仅少数 character 持有完整 persona,其余 row 是骨架(只名字 + Live2D 绑定),切过去人格空洞。当前哪些 character 完整 / 哪些是骨架,见 [ROADMAP《当前能力状态 · 角色》](ROADMAP.md#角色--核心角色机制) + DB(`character_personas WHERE is_active=1`)。F1 七套角色真 persona 仿 `docs/mai_prompt.md` spec 逐个灌(详 ROADMAP《近期计划》)。
+> **持有完整 persona 的 character 现状** / F1 backlog → [ROADMAP《当前能力状态 · 角色》](ROADMAP.md#角色-核心角色机制) +《近期计划》。本节只描述装配 *机制*,不复制现状。
 
 ### 6.6.5 语音语言机制(文本恒中文 / 语音可切)
 
@@ -622,7 +621,7 @@ sqlite3 momoos.db "SELECT id, name, voice_model FROM characters;"
 或 GET /api/characters/
 ```
 
-> **⚠️ 历史 migration 注**:`v4_0_0_mai_revert_zh` migration 的 hotfix scope(`provider IN (NULL,'cosyvoice')`)只在 character 仍是 cosyvoice 体系时把 voice/tts_language nudge 回 zh + 默认音色;切到 gsv/fish/edge/sovits 后短路不动。**已被 INV-11 GSV path supersede**,留作 migration 行为档案。详 §8 Tech Debt `mai_revert_zh` 条目。
+> **历史 `v4_0_0_mai_revert_zh` migration 行为档案** → [§16.2](#162-历史决策档案已-supersede)(已被 INV-11 GSV path supersede,scope `provider IN (NULL,'cosyvoice')` 切到 gsv/fish 后短路不动)。
 
 ### 6.7 Mode 走 deterministic(v1)
 ```python
@@ -1489,9 +1488,51 @@ sqlite3 momoos.db "SELECT id, name, model, is_active FROM ai_providers;"
 
 ---
 
-## §16 与归档 DESIGN.md 的指针
+## §16 文档地图 + 历史档案
 
-本 LITE 涵盖 v4-beta 当前架构的关键点。归档版 `docs/archive/DESIGN.md`(5,206 行,2026-05-19 docs 第二刀冻结)含:
+### 16.1 文档地图(谁讲什么,去哪看)
+
+| 文档 | 讲什么 | 真源类型 |
+|---|---|---|
+| **DESIGN_LITE.md**(本文)| 深层设计 + 架构决策 + 代码锚(file:line)+ Parked 设计 | 设计真源 |
+| **[ROADMAP.md](ROADMAP.md)** | 当前能力状态 + 近期计划 + 已知问题 + 核心专项《角色机制》| 状态真源 |
+| **[docs/EVOLUTION.md](docs/EVOLUTION.md)** | 版本 × 功能演进矩阵(v3 / v3.5 / v4-beta / v4.0 / Next)| 历史真源 |
+| **[README.md](README.md) / [README_zh-CN.md](README_zh-CN.md)** | 项目概览 + 快速开始 + 凭什么不一样 + 诚实定位 | 用户入口 |
+| **[IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)** | 每 chunk / hotfix 实施详细日志 + audit / testing 覆盖 | 实施流水 |
+| **[docs/design/character-mechanism.md](docs/design/character-mechanism.md)** | 角色机制(persona + state + DailyAgent + 仲裁)brick 1-4 设计种子 | 设计种子 |
+| **[docs/design/dailyagent-plan.md](docs/design/dailyagent-plan.md)** | DailyAgent(Brick 2)完整方案 + 数据流 + MVP 切口 | 设计 |
+| **[docs/design/desktop-control.md](docs/design/desktop-control.md)** | 桌面感知 / 控制 路线(Phase 1-3 + chunk 8b VLM)| 设计 |
+| **[docs/research/persona-schema-comparison.md](docs/research/persona-schema-comparison.md)** | Persona schema vs SillyTavern V2/V3 + 3 死字段研究 + 修法建议 | 调研 |
+| **[docs/PM-CC-PROTOCOL.md](docs/PM-CC-PROTOCOL.md)** | PM ↔ Claude Code 工作协议 | 工作流 |
+| **[docs/archive/DESIGN.md](docs/archive/DESIGN.md)** | 5,206 行老 DESIGN.md(2026-05-19 冻结)· 含 v1-v3 完整 schema 演进 + chunk 级 motivate / alternatives / audit | 历史归档 |
+
+### 16.2 历史决策档案(已 supersede)
+
+#### 16.2.1 跨语种 TTS pipeline ja 中日交替链(原 §6.5)
+
+> **状态**:已被 INV-11 Stage 1(2026-05-26)的 GSV provider + `tts_language=ja` 解耦机制(§5.8.5 + §6.6.5)supersede。原文留作历史档案,**不代表当前架构**。
+
+**v4-beta 收口决策**(历史):ja 中日交替链折腾多版(strong directive / 集中模式禁止 / Segment2-2 修复)稳定性仍不达标(LLM 实时自己交替标 ja 的不确定性无法根除)。v4.0.0 当时决定"回退纯中文",人格不动。下面的 ja 链描述对应代码**保留但休眠**(sanitize boundary set 仍含 ja/en,见 §5.6)。
+
+**v4.1 F0 = 后处理翻译架构重做**(已废):LLM 出纯中文 → TTS 前 qwen-turbo 翻日 → CosyVoice。当时计划把"LLM 实时交替标 ja"彻底移出链路。**不要再给 ja 交替打补丁。**
+
+**旧 ja 链**(休眠 · F0 复用参考):
+- `voice_model.tts_language='ja'` 时 Layer A1 注入 ja directive,强约束"中日交替"格式
+- LLM 输出:`"中文句。"<ja>「日本語句。」</ja>"中文句 2。"<ja>...</ja>`
+- 禁止集中模式 `[中文全段] + [<ja>日语全段</ja>]`(sentence-level TTS 看不到跨句 tag,会 fallback 中文给日语 voice 念,音色错乱)
+- `extract_tts_text(text, 'ja')` 提取 ja 段送 TTS
+- `strip_ja_en_tags_for_subtitle` 删 ja 留中文给字幕
+- Bugfix-Segment2-2(2026-05-15)修了"LLM 偏好集中模式"问题
+
+#### 16.2.2 `v4_0_0_mai_revert_zh` migration 行为档案(原 §6.6.5 banner)
+
+> **状态**:已被 INV-11 GSV path supersede。Migration 仍在 `backend/database/migrations/`,但 scope `provider IN (NULL,'cosyvoice')` 切到 gsv/fish/edge/sovits 后短路不动 —— 对当前 character 实际无副作用。
+
+Migration hotfix scope:只在 character 仍是 cosyvoice 体系时把 `voice / tts_language` nudge 回 zh + 默认音色;切到 gsv/fish 后短路不动,留作 migration 行为档案。详 §8 Tech Debt `mai_revert_zh` 条目。
+
+### 16.3 与归档 DESIGN.md 的细节指针
+
+归档版 `docs/archive/DESIGN.md`(5,206 行,2026-05-19 docs 第二刀冻结)含:
 
 - §三~§十四:v1-v3 完整数据 schema 演进、API 设计、前端组件历史
 - §十五之A~W:各架构抽象的详细设计(Capability Registry / 双向 MCP / character_states / proactive / activity timeline / sanitize chain)的完整 motivate + alternatives 否决理由 + 实施细节。**其中 A~T = v1–v3α 架构;U/V/W = v4-alpha 期 UX-005/004/007(注意不是 Persona Engineering)。**
@@ -1508,6 +1549,8 @@ sqlite3 momoos.db "SELECT id, name, model, is_active FROM ai_providers;"
 > 本区收录**规划级设计**:目标 + 模块拆解 + 关系图。**不锚现役代码**(因为还没写)。
 >
 > 当前架构正文(§1-§16)必须锚真实代码;本区放未实现 idea 的设计草图。任何 brick 上线时把对应行**转出** → 进 §7.x 当前段 + 用 `file:line` 锚改写。
+>
+> **角色机制 brick 1-4 设计种子**(persona + state/FSM + DailyAgent + 上下文仲裁,= 项目头号差异化)→ [docs/design/character-mechanism.md](docs/design/character-mechanism.md)。下方 §17.1 是 Live2D × emotion × sticker 的 AI character director 子专项;Brick 2(DailyAgent)的 Stage 1 已 ship,见 §7.12 当前段 + [docs/design/dailyagent-plan.md](docs/design/dailyagent-plan.md)。
 
 ### 17.1 AI character director(Live2D × emotion × sticker)
 
