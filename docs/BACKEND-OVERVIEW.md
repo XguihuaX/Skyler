@@ -100,7 +100,7 @@
 
 ### 1.6 功能域：MCP / AI 接入
 
-| MCP client | ✅ 14 tool 登记 | `backend/mcp/client.py`；filesystem-skyler 实测连接 |
+| MCP client | ✅ 已接多个 server | `backend/mcp/client.py`；实际接入清单以 `mcp.config.yaml` / UI 为准 |
 | MCP DB 三表 | ✅ schema 就位 | `mcp_credentials`/`mcp_client_state`/`mcp_tool_state` |
 | AI vendor / provider | ✅ | `ai_vendors`(4) / `ai_vendor_credentials`(1) / `ai_providers`(6) |
 

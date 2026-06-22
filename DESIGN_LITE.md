@@ -5,7 +5,7 @@
 >
 > 本文档是给 Claude 对话使用的**精简版**技术设计。每次开启新会话时,把本文档粘进上下文即可。
 >
-> **当前状态(2026-05-17)**:v4-beta 收口完成 + v4.0.0 记忆线收口(audit 完结 + 修复链 ship,代码核验,待真机回归),进入剩余 v4.0.0 ship 路径。
+> **当前状态(2026-06-22)**:v4.0.0 收口期 —— v4-beta 已完成、长期记忆 audit + 修复链 ship 待真机回归 + Stage3 Tauri 打包未启;期间持续小批量 ship(2026-06-13 起 Live2D framing / GSV 本地化 / MCP batch / UIA 只读 / 玻璃自定义 / 角色详情中心 / 聊天双开关+时间戳 / DailyAgent Stage1)。完整 ship 矩阵见 [docs/EVOLUTION.md](docs/EVOLUTION.md);当前能力 badge 见 [ROADMAP《当前能力状态》](ROADMAP.md#当前能力状态)。
 > - v4-alpha shipped 2026-05-13(chunk 14 + UX-004/005/007 + hotfix-3 ~ 10)
 > - **Bugfix 1-4 系列** shipped 2026-05-13/14(sanitize 加固 / Settings 拆分 / AI Providers 重构 / observability + 小窗修复)
 > - **Persona Engineering Segment 1/2** shipped 2026-05-15(5 层 prompt 框架 + multi-variant + ja tag pipeline)
@@ -13,7 +13,7 @@
 > - 下一站:文档纠真 ✅ → 长期记忆链路 audit ✅(修复链 ship,代码核验,待真机回归)→ Stage 3 v4.0.0 MVP 封装(TTS cap/throttle **移出 v4.0 范围,deferred** 至多人测试再议;当前仅 `tts_call_log` 监控,无强制闸)
 
 > ⚠️ **接管必读(5 个 red flag,新 Claude 先看这个)**:
-> 1. **Mai ja TTS 已活路径 via GSV mai_v4**(2026-05-26 INV-11 Stage 1 ship,**取代** v4-beta "回退纯中文" 旧状态)—— `cid=1` voice_model 切到 `provider=gsv` `model=mai_v4` `tts_language=ja` 完整 schema · GPT-SoVITS 自托管 server(`106.75.224.167:9880`)+ 16 emotion bank LLM 路由 · 人格不动 · 旧 ja 中日交替链(§6.5)仍 deprecated · F0 后处理翻译路径也已 deprecated(因 GSV 直接日语原声达成同目标)。新加 model 走 `backend/config/tts_models.json` + `docs/adding-new-tts-model.md` playbook。**Mai 双 cid 现状**(commit `1b25881`):cid=1 = 显示名 Momo + persona 内核 Mai + GSV ja;cid=101 = 显示名 樱岛麻衣 + 同 Mai 内核(11 字段 byte-identical 覆盖) + **Fish s2-pro ja**。两份并行 = 双 TTS provider A/B。详 §角色映射真值表。
+> 1. **TTS 跨语种 / 自托管 model 路径**(INV-11 Stage 1)—— GSV provider 接入 + 自训音色 emotion bank 路由(详 §5.8.5)· `tts_language` 字段把 TTS 语种从 LLM 文本语种解耦(详 §6.6.5)· **已 supersede** v4-beta "回退纯中文" + "F0 后处理翻译" 两段旧决策(§6.5 有横幅标识)。新加 model 走 `backend/config/tts_models.json` + `docs/adding-new-tts-model.md` playbook。**当前 per-character voice_model / live2d_model / persona 取值见 DB**(`characters` + `character_personas` 表 · `PATCH /api/characters/{cid}` 运行时可改 · 详 §14 SQL recipe),不在文档中钉。
 > 2. **TTS provider × model × voice paradigm**(INV-11 Stage 1.5)—— 三级解耦 · `backend/tts/registry.py` + `backend/config/tts_models.json`(pydantic + fail-fast + missing-file fallback)· VoicePicker inline paradigm B(原 modal 已删)· 详 §5.8.5。改 TTS 链前必读。
 > 3. **长期记忆链路 audit 完结、修复链已 ship** —— 根因=抽取 prompt 偏 fact-only + 闲聊→合法 [];子 bug=purge 不重置指针。修复链(滚动摘要层 + 指针自愈/reconcile + prompt 重平衡 + 墓碑)已 ship 且代码核验;**陪伴质量待真机回归(验收门)**。§4 声明已更新;详 DESIGN §五·补 + §十五之 Z.5.1。
 > 4. **conversation 锚定绑定语义已上线(§5.9)** —— 切角色/串台/回复被吃全靠这套规则 A/B。改对话/角色/proactive 投递相关代码前必读 §5.9,别破坏绑定。
@@ -122,8 +122,8 @@ v3 时代 persona 9 段自由拼装 → 字段语义混乱、跨字段冲突、p
   → state      <state_update mood=+2 .../> → character_states 数值更新
   → motion     <motion>Flick</motion> → Live2D 动作
   → TTS        get_tts_engine(voice_model) → CosyVoice / Edge
-                + v4-beta Mai = 纯中文链路(tts_language=zh,voice longyumi_v3)
-                + ja 链 extract_tts_text(text,'ja') 代码保留休眠(v4.1 F0 重做)
+                + tts_language 字段把 TTS 语种从 LLM 文本语种解耦(zh / ja · 详 §6.6.5)
+                + 旧 ja 中日交替链已 superseded(GSV provider 直接日语原声 · §5.8.5;§6.5 有横幅)
                 + tts_call_log: 每次记一行
   → 输出       流式文字 chunks + per-sentence 音频 chunks + 字幕
                 按发起 conversation 投递(规则 A/B,§5.9);
@@ -374,17 +374,17 @@ backward compat:GSV `_resolve_weights_field(gpt_weights/gpt_path)` 双字段名 
 #### Character ↔ Voice ↔ Provider 关系图
 
 ```
-characters table(DB)
-  ┌─────────────────────────────────────────────────────────────┐
-  │ id │ name      │ voice_model (JSON)                         │
-  ├────┼───────────┼────────────────────────────────────────────┤
-  │  1 │ Momo(Mai)│ {provider:"gsv", model:"mai_v4", ...}       │
-  │  3 │ 荧        │ {provider:"cosyvoice", model:"v3.5-plus",  │
-  │    │           │  voice:"cosyvoice-v3.5-plus-bailian-..."}  │
-  │  4 │ 凝光      │ ""(empty · global default fallback)        │
-  │101 │ 樱岛麻衣  │ {provider:"fish", model:"s2-pro",          │
-  │    │           │  reference_audio_path:..., fish_temp:0.2}  │
-  └─────────────────────────────────────────────────────────────┘
+characters table(DB)  ·  id · name · live2d_model · voice_model (JSON) · ...
+
+  voice_model JSON shape(per provider):
+    gsv       → {provider:'gsv',       model, tts_language}
+    cosyvoice → {provider:'cosyvoice', model, voice, instruct_supported?, ssml_supported?}
+    fish      → {provider:'fish',      model, reference_audio_path, fish_temp?}
+    ""        → empty · 走全局 default fallback(registry _DEFAULT)
+
+  实际 row 见 DB:
+    sqlite3 momoos.db "SELECT id, name, live2d_model, voice_model FROM characters;"
+    或 GET /api/characters/
                               │
                               ▼ get_tts_engine(voice_model)
   backend/tts/__init__.py::_build_engine
@@ -568,9 +568,11 @@ def filter_samples_by_tolerance(samples, tolerance):
 ```
 UI 滑块拖动立即生效。**`cliche_tolerance` 数值本身 LLM 不响应**(LLM 模仿样本胜过响应抽象参数),靠 filter 实际改变 LLM 看到的样本集合。
 
-### 6.5 跨语种 TTS pipeline(ja / en tag)—— ⚠️ v4-beta 已休眠
+### 6.5 跨语种 TTS pipeline(ja / en tag)—— ⚠️ 历史决策 · 已被 INV-11 supersede
 
-> **v4-beta 收口决策**:ja 中日交替链折腾多版(strong directive / 集中模式禁止 / Segment2-2 修复)稳定性仍不达标(LLM 实时自己交替标 ja 的不确定性无法根除)。v4.0.0 决定 **Mai 回退纯中文**(`cid=1` `tts_language=zh` + voice `longyumi_v3`,人格完全不动)。下面的 ja 链描述对应代码**保留但休眠**(sanitize boundary set 仍含 ja/en,见 §5.6)。
+> **⚠️ 历史决策横幅**:本节描述 v4-beta "Mai 回退纯中文" + "v4.1 F0 后处理翻译重做" 两段旧路径,**已被 INV-11 Stage 1(2026-05-26)GSV provider + `tts_language=ja` 解耦机制 supersede**(详 §5.8.5 + §6.6.5)。原文留作历史档案,**不代表当前架构**;批 3 准备搬到 §16 归档区。
+>
+> **v4-beta 收口决策**(历史 · 已 supersede):ja 中日交替链折腾多版(strong directive / 集中模式禁止 / Segment2-2 修复)稳定性仍不达标(LLM 实时自己交替标 ja 的不确定性无法根除)。v4.0.0 当时决定"回退纯中文",人格不动。下面的 ja 链描述对应代码**保留但休眠**(sanitize boundary set 仍含 ja/en,见 §5.6)。
 > **v4.1 F0 = 后处理翻译架构重做**:LLM 出纯中文 → TTS 前 qwen-turbo 翻日 → CosyVoice。把"LLM 实时交替标 ja"彻底移出链路。**不要再给 ja 交替打补丁。**
 
 旧 ja 链(休眠,F0 复用参考):
@@ -581,25 +583,15 @@ UI 滑块拖动立即生效。**`cliche_tolerance` 数值本身 LLM 不响应**(
 - `strip_ja_en_tags_for_subtitle` 删 ja 留中文给字幕
 - Bugfix-Segment2-2(2026-05-15)修了"LLM 偏好集中模式"问题
 
-### 6.6 Mai 借 Momo 壳(dogfood 第一个完整 persona)
-```
-characters.id=1  name='Momo'  live2d_model='hiyori'
-  voice_model = {provider:'gsv', model:'mai_v4', tts_language:'ja',
-                 gpt_weights:..., sovits_weights:..., 
-                 emotion_bank_dir:'tts/gsv/mai_v4', server_url:...}
-  ← INV-11 Stage 1 ship(2026-05-26):由 GSV mai_v4 emotion bank 真接入
-    取代旧 cosyvoice longyumi_v3 zh-only · 人格不动 · 真机 chat 验证 OK
+### 6.6 完整 persona 装配机制(dogfood pattern)
 
-character_personas (character_id=1, variant='default'):
-  identity.name='樱岛麻衣'  aliases=['麻衣', '麻衣学姐', 'Mai']
-  完整 Tier-1 + Tier-2 字段(人格不动,只换语音链路)
-  12 voice_samples 含 tolerance_range 三梯级
-  cliche_tolerance=0.35
-```
+第一个完整 persona 走 `character_personas` 主表 + active variant + Tier-1 必填 7 字段 + Tier-2 可选 4 字段全填(身份 / 性格 / 语气 / signature_phrases / voice_samples + tolerance_range / forbidden_phrases / taboo_topics / lore / ...),字段表见 §6.2-6.4。
 
-**Token cost**:Mai 满字段 (zh) ~9018 chars vs Segment 1 baseline 6636 chars(+36%,预算 ≤+50% 内)。
+**voice / Live2D 壳与 persona 完全解耦**:角色"借哪个 Live2D 模型 + 哪套 voice"由 `characters.live2d_model` / `characters.voice_model` 决定,人格由 `character_personas` 决定 —— 改 voice 不改人格、换皮不换内核。
 
-> **v4-beta known limitation**:`cid=1`=Mai 是**唯一**完整 persona。其他角色(`cid` 2/3/4/5/99/100,八重等)是**空骨架**(只名字 + Live2D 绑定),切过去人格空洞。v4.1 F1 仿本 spec(`docs/mai_prompt.md`)逐个灌真 persona。v4.0.0/v4-beta 主推 Mai 单角色。
+**Token 量级**:满字段 zh persona ~9k chars(Layer C 段),跟 multi-variant Segment 1 baseline 比 +30~40%,在预算 ≤+50% 内。
+
+> **当前限制**:仅少数 character 持有完整 persona,其余 row 是骨架(只名字 + Live2D 绑定),切过去人格空洞。当前哪些 character 完整 / 哪些是骨架,见 [ROADMAP《当前能力状态 · 角色》](ROADMAP.md#角色--核心角色机制) + DB(`character_personas WHERE is_active=1`)。F1 七套角色真 persona 仿 `docs/mai_prompt.md` spec 逐个灌(详 ROADMAP《近期计划》)。
 
 ### 6.6.5 语音语言机制(文本恒中文 / 语音可切)
 
@@ -612,12 +604,13 @@ character_personas (character_id=1, variant='default'):
 
 → **ja 模式下用户看到中文字幕、听到日语语音**,即为此机制。
 
-**当前角色语音**:
-- `cid=1`(Mai/Momo):`gsv` / `mai_v4` / `ja`(自训 GPT-SoVITS,2026-05-26 INV-11 Stage 1 ship)
-- `cid=101`(樱岛麻衣):`fish` / `s2-pro` / `ja`(Fish 零样本参考音频)
-- 二者为同一角色 Mai 在两套引擎上的并行验证(GSV 自训 vs Fish 零样本)。
+**当前 per-character voice / language 取值见 DB**:
+```
+sqlite3 momoos.db "SELECT id, name, voice_model FROM characters;"
+或 GET /api/characters/
+```
 
-> 历史 `v4_0_0_mai_revert_zh` migration 的 hotfix scope(`provider IN (NULL,'cosyvoice')`)只在 cid=1 仍是 cosyvoice 体系时把 voice/tts_language nudge 回 zh + longyumi_v3;切到 gsv/fish/edge/sovits 后短路不动,故现 cid=1 稳定为 gsv/ja。详 §技术债 mai_revert_zh 条目。
+> **⚠️ 历史 migration 注**:`v4_0_0_mai_revert_zh` migration 的 hotfix scope(`provider IN (NULL,'cosyvoice')`)只在 character 仍是 cosyvoice 体系时把 voice/tts_language nudge 回 zh + 默认音色;切到 gsv/fish/edge/sovits 后短路不动。**已被 INV-11 GSV path supersede**,留作 migration 行为档案。详 §8 Tech Debt `mai_revert_zh` 条目。
 
 ### 6.7 Mode 走 deterministic(v1)
 ```python
@@ -915,7 +908,7 @@ WS 边界(`backend/routes/ws.py`):
 
 | 类别 | 名 | 凭证 | dangerous | 状态 |
 |---|---|---|---|---|
-| 内置工具/示例 | filesystem / filesystem-skyler / filesystem-test / everything / fetch | 无 / 路径 | — | enabled |
+| 内置工具/示例 | filesystem / everything / fetch | 无 / 路径 | — | enabled |
 | 搜索 / 笔记 | brave-search / notion | env_required | — | 凭证可填即用 |
 | 地图 / 天气 | amap(SSE) / amap-stdio(兜底) | `AMAP_MAPS_API_KEY` | — | SSE 主路径 |
 | 行情 / 阅读 | akshare / rss-reader / xmind | 无 | — | 现 npx/uvx 现拉 · 见 §8 stdio install-once 债 |
@@ -1136,9 +1129,9 @@ dogfood 反馈驱动 v4.1 优先级 — 高频痛点优先于 nice-to-have。
 ## §10 关键路径速查
 
 ```
-项目根:/Users/liujunhong/Desktop/MomoOS-v2
-DB:    /Users/liujunhong/Desktop/MomoOS-v2/momoos.db
-凭证 key: ~/.skyler/.crypto_key (chmod 0600)
+项目根:<repo-root>
+DB:    <repo-root>/momoos.db
+凭证 key: ~/.skyler/.crypto_key (chmod 0600 · 启动期自创)
 
 Persona 核心:
   backend/agents/prompt/                       — renderer + templates + persona_loader
@@ -1165,7 +1158,6 @@ v4-beta 收口核心(绑定/记忆,改前必读 §5.9):
   backend/proactive/activity_smart.py     — 规则 B late-gate 读 get_current
   backend/main.py                         — :387/402 restore character+conv filter
   backend/agents/chat.py                  — :1244/1438 _build_messages 透传 conv_id
-  characters cid=1                        — voice=longyumi_v3, tts_language=zh(勿动)
   memory 表                               — ✅ v4.0.0 audit 完结+修复链 ship(待真机回归;见 §十五之 Z.5.1)
   docs/mai_prompt.md                      — Mai 完整 Tier-1+2 spec(F1 七套参考)
   DB 备份系列 momoos.db.backup_*          — 回退兜底(zh_revert/purge/bindfix/2bugfix/chatpanel)
@@ -1310,47 +1302,60 @@ per-card 错峰甩(spec 原意的"发牌")需要 FanLayout 配合 — framer-mot
 
 ---
 
-## §14 角色映射真值表(2026-06-08 audit · DB 现值)
+## §14 角色映射(机制 · 不列具体取值)
 
-| cid | name(显示) | Live2D 模型(DB) | TTS provider / 音色 / lang | character_personas active identity | 进入动画 accent / EN |
-|---:|---|---|---|---|---|
-| **1** | **Momo**(壳)| `hiyori` ✅ | **GSV** `mai_v4` `ja` · 自托管 `106.75.224.167:9880` + 16 emotion bank | **`name="樱岛麻衣"`** · aliases [麻衣 / 麻衣学姐 / Mai] | `#c97b8e` / `MOMO` |
-| 2 | 八重神子 | `yae` ✅ | **CosyVoice** `cosyvoice-v3.5-plus` 克隆 `...bailian-a61e...` instruct | `name="八重神子"` | `#c97b8e` / `YAE MIKO` |
-| 3 | 荧 | (空 → fallback hiyori)| **CosyVoice** `cosyvoice-v3.5-plus` 克隆 `...bailian-ec26...` instruct+ssml | `name="荧"` | `#d4b96e` / `LUMINE` |
-| 4 | 凝光 | (空 → fallback hiyori)| (空 · 全局 fallback `cosyvoice-v3-flash` / `longyumi_v3`)| `name="凝光"` | `#c6a86b` / `NINGGUANG` |
-| 5 | 神里绫华 | (空 → fallback hiyori)| **CosyVoice** `cosyvoice-v3.5-plus` 克隆 `...bailian-7c61...` instruct+ssml | `name="神里绫华"` | `#88aac4` / `KAMISATO AYAKA` |
-| 99 | 一般路过猫娘 | (空) | (空 · 全局 fallback)| `name="一般路过猫娘"` | `#d489a0` / `NEKO` |
-| 100 | 祥子-test | (空) | (空 · 全局 fallback)| `name="祥子-test"` | `#9b7bb5` / `SHOKO TEST` |
-| **101** | **樱岛麻衣**(正名)| `hiyori` ✅(借)| **Fish** `s2-pro` `ja` · `reference_audio=tts/fish/参考音频/mai/reference.wav` · `temp=0.2` | **`name="樱岛麻衣"`** · 同 cid=1(commit `1b25881` byte-identical 覆盖) | `#b08a4a` / `SAKURAJIMA MAI` |
-| 102 | 流萤 | (空) | (空 · `characters.persona` 写"v4 placeholder")| `name="流萤"` | `#3f9e96` / `FIREFLY` |
+每个 character(`characters` 表 row)有三个可插拔槽 + 一份独立 persona:
 
-**Mai 双胞胎钉死**(commit `1b25881` · 2026-05-22 PM dispatch):
-- cid=1 = 壳 Momo + 内核 Mai + Hiyori + GSV ja
-- cid=101 = 壳 麻衣 + 内核 Mai(同 cid=1)+ Hiyori(共享) + Fish ja
-- 两份并存 = Phase 2 §8 "cid=1→cid=101 数据迁移取消" + 真机验收前 cid=101 需要正确 Mai persona → 11 字段覆盖。**两条 Mai 路径并行 = GSV 全栈自托管 vs Fish 云 reference**。
+| 槽 | 字段 / 表 | 运行时改法 |
+|---|---|---|
+| Live2D 模型 | `characters.live2d_model`(文件夹名,实际模型在 `frontend/public/live2d/<slug>/`)| `PATCH /api/characters/{cid}` 或立绘馆角色详情中心 |
+| 语音 | `characters.voice_model`(JSON · provider × model × voice · 详 §5.8.5)| 同上 + VoicePicker(inline 三级 dropdown) |
+| 立绘 | `characters.splash_art_url`(进入动画立绘)| 同上 |
+| persona | `character_personas` 主表 + active variant(`WHERE is_active=1`)| `persona_api` 8 endpoints · CharacterDetailModal 就地编辑 |
 
-**Live2D 资源真值**:`/frontend/public/live2d/` = `hiyori + yae`(+ `core/` runtime)· 7/9 角色 fallback hiyori · `live2dModelEntry` hardcode dict 仅含 `hiyori`(`yae` 缺登记 · scanner 拾到)· 入 Tech Debt TD-E。
+**三槽相互解耦** —— 改 voice 不动 persona、换 Live2D 不动 voice、persona 换 variant 不动外貌。
+
+**Live2D 资源真值**:模型扫描 = `frontend/public/live2d/<slug>/` 目录 + `live2dModelEntry` hardcode dict(`yae` 缺登记入 Tech Debt TD-E);**当前 on-disk 清单实跑 `ls frontend/public/live2d/`**,不在文档钉。
+
+**查当前取值**:
+```
+sqlite3 momoos.db "SELECT id, name, live2d_model, voice_model FROM characters;"
+sqlite3 momoos.db "SELECT character_id, variant_name, is_active FROM character_personas WHERE is_active=1;"
+或 GET /api/characters/                      # 含 voice/live2d
+或 GET /api/characters/{cid}/personas/active
+```
+
+**进入动画 accent / EN**:frontend hardcode(不是运行时数据)· 见 `frontend/src/components/<LoadingScreen 系列>` 内的 `ACCENT_BY_CID` / 类似 dict;改入场色 / 大写英文改前端常量。
+
+> **批 1 注**:历史 cid 取值钉死表(2026-06-08 audit snapshot)已删 —— 当时表里多条已漂(cid=100/101 等);DB 数据可变,文档不复制 snapshot。完整 ship 演进见 [docs/EVOLUTION.md](docs/EVOLUTION.md)。
 
 ---
 
-## §15 LLM 全集真值表(2026-06-08 audit · DB ai_providers + config.yaml)
+## §15 LLM 路由(机制 · 不列具体取值)
 
-| id | name | model 字符串(LiteLLM 路由用) | is_active | enabled |
-|---:|---|---|:---:|:---:|
-| **19** | **deepseek-v4-pro** | **`deepseek/deepseek-v4-pro`** | ✅ **现役** | ✅ |
-| 2 | Qwen 3.6 Max preview | `openai/qwen3.6-max-preview` | — | ✅ |
-| 8 | Qwen 3.6 Plus | `openai/qwen3.6-plus` | — | ✅ |
-| 16 | qwen3.5-plus | `dashscope/qwen3.5-plus` | — | ✅ |
-| 17 | qwen3.6-flash | `openai/qwen3.6-flash` | — | ✅ |
-| 18 | deepseek-v4-flash | `deepseek/deepseek-v4-flash` | — | ✅ |
+LLM 配置走三表 + LiteLLM 路由:
 
-**调度优先**(`bugfix-3.1` 起):DB `is_active=1` > config.yaml `default_model` > `.env` API_KEY。当前 active = `deepseek/deepseek-v4-pro` · yaml `default_model: dashscope/qwen3.6-max-preview` 仅 fallback(实际不命中)。
+| 表 | 内容 |
+|---|---|
+| `ai_vendors` | 厂商(OpenAI / Anthropic / DeepSeek / DashScope / ...) |
+| `ai_vendor_credentials` | 厂商 key(Fernet 加密 · 见 §5.7) |
+| `ai_providers` | 具体 model entry(`vendor_id` + `model` 字符串 → LiteLLM 路由) |
 
-**副 LLM**(non-main-chat · 不在 ai_providers 表 · 走 yaml 直配):
-- Planner / activity_judge: `dashscope/qwen-turbo`
-- Memory summary 折叠:`dashscope/qwen3.5-flash`
+**调度优先**(`bugfix-3.1` 起):DB `ai_providers.is_active=1` > `config.yaml` `default_model` > `.env` API_KEY。
 
-**前缀双 path 注意**:Qwen 系列 DB 多用 `openai/`(走 DashScope OpenAI-compat)· yaml 用 `dashscope/`(LiteLLM native)· 同模型两条 routing · `bugfix-3.2.7` 修补遗产。
+**前缀双 path**:Qwen 系列 DB 多用 `openai/`(走 DashScope OpenAI-compat)· yaml 用 `dashscope/`(LiteLLM native)· 同模型两条 routing(`bugfix-3.2.7` 修补遗产)。
+
+**副 LLM**(non-main-chat · 不在 `ai_providers` · 走 yaml 直配):
+- Planner / activity_judge → 轻量级 turbo 档
+- Memory summary 折叠   → flash 档
+
+**查当前取值**:
+```
+sqlite3 momoos.db "SELECT id, name, model, is_active FROM ai_providers;"
+或 GET /api/ai-providers/
+```
+
+> **批 1 注**:历史 LLM 全集钉死表(2026-06-08 audit snapshot)已删 —— `ai_providers` 取值随时可改,文档不复制 snapshot。当前 active provider 看 DB / API。
 
 ---
 
