@@ -1310,7 +1310,6 @@ async def _build_messages(
             # → directive 不注入 <ja> → LLM 出纯中文 → 静音/音色飘"链路。
             voice_provider: str = "cosyvoice"
             voice_model_name: Optional[str] = None
-            _override_lang: Optional[str] = None
             try:
                 async with AsyncSessionLocal() as session:
                     vm_str = (await session.execute(
@@ -1319,9 +1318,6 @@ async def _build_messages(
                 if isinstance(vm_str, str) and vm_str.strip():
                     _vm = json.loads(vm_str)
                     if isinstance(_vm, dict):
-                        _t = _vm.get("tts_language")
-                        if isinstance(_t, str):
-                            _override_lang = _t
                         _p = _vm.get("provider")
                         if isinstance(_p, str) and _p.strip():
                             voice_provider = _p.strip().lower()
@@ -1340,7 +1336,6 @@ async def _build_messages(
             tts_language = resolve_tts_language(
                 provider=voice_provider,
                 model=voice_model_name,
-                override=_override_lang,
             )
 
             from backend.agents.prompt import render_system_prompt

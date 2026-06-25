@@ -74,6 +74,9 @@ class Character(Base):
     # ``/splash-art/2.jpg``）。NULL → Fan UI fallback 占位。文件名以
     # character.id 为 key，由 POST /api/characters/{id}/splash-art 写入。
     splash_art_url = Column(Text, nullable=True)
+    # A2 翻译架构:LLM 应输出的语种。翻译层以此 vs tts_language 决定是否翻译。
+    # 默认 'zh'(现有所有角色 LLM 输出中文)。migration: v4_a2_response_language.py。
+    response_language = Column(Text, nullable=True, default="zh")
     created_at = Column(DateTime, server_default=func.now())
 
     conversations = relationship("Conversation", back_populates="character")

@@ -194,6 +194,10 @@ from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory, SHORT_TERM_MAX
 from backend.utils.boot_tracker import get_tracker as _get_boot_tracker
 from backend.routes.activity_api import router as activity_router
+# A2 翻译架构 — characters.response_language 列(LLM 输出语种)
+from backend.database.migrations.v4_a2_response_language import (
+    run_migration as migrate_v4_a2_response_language,
+)
 from backend.routes.backgrounds_api import router as backgrounds_router
 from backend.routes.briefing_api import router as briefing_router
 from backend.routes.character_state_api import router as character_state_router
@@ -565,6 +569,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("Created default user: %s (%s)", default_uid, default_name)
         else:
             logger.info("Default user already exists: %s", default_uid)
+
+    # ── A2. characters.response_language 列(LLM 输出语种) ────────────────
+    await migrate_v4_a2_response_language()
     _boot.mark("default_user")
 
     # ── 3. Restore short-term memory from chat_history ───────────────────────

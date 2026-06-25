@@ -61,7 +61,6 @@ from backend.database.services import (
 from backend.memory.short_term import short_term_memory
 from backend.tts import get_tts_engine
 from backend.utils.text_filters import (
-    extract_tts_text,
     strip_all_for_tts,
     strip_ja_en_tags_for_subtitle,
     strip_thinking,
@@ -392,11 +391,10 @@ async def run_trigger(
     # ── TTS engine ──────────────────────────────────────────────────────
     voice_model: Optional[str] = character.voice_model
     tts_engine = get_tts_engine(voice_model)
-    # v4 segment 2 §2.5:解析 voice_model.tts_language(ja/en/zh)给 extract_tts_text
-    # 2026-06-15 SPEC:silent default "zh" → resolve_tts_language(共享) ·
-    # 缺省时按注册表音色原生语种兜底 · 同 ws.py / chat.py renderer 路径。
+    # A2:tts_language 决定翻译目标语种(绑音色注册表),不再决定 LLM 指令分支。
     from backend.tts.voice_config import _resolve_lang_from_voice_model_json
     tts_language = _resolve_lang_from_voice_model_json(voice_model)
+    resp_lang: str = (character.response_language or "zh") if character else "zh"
     tts_enabled = get_tts_enabled()
 
     # bugfix-4: 设 TTS source — activity_smart 单独标记,其他 proactive trigger
@@ -442,6 +440,27 @@ async def run_trigger(
     emotion_resolved = False
     thinking_pushed = False
     audio_total_bytes = 0
+
+    # A2 翻译辅助 — 关闭 tts_engine / _push。
+    from backend.tts.translate import translate_for_tts
+
+    async def _translate_synth_proactive(
+        text: str, dst: str, cid: int, emotion: str, idx: int,
+    ):
+        synth = await translate_for_tts(text, dst=dst, char_id=cid, src=resp_lang)
+        if synth is None:
+            try:
+                await _push({
+                    "type": "system_warning",
+                    "level": "warning",
+                    "source": "tts_translate",
+                    "msg": f"translate timeout/failed (dst={dst}); TTS skipped",
+                    "char_id": cid,
+                })
+            except Exception:
+                pass
+            return None
+        return await _ws._tts_synth_with_timeout(tts_engine, synth, emotion, idx=idx)
 
     try:
         # Bugfix-segment2-3 + INV-15 (2026-05-27):merge_short_sentences 对所有
@@ -513,18 +532,23 @@ async def run_trigger(
                 **proactive_meta,
             })
 
-            # TTS 并发合成 + 顺序入队（复用 ws.py 的 helper + semaphore）
-            # v4 segment 2 §2.5:TTS 路径走 extract_tts_text 选 ja/en 翻译。
+            # A2:翻译层 — final_chunk 是字幕文本,直接喂翻译层。
+            # 音色语种 == 输出语种 → 直通;不同 → 异步 translate → synth。
             if tts_enabled and consumer is not None:
-                tts_text = extract_tts_text(sentence, tts_language)
-                if not tts_text or not tts_text.strip():
-                    continue
-                task = asyncio.create_task(
-                    _ws._tts_synth_with_timeout(
-                        tts_engine, tts_text, turn_emotion,
-                        idx=len(reply_parts),
+                if tts_language == resp_lang:
+                    task = asyncio.create_task(
+                        _ws._tts_synth_with_timeout(
+                            tts_engine, final_chunk, turn_emotion,
+                            idx=len(reply_parts),
+                        )
                     )
-                )
+                else:
+                    task = asyncio.create_task(
+                        _translate_synth_proactive(
+                            final_chunk, tts_language, target_char_id,
+                            turn_emotion, len(reply_parts),
+                        )
+                    )
                 pending_tts.append(task)
                 await audio_queue.put(task)
 
@@ -808,11 +832,10 @@ async def run_wake_call_trigger(
 
     voice_model: Optional[str] = character.voice_model
     tts_engine = get_tts_engine(voice_model)
-    # v4 segment 2 §2.5:解析 voice_model.tts_language(ja/en/zh)给 extract_tts_text
-    # 2026-06-15 SPEC:silent default "zh" → resolve_tts_language(共享) ·
-    # 缺省时按注册表音色原生语种兜底 · 同 ws.py / chat.py renderer 路径。
+    # A2:tts_language 决定翻译目标语种(绑音色注册表),不再决定 LLM 指令分支。
     from backend.tts.voice_config import _resolve_lang_from_voice_model_json
     tts_language = _resolve_lang_from_voice_model_json(voice_model)
+    resp_lang_wc: str = (character.response_language or "zh") if character else "zh"
     tts_enabled = get_tts_enabled()
 
     # bugfix-4: 同 upper proactive path — 设 TTS source for log
@@ -849,10 +872,31 @@ async def run_wake_call_trigger(
     turn_emotion = "默认"
     emotion_resolved = False
 
+    # A2 翻译辅助(wake_call 路径)。
+    from backend.tts.translate import translate_for_tts as _translate_for_tts_wc
+
+    async def _translate_synth_wc(
+        text: str, dst: str, cid: int, emotion: str, idx: int,
+    ):
+        synth = await _translate_for_tts_wc(text, dst=dst, char_id=cid, src=resp_lang_wc)
+        if synth is None:
+            try:
+                await _push({
+                    "type": "system_warning",
+                    "level": "warning",
+                    "source": "tts_translate",
+                    "msg": f"translate timeout/failed (dst={dst}); TTS skipped",
+                    "char_id": cid,
+                })
+            except Exception:
+                pass
+            return None
+        return await _ws._tts_synth_with_timeout(tts_engine, synth, emotion, idx=idx)
+
     try:
-        # Bugfix-segment2-3:wake_call 路径同 run_trigger,ja/en wrap short-merge。
+        # Bugfix-segment2-3 + INV-15:merge_short_sentences 对所有 tts_language 启用。
         _agent_stream = chat_agent.stream(chat_msg)
-        if tts_language in ("ja", "en"):
+        if tts_enabled:
             from backend.agents.sentence_merge import merge_short_sentences
             _agent_stream = merge_short_sentences(_agent_stream)
         async for sentence in _agent_stream:
@@ -878,8 +922,6 @@ async def run_wake_call_trigger(
             if not sentence.strip():
                 continue
             reply_parts.append(sentence)
-            # hotfix-7 commit 2：text_chunk 最后一道 strip 兜底（同 run_trigger）。
-            # v4 segment 2 §2.5:字幕剥 ja/en,TTS 走 extract_tts_text。
             final_chunk = strip_ja_en_tags_for_subtitle(
                 strip_all_for_tts(sentence)
             )
@@ -887,16 +929,23 @@ async def run_wake_call_trigger(
                 continue
             await _push({"type": "text_chunk", "content": final_chunk, **proactive_meta})
 
+            # A2:翻译层 — final_chunk 是字幕文本。
+            # 音色语种 == 输出语种 → 直通;不同 → 异步 translate → synth。
             if tts_enabled and consumer is not None:
-                tts_text = extract_tts_text(sentence, tts_language)
-                if not tts_text or not tts_text.strip():
-                    continue
-                task = asyncio.create_task(
-                    _ws._tts_synth_with_timeout(
-                        tts_engine, tts_text, turn_emotion,
-                        idx=len(reply_parts),
+                if tts_language == resp_lang_wc:
+                    task = asyncio.create_task(
+                        _ws._tts_synth_with_timeout(
+                            tts_engine, final_chunk, turn_emotion,
+                            idx=len(reply_parts),
+                        )
                     )
-                )
+                else:
+                    task = asyncio.create_task(
+                        _translate_synth_wc(
+                            final_chunk, tts_language, target_char_id,
+                            turn_emotion, len(reply_parts),
+                        )
+                    )
                 pending_tts.append(task)
                 await audio_queue.put(task)
 

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     whisper_device: str = "cpu"
     database_url: str = "sqlite+aiosqlite:///./momoos.db"
     netease_music_u: str = ""       # v3-H chunk 1 — 网易云 cookie MUSIC_U（账号凭证）
+    deepl_api_key: str = ""         # A2 翻译层 — DeepL API key(free/pro tier 均可)
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

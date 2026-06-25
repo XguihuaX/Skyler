@@ -276,36 +276,20 @@ def strip_all_for_tts(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# v4 segment 2 — ja / en TTS 语言双轨 tag
-#
-# tts_language='ja' / 'en' 角色 voice 是日语 / 英语复刻 sample,中文音色差。
-# Layer A 模板让 LLM 在中文正文后追加 <ja>日语翻译</ja>:
-#   - 中文部分 → WS text_chunk(字幕给用户看)
-#   - <ja> 内容 → TTS engine(给用户听)
-# 流程:
-#   1. ws.py / proactive engine 拿 sentence + character.voice_model.tts_language
-#   2. extract_tts_text(sentence, tts_language) → 送 TTS 的实际文本
-#   3. strip_ja_en_tags_for_subtitle(strip_all_for_tts(sentence)) → 字幕文本
-# 兼容性:
-#   - zh 角色(默认):extract_tts_text 等价于 strip_all_for_tts
-#   - ja/en 角色没出 tag:fallback 到原文 + log warning(LLM 漏标)
+# <ja> / <en> tag helpers — 保留作字幕路径历史兜底 + DB history guard
+# A2 架构:LLM 不再输出 <ja>/<en>;下方 regex 主要用于
+#   1. strip_ja_en_tags_for_subtitle — 字幕剥残留历史 tag
+#   2. extract_tts_text — 清洗旧 history 条目中的 <ja>/<en> 残留
 # ---------------------------------------------------------------------------
 
 _JA_TAG_RE = re.compile(r"<ja>([\s\S]*?)</ja>", re.IGNORECASE)
 _EN_TAG_RE = re.compile(r"<en>([\s\S]*?)</en>", re.IGNORECASE)
 
-# INV-9 §1 fix (Option A1) · 残留 ja/en 字面 open/close tag 检测器。
-# pre-condition:调用前已用 ``_JA_TAG_RE.sub('')`` / ``_EN_TAG_RE.sub('')`` 剥完整
-# 闭合块;若仍有 ``<ja|en`` 字面 → 视为半截 / stream 截断。
 _PARTIAL_JA_EN_OPEN_RE = re.compile(r"</?(?:ja|en)\b", re.IGNORECASE)
 
 
 def _has_unclosed_ja_en_tag(text: str) -> bool:
-    """检测 text 含残留 ``<ja>`` / ``<en>`` 字面但未完整 paired closure。
-
-    用于 ``extract_tts_text`` 兜底判半截 / stream 截断 → caller skip synth。
-    内部先剥完整闭合块,残留字面 tag = 半截 marker。
-    """
+    """检测 text 含残留 ``<ja>`` / ``<en>`` 字面但未完整 paired closure。"""
     if not text:
         return False
     stripped = _JA_TAG_RE.sub("", text)
@@ -313,215 +297,20 @@ def _has_unclosed_ja_en_tag(text: str) -> bool:
     return bool(_PARTIAL_JA_EN_OPEN_RE.search(stripped))
 
 
-# Phase 2 真机验收 hotfix(2026-05-22)· Unicode script 检测器:
-# tts_language=ja + 无 <ja> tag fallback 路径增强 — 区分"LLM 漏标整段中文"
-# (无假名 → skip 避免送 ja voice)vs "LLM 漏标但内容确是日语"(含假名 →
-# 仍 fallback send)。per PM 真机测试日志 13:39:45-51 暴露:LLM 输出
-# "嗯，下午好。「うん、こんにちは。」" 中日混排,sentence stream 切成
-# 两句,前句纯中文 + 无 <ja> → 旧 fallback strip_all_for_tts(raw) 整段送
-# Fish ja voice → 念中文音色错乱 + 浪费 cost。
-#
-# 平假名 U+3040-U+309F / 片假名 U+30A0-U+30FF / 半角片假名 U+FF65-U+FF9F /
-# 片假名扩展 U+31F0-U+31FF。汉字 U+4E00-U+9FFF 不算"日语 specific"(中日共享)。
-def _has_japanese_kana(text: str) -> bool:
-    """检测 text 是否含日语假名(平假名 / 片假名 / 半角片假名 / 片假名扩展)。
+def extract_tts_text(raw_text: str, tts_language: str = "zh") -> str:
+    """A2:LLM 输出纯中文;剥 meta tag 后返回送翻译层的中文原句。
 
-    返 True 视作"日语内容";返 False 视作"纯中文"(若有汉字)或"纯 ASCII"。
-    用于 ``extract_tts_text`` fallback 路径 LLM 漏 <ja> tag 时判断。
-    """
-    if not text:
-        return False
-    for ch in text:
-        cp = ord(ch)
-        if 0x3040 <= cp <= 0x309F:  # 平假名
-            return True
-        if 0x30A0 <= cp <= 0x30FF:  # 片假名
-            return True
-        if 0xFF65 <= cp <= 0xFF9F:  # 半角片假名
-            return True
-        if 0x31F0 <= cp <= 0x31FF:  # 片假名扩展
-            return True
-    return False
-
-
-# Phase 2 真机 hotfix v2(2026-05-22)· 5 层 fallback 增强 + post-cap:
-# 任务 1 v1 部分 work 但 within-sentence 中日混排无 <ja> 仍走 raw fallback。
-# v2 加 fallback A (corner brackets「」) + fallback B (kana-starting regex) +
-# post-cap (长度 200 防 Fish timeout + kanji ratio 30% 防中文混入)。
-_JA_CORNER_BRACKET_RE = re.compile(r"「([^「」]*?)」")
-# PM 任务 1 v2 spec regex:起头 1+ 假名(U+3040-U+30FF),然后 0+ (假名 | 汉字)。
-# 注:Unicode U+4E00-U+9FFF 中日 kanji 共享 codepoint,fallback B 抽出可能
-# 含中文字符;post-cap kanji ratio 兜底拦截。
-_JA_KANA_RUN_RE = re.compile(r"[぀-ヿ]+[぀-ヿ一-鿿]*")
-_FISH_TIMEOUT_CAP_CHARS: int = 200       # > 200 chars → skip 防 Fish timeout
-_FISH_KANJI_RATIO_CAP: float = 0.30      # kanji/(kanji+kana) > 30% → skip 防中文混入
-
-
-def _extract_corner_bracketed(text: str) -> list[str]:
-    """Fallback A · 抽出所有 ``「...」`` 内文本(非贪婪,跨段多 match)。
-
-    PM 实测:LLM 偶发用 corner brackets `「」` 作 Japanese segment 分隔
-    (替代 ``<ja>`` tag)。
-    """
-    if not text:
-        return []
-    return [m for m in _JA_CORNER_BRACKET_RE.findall(text) if m.strip()]
-
-
-def _extract_kana_runs(text: str) -> list[str]:
-    """Fallback B · regex 抽连续假名起头 + 假名/汉字 mixed run(跨段多 match)。
-
-    严格按 PM 任务 1 v2 spec regex:``[぀-ヿ]+[぀-ヿ一-鿿]*``。
-    Unicode 不区分中日 kanji,抽出可能 leak 中文 — post-cap kanji ratio 兜底。
-    """
-    if not text:
-        return []
-    return [m for m in _JA_KANA_RUN_RE.findall(text) if m.strip()]
-
-
-def _count_japanese_chars(text: str) -> tuple[int, int]:
-    """返 (kanji_count, kana_count)。
-
-    kanji = U+4E00-U+9FFF(CJK Unified · 中日共享 codepoint)
-    kana = U+3040-U+30FF(平假名 + 片假名 main range)+ 扩展 ranges
-    """
-    if not text:
-        return (0, 0)
-    kanji = 0
-    kana = 0
-    for ch in text:
-        cp = ord(ch)
-        if 0x4E00 <= cp <= 0x9FFF:
-            kanji += 1
-        elif (0x3040 <= cp <= 0x30FF
-              or 0xFF65 <= cp <= 0xFF9F
-              or 0x31F0 <= cp <= 0x31FF):
-            kana += 1
-    return (kanji, kana)
-
-
-def extract_tts_text(raw_text: str, tts_language: str) -> str:
-    """按 tts_language 选实际送 TTS 的文本。
-
-    Args:
-        raw_text: LLM 输出原句(已经过 sentence 切分,可能含各种 meta tag)
-        tts_language: ``'zh'`` / ``'ja'`` / ``'en'``;未知或 None → 视为 ``'zh'``
-
-    Returns:
-        送 TTS 的字符串。
-          * zh / default:剥 ``<ja>/<en>`` 整段后走 ``strip_all_for_tts``;残留半截
-            ``<ja|en`` 字面 → 返 ``""`` 让 caller skip synth(INV-9 §1 fix PM bug #2)
-          * ja:取**所有** ``<ja>...</ja>`` 内容拼接(剥 meta tag 后);半截未闭合
-            ``<ja`` → 返 ``""`` skip synth(INV-9 §1 fix PM bug #1);真无 tag(LLM
-            漏标整段)→ fallback ``strip_all_for_tts(raw_text)`` + log(降级行为保留)
-          * en:同 ja
-
-    Bugfix-segment2-3:从 ``.search`` 改成 ``.findall`` —— ``merge_short_sentences``
-    会把多个短意群 sentence 合并成一个 buffer,该 buffer 可含 2+ ``<ja>`` tag。
-
-    INV-9 §1 Option A1 fix(2026-05-22):per INV-8 §1.5.2 sanitize bug audit verdict:
-      - PM bug #1 "中日语一起全给 TTS":半截 ``<ja>`` 时 matches=[] 走 fallback
-        ``strip_all_for_tts(raw)`` 不剥字面 + 内容混合送 TTS → 加 partial-tag detect
-        skip synth
-      - PM bug #2 "切 zh voice 仍带日语":``_SUSPICIOUS_TAG_WHITELIST`` 全局豁免在
-        zh 路径反作用 → zh 分支显式 ``_JA_TAG_RE.sub('') + _EN_TAG_RE.sub('')`` 剥整段
+    tts_language 参数保留以兼容现有调用方,A2 后已不影响分支选择。
+    历史 <ja>/<en> 残留(DB history / stream race 场景)→ 整段剥除作兜底。
     """
     if not raw_text:
         return raw_text or ""
-    lang = (tts_language or "zh").lower()
-
-    if lang == "ja":
-        # 主路径:完整闭合 <ja>...</ja>
-        matches = _JA_TAG_RE.findall(raw_text)
-        if matches:
-            return "".join(strip_all_for_tts(m).strip() for m in matches if m)
-
-        # Phase 2 真机 hotfix v2(2026-05-22)· 5 层 fallback:
-        # 1) <ja> 完整闭合(上方主路径)
-        # 2) Fallback A · 「...」 corner brackets 抽出
-        # 3) Fallback B · 假名起头 + 假名/汉字 run regex 抽出
-        # 4) Post-cap A · 抽出 > 200 chars → skip(防 Fish timeout)
-        # 5) Post-cap B · 抽出 kanji/(kanji+kana) > 30% → skip(防中文混入)
-        # 6) 全 fail → skip + WARNING
-        #
-        # 注:v1 半截 <ja> early skip 行为已撤(per PM v2 spec "半闭合按
-        # '无 <ja>' 处理走 fallback A/B");zh path 半闭合 skip 仍保留。
-        cleaned = strip_all_for_tts(raw_text)
-
-        # Fallback A · 「...」
-        corner_matches = _extract_corner_bracketed(cleaned)
-        extracted = "".join(m.strip() for m in corner_matches).strip() if corner_matches else ""
-
-        # Fallback B · 假名起头 run regex(if A 空)
-        if not extracted:
-            kana_runs = _extract_kana_runs(cleaned)
-            extracted = "".join(r.strip() for r in kana_runs).strip() if kana_runs else ""
-
-        if not extracted:
-            logger.warning(
-                "[tts] tts_language=ja no <ja>/「」/kana detected; skip: %r",
-                cleaned[:80],
-            )
-            return ""
-
-        # Post-cap A · 长度防 Fish timeout
-        if len(extracted) > _FISH_TIMEOUT_CAP_CHARS:
-            logger.warning(
-                "[tts] extracted len %d > cap %d, skip (防 Fish timeout): %r",
-                len(extracted), _FISH_TIMEOUT_CAP_CHARS, extracted[:80],
-            )
-            return ""
-
-        # Post-cap B · kanji ratio 防中文混入(中日共享 codepoint,regex 可能 leak)
-        kanji_count, kana_count = _count_japanese_chars(extracted)
-        total_meaningful = kanji_count + kana_count
-        if total_meaningful > 0:
-            ratio_kanji = kanji_count / total_meaningful
-            if ratio_kanji > _FISH_KANJI_RATIO_CAP:
-                logger.warning(
-                    "[tts] extracted kanji ratio %.2f > cap %.2f (>30%% 中文 "
-                    "倾向),skip: %r",
-                    ratio_kanji, _FISH_KANJI_RATIO_CAP, extracted[:80],
-                )
-                return ""
-
-        logger.info(
-            "[tts] tts_language=ja fallback %s extracted (kanji=%d kana=%d "
-            "ratio=%.2f): %r",
-            "A 「」" if corner_matches else "B regex",
-            kanji_count, kana_count,
-            kanji_count / total_meaningful if total_meaningful > 0 else 0.0,
-            extracted[:80],
-        )
-        return extracted
-
-    if lang == "en":
-        matches = _EN_TAG_RE.findall(raw_text)
-        if matches:
-            return "".join(strip_all_for_tts(m).strip() for m in matches if m)
-        if _has_unclosed_ja_en_tag(raw_text):
-            logger.warning(
-                "[tts] tts_language=en but <en> unclosed, skip synth: preview=%r",
-                raw_text[:80],
-            )
-            return ""
-        logger.warning(
-            "[tts] tts_language=en but no <en> tag found; "
-            "falling back to raw sentence(LLM 漏标 en)"
-        )
-        return strip_all_for_tts(raw_text)
-
-    # zh / unknown — INV-9 §1 fix (PM bug #2):
-    # 切 zh voice 时 LLM 可能仍按旧 prompt 输出 <ja>/<en>(prompt 重渲染滞后 / LLM
-    # round-trip 学到 ja 锚点) → 必须剥整段不留字面 + 内容。原行为靠 `strip_all_for_tts`
-    # + ``_SUSPICIOUS_TAG_WHITELIST`` 白名单豁免,反致 <ja> 整段保留送 zh voice TTS。
     cleaned = _JA_TAG_RE.sub("", raw_text)
     cleaned = _EN_TAG_RE.sub("", cleaned)
-    # 兜底:剥完闭合块后仍有 <ja|en 字面 → 半截 / stream 截断 → skip synth
     if _has_unclosed_ja_en_tag(cleaned):
         logger.warning(
-            "[tts] tts_language=zh but <ja>/<en> tag literal remains after "
-            "block strip (半截), skip synth: preview=%r", raw_text[:80],
+            "[tts] unclosed <ja>/<en> literal in text, skip synth: %r",
+            raw_text[:80],
         )
         return ""
     return strip_all_for_tts(cleaned)
