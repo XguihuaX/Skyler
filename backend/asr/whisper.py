@@ -79,10 +79,28 @@ class WhisperASR:
             # drop old model ref so faster-whisper / GPU mem can be freed by GC
             self._model = None
             loop = asyncio.get_event_loop()
-            self._model = await loop.run_in_executor(
-                _executor,
-                lambda: WhisperModel(desired_size, device=device, compute_type=compute),
-            )
+            # local_files_only=True: 跳过 hub freshness HEAD check(国内慢/阻断
+            # → 每文件 5 retry × 10s = 挂几十秒)。缓存完整时直接离线加载。
+            # 缓存真缺时抛 OSError → 兜底重试允许联网下载(首次使用场景)。
+            try:
+                self._model = await loop.run_in_executor(
+                    _executor,
+                    lambda: WhisperModel(
+                        desired_size, device=device, compute_type=compute,
+                        local_files_only=True,
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "WhisperModel '%s' not found in local cache · "
+                    "falling back to online download "
+                    "(首次使用需联网下载一次,后续走本地缓存无需联网)。",
+                    desired_size,
+                )
+                self._model = await loop.run_in_executor(
+                    _executor,
+                    lambda: WhisperModel(desired_size, device=device, compute_type=compute),
+                )
             self._loaded_size = desired_size
             logger.info("WhisperModel '%s' ready", desired_size)
 

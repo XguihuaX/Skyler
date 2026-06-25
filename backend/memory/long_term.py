@@ -53,7 +53,7 @@ from backend.database.models import Memory
 
 logger = logging.getLogger(__name__)
 
-_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 _model: Optional[SentenceTransformer] = None
 _executor = ThreadPoolExecutor(max_workers=1)
 _device: Optional[str] = None  # resolved at first _get_model() call
@@ -94,7 +94,20 @@ def _get_model() -> SentenceTransformer:
     if _model is None:
         _device = _pick_device()
         t0 = time.perf_counter()
-        _model = SentenceTransformer(_MODEL_NAME, device=_device)
+        # local_files_only=True: 跳过 hub freshness HEAD check(缓存完整时直接
+        # 离线加载,避免国内 hf-mirror 模型 API 路径慢/阻断导致卡几十秒)。
+        # 缓存真缺时 OSError → 兜底允许联网下载(首次使用场景)。
+        try:
+            _model = SentenceTransformer(
+                _MODEL_NAME, device=_device, local_files_only=True,
+            )
+        except Exception:
+            logger.warning(
+                "[embedding] model not found in local cache · "
+                "falling back to online download "
+                "(首次使用需联网下载一次,后续走本地缓存无需联网)。"
+            )
+            _model = SentenceTransformer(_MODEL_NAME, device=_device)
         logger.info(
             "[embedding] model loaded device=%s in %.0fms",
             _device, (time.perf_counter() - t0) * 1000,
