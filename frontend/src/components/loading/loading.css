@@ -16,7 +16,32 @@
  *  - 调色铁律:全程 boot-bg 暖炭 + accent 玫瑰(per-char swap)· 不上霓虹冷色
  *  - 数据 100% 来自 BootTracker snapshot · 本文件只换皮
  */
-@import url('https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;700&family=Zen+Kaku+Gothic+New:wght@300;400&family=JetBrains+Mono:wght@300;400;500&display=swap');
+/* 本地字体 · 原 Google Fonts @import(外网 render-blocking · 关 VPN hang)已本地化。
+ * woff2 在 frontend/public/fonts/(Vite 静态 → /fonts/*)。font-display: swap —
+ * 字体未到先用系统字渲染、到了再换,绝不 block 加载屏。
+ *   - JetBrains Mono(--mono): ASCII subset · boot log / HUD
+ *   - Shippori Mincho(--serif): 标题字形 subset(台词 + 角色名 + 标点)· 生僻字回退系统 serif
+ *   - Zen Kaku Gothic New(--ui)已删 — 全前端 0 处使用。 */
+@font-face {
+  font-family: 'JetBrains Mono'; font-style: normal; font-weight: 300; font-display: swap;
+  src: url('/fonts/JetBrainsMono-Light.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap;
+  src: url('/fonts/JetBrainsMono-Regular.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap;
+  src: url('/fonts/JetBrainsMono-Medium.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Shippori Mincho'; font-style: normal; font-weight: 600; font-display: swap;
+  src: url('/fonts/ShipporiMincho-SemiBold.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Shippori Mincho'; font-style: normal; font-weight: 700; font-display: swap;
+  src: url('/fonts/ShipporiMincho-Bold.subset.woff2') format('woff2');
+}
 
 .loading-win {
   position: fixed;
@@ -40,7 +65,6 @@
   --poweron-line: rgba(232, 226, 214, 0.95);
   --poweron-line-glow: rgba(232, 226, 214, 0.32);
   --mono: 'JetBrains Mono', monospace;
-  --ui: 'Zen Kaku Gothic New', sans-serif;
   --serif: 'Shippori Mincho', serif;
   background: var(--boot-bg);
   opacity: 1;
