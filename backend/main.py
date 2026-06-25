@@ -665,31 +665,41 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
     _boot.mark("short_term_restore")
 
-    # ── 3.5. HF mirror reachability probe (INV-14 §8) ────────────────────────
-    # 启动期 HEAD HF_ENDPOINT(default hf-mirror.com)3s 超时 · mirror 不通
-    # 自动 fallback `HF_HUB_OFFLINE=1` · cached 模型仍可 load · 首次缺失模型会
-    # 报错(正确行为 · 比静默 50s timeout 强)。
-    # urllib stdlib 同步调 · 不依赖 httpx/aiohttp · lifespan 阻塞 ≤ 3s。
-    # 用户 .env 显式 `HF_HUB_OFFLINE=1` 时尊重 · 不覆盖。
-    if os.environ.get("HF_HUB_OFFLINE") != "1":
+    # ── 3.5. HF mirror reachability probe (INV-14 §8 · 纯诊断日志 · 后台非阻塞) ──
+    # 两个模型(whisper / embedding)现在走 local_files_only=True 优先加载,
+    # 镜像通不通不再影响正常启动(缓存完整)。probe 保留仅作诊断日志用,
+    # 不再设 HF_HUB_OFFLINE(避免误伤其他可能需要联网的组件)。
+    # 用户 .env 显式 `HF_HUB_OFFLINE=1` 时仍尊重。
+    #
+    # 阻塞修(2026-06-25):probe 之前 inline 同步跑,曾占启动 120s(97%)。
+    #   urlopen 的 timeout 只约束 socket connect/read,**不约束 DNS getaddrinfo**;
+    #   国内受限网络解析 hf-mirror.com 在 OS resolver 层串行重试 ~120s 才失败,
+    #   3s timeout 根本没机会生效,整段 block 住 eager 启动。
+    #   即便 timeout 砍到 0 也挡不住 DNS —— 唯一稳妥解是把 probe 整段移出关键路径:
+    #   urlopen 丢进线程(asyncio.to_thread,不堵事件循环)+ 后台 task(不堵启动)。
+    #   结果只进日志,启动立即往下走。
+    async def _hf_mirror_probe() -> None:
+        if os.environ.get("HF_HUB_OFFLINE") == "1":
+            return
         _hf_endpoint = os.environ.get("HF_ENDPOINT") or "https://huggingface.co"
-        try:
+
+        def _probe() -> int:
             from urllib.request import Request, urlopen
             _req = Request(_hf_endpoint, method="HEAD")
             with urlopen(_req, timeout=3.0) as _resp:
-                _status = getattr(_resp, "status", 200)
+                return getattr(_resp, "status", 200)
+
+        try:
+            _status = await asyncio.to_thread(_probe)
             logger.info("[HF] mirror reachable: %s (status=%s)", _hf_endpoint, _status)
         except Exception as exc:
-            # 任意网络 / DNS / SSL / timeout 异常 → fallback offline · cached 模型仍能
-            # load · 首次缺失模型才会报错(正确行为 · 比静默 50s timeout 强)。
-            os.environ["HF_HUB_OFFLINE"] = "1"
-            os.environ["TRANSFORMERS_OFFLINE"] = "1"
             logger.warning(
-                "[HF] mirror unreachable: %s (%s) · fallback HF_HUB_OFFLINE=1 · "
-                "cached 模型仍能 load · 首次缺失模型会报错(正确行为)。"
-                "若反复发生 · 检查网络 / 换镜像 / 预下载模型 cache。",
+                "[HF] mirror unreachable: %s (%s) · 模型走 local_files_only 离线加载 · "
+                "不影响启动(缓存完整)。若需联网下载新模型 · 检查网络或换镜像。",
                 _hf_endpoint, exc,
             )
+
+    asyncio.create_task(_hf_mirror_probe())
     _boot.mark("hf_mirror_probe")
 
     # ── 4. Preload local models (embedding + whisper) ────────────────────────
