@@ -258,7 +258,7 @@ async def read_current_screen(**_kwargs) -> dict:
     name, pid = info
 
     # 2. Skyler 自己在前台 → 不假装能看到"用户身后那个"
-    if name == _am.SKYLER_BUNDLE_NAME:
+    if name.lower() == _am.SKYLER_BUNDLE_NAME.lower():
         return {
             "available": False,
             "reason": "self_frontmost",
