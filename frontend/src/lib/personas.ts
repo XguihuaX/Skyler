@@ -29,6 +29,10 @@ export interface PersonaPersonalityCore {
   default_emotion?: string;
   /** Segment 2 §1.3:愤怒模式描述,可空。 */
   anger_style?: string | null;
+  /** Persona v2 · 助手卡专属:她真正想要的(渲染进 C2b) */
+  deepest_want?: string | null;
+  /** Persona v2 · 助手卡专属:她最怕的(渲染进 C2b) */
+  core_fear?: string | null;
 }
 
 export interface PersonaSpeechStyle {
@@ -39,6 +43,10 @@ export interface PersonaSpeechStyle {
   punctuation_quirk?: string;
   /** 0.0~1.0;Segment 2 §1.2 voice_samples filter 用。 */
   cliche_tolerance?: number;
+  /** Persona v2 · 助手卡专属:怎么读用户、怎么决定接话(渲染进 C3a) */
+  behavior?: string | null;
+  /** Persona v2 · 助手卡专属:几条说话铁律(渲染进 C3a-2) */
+  voice_rules?: string[];
 }
 
 export interface VoiceSample {
@@ -56,11 +64,19 @@ export interface PersonaForbiddenPhrases {
 }
 
 export interface PersonaRelationshipToUser {
-  type?: 'companion' | 'lover' | 'mentor' | string;
+  type?: 'companion' | 'lover' | 'mentor' | 'companion_secretary' | string;
   intimacy_progression?: 'linear' | 'milestone' | string;
   initial_intimacy?: number;
   intimacy_rules?: Record<string, unknown>;
+  /** Persona v2 · 助手卡专属:与用户的定位陈述(渲染进 C1c) */
+  positioning?: string | null;
+  /** Persona v2 · 助手卡专属:边界声明(渲染进 C1c) */
+  boundary?: string | null;
 }
+
+/** Persona v2 · 卡型枚举。'社交' = DailyAgent + 主动陪伴;'助手' = 无独立日程,
+ *  通过用户驱动接话。后端 character_personas.card_type 列(seg3 迁移)。 */
+export type PersonaCardType = '社交' | '助手';
 
 export interface CharacterPersonaRow {
   id: number;
@@ -81,8 +97,12 @@ export interface CharacterPersonaRow {
   // Tier-2(MVP UI 仅 read-only 显示,不编辑;v4.2 加全字段编辑)
   taboo_topics: unknown | null;
   lore: unknown | null;
+  /** @deprecated v4.2 → DROP COLUMN · 0 模板引用 · 编辑器不暴露 */
   capability_overrides: unknown | null;
+  /** @deprecated v4.2 → DROP COLUMN · 编辑器不暴露 · CharacterDetailModal 仅只读展示 */
   style_preset: string;
+  /** Persona v2 · '社交' | '助手' · gate 元数据 · 前端编辑器分表单 */
+  card_type: PersonaCardType | string;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -130,8 +150,11 @@ export async function getPersona(personaId: number): Promise<CharacterPersonaRow
 export interface CreatePersonaBody {
   variant_name: string;
   description?: string | null;
+  /** @deprecated v4.2 · 编辑器不再传 · backend 默认 'anime_classic' */
   style_preset?: string | null;
   display_order?: number;
+  /** Persona v2 · '社交' | '助手' · 缺省 '社交' */
+  card_type?: PersonaCardType | string | null;
   identity: PersonaIdentity;
   personality_core: PersonaPersonalityCore;
   speech_style: PersonaSpeechStyle;
@@ -141,6 +164,7 @@ export interface CreatePersonaBody {
   relationship_to_user: PersonaRelationshipToUser;
   taboo_topics?: unknown | null;
   lore?: unknown | null;
+  /** @deprecated v4.2 */
   capability_overrides?: unknown | null;
 }
 

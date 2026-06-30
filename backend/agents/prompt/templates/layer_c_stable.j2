@@ -17,6 +17,16 @@
 {% endif %}
 {% endif %}
 
+{# C1c 与用户的位置(Persona v2 · relationship_to_user.positioning / .boundary)#}
+{# 守门 · 字段缺则整段不渲染 · 内嵌 trailing blank 给 TRUE 分支补 separator-after #}
+{# 上方 blank line(原 baseline 自带)= separator-before;下方紧贴 C2 注释 = 无 blank 污染 #}
+{% if persona.relationship_to_user and (persona.relationship_to_user.positioning or persona.relationship_to_user.boundary) %}
+你与用户的位置:
+{% if persona.relationship_to_user.positioning %}- 定位:{{ persona.relationship_to_user.positioning }}
+{% endif %}{% if persona.relationship_to_user.boundary %}- 边界:{{ persona.relationship_to_user.boundary }}
+{% endif %}
+
+{% endif %}
 {# C2 性格 + 反差 #}
 {% if persona.personality_core.core_traits %}
 性格核心:{{ persona.personality_core.core_traits | join('、') }}
@@ -28,6 +38,15 @@
 愤怒模式:{{ persona.personality_core.anger_style }}
 {% endif %}
 
+{# C2b 渴望与恐惧(Persona v2 · personality_core.deepest_want / .core_fear)#}
+{# 守门 + 内嵌 trailing blank · Mai / Momo 旧 persona 零空白污染(同 C1c 模式)#}
+{% if persona.personality_core.deepest_want or persona.personality_core.core_fear %}
+你心里最在意的:
+{% if persona.personality_core.deepest_want %}- 你真正想要的:{{ persona.personality_core.deepest_want }}
+{% endif %}{% if persona.personality_core.core_fear %}- 你最怕的:{{ persona.personality_core.core_fear }}
+{% endif %}
+
+{% endif %}
 {# C3 说话风格 #}
 你的说话风格:
 - 词汇偏好:{{ persona.speech_style.vocabulary }}
@@ -36,6 +55,21 @@
 - emoji 习惯:{{ persona.speech_style.emoji_habit }}
 - 标点癖好:{{ persona.speech_style.punctuation_quirk }}
 
+{# C3a 反应模式(Persona v2 · speech_style.behavior)#}
+{# 守门 + 内嵌 trailing blank · Mai / Momo 旧 persona 零空白污染 #}
+{% if persona.speech_style.behavior %}
+怎么读他、怎么决定接话:
+{{ persona.speech_style.behavior }}
+
+{% endif %}
+{# C3a-2 voice rules(Persona v2 · speech_style.voice_rules)#}
+{% if persona.speech_style.voice_rules %}
+几条铁律:
+{% for rule in persona.speech_style.voice_rules %}
+- {{ rule }}
+{% endfor %}
+
+{% endif %}
 {% if persona.signature_phrases %}
 口头禅(适当使用,不要每句都有):
 {% for phrase in persona.signature_phrases %}
@@ -44,10 +78,22 @@
 {% endif %}
 
 {# voice_samples 已按 cliche_tolerance 在 renderer 侧 filter,这里只渲染 filtered_samples #}
+{# Persona v2:
+   ① 段头防误读定性(原 "严格学习语气而非内容" 升级)· 1c 验收点;
+   ② 交换式样本(sample.exchange.{user, reply})成对呈现,教对话形状;
+   ③ else 分支保留 [scene] text 单行 · Mai / Momo 旧样本零形态变化。 #}
 {% if filtered_samples %}
-以下是真实样本,严格学习语气而非内容:
+以下样本只示范音色与分寸的范围,不是"遇到 X 就说 Y"的触发表;
+实际回应由语境决定,可长可短。
+
 {% for sample in filtered_samples %}
+{% if sample.exchange and sample.exchange.user is defined %}
+[{{ sample.scene }}]
+用户:{{ sample.exchange.user }}
+她:{{ sample.exchange.reply | default(sample.text) }}
+{% else %}
 [{{ sample.scene }}] {{ sample.text }}
+{% endif %}
 {% endfor %}
 {% endif %}
 

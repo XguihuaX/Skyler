@@ -459,7 +459,7 @@ function PersonaSection({
         className="text-[11px] mb-4"
         style={{ color: 'var(--color-text-secondary)' }}
       >
-        风格预设:{persona.style_preset || '未设置'}
+        卡型:{persona.card_type || '社交'}
       </p>
 
       {/* Identity ──── Stage1-viz 修订:今日日程接管主角位,Identity 默认收起,

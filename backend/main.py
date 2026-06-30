@@ -160,6 +160,11 @@ from backend.database.migrations.v4_persona_segment2_mai_ja import (
 from backend.database.migrations.v4_persona_segment2_ensure_defaults import (
     run_migration as migrate_v4_persona_segment2_ensure_defaults,
 )
+# v4 persona segment 3: character_personas.card_type 列('社交' | '助手')
+# Persona v2 Slice 1 · cid=100 active variant 回填 → '助手'
+from backend.database.migrations.v4_persona_segment3_card_type import (
+    run_migration as migrate_v4_persona_segment3_card_type,
+)
 # v4.0.0 ship-call: Mai (cid=1) 回退纯中文 — longyumi_v3 + tts_language=zh
 # (ja 链代码保留,留 v4.1 后处理翻译架构重做)
 from backend.database.migrations.v4_0_0_mai_revert_zh import (
@@ -189,15 +194,15 @@ from backend.database.migrations.v4_mcp_client_alias import (
 from backend.database.migrations.dailyagent_chunk1_character_daily_plan import (
     run_migration as migrate_dailyagent_chunk1_character_daily_plan,
 )
+# A2 翻译架构 — characters.response_language 列(LLM 输出语种)
+from backend.database.migrations.v4_a2_response_language import (
+    run_migration as migrate_v4_a2_response_language,
+)
 from backend.database.services import create_user, get_user
 from backend.memory import long_term as long_term_memory
 from backend.memory.short_term import short_term_memory, SHORT_TERM_MAX
 from backend.utils.boot_tracker import get_tracker as _get_boot_tracker
 from backend.routes.activity_api import router as activity_router
-# A2 翻译架构 — characters.response_language 列(LLM 输出语种)
-from backend.database.migrations.v4_a2_response_language import (
-    run_migration as migrate_v4_a2_response_language,
-)
 from backend.routes.backgrounds_api import router as backgrounds_router
 from backend.routes.briefing_api import router as briefing_router
 from backend.routes.character_state_api import router as character_state_router
@@ -511,6 +516,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # TTS 取 ja 段，中文给字幕。幂等（WHERE tts_language IS NULL OR != 'ja'）。
     await migrate_v4_persona_segment2_mai_ja()
 
+    # ── 1b30b. V4 persona segment 3 - card_type 列 ────────────────────────
+    # Persona v2 Slice 1:character_personas + card_type TEXT DEFAULT '社交'
+    # 区分社交 / 助手两类卡。当前真消费 = 前端编辑器分表单 + (Stage 2)
+    # daily_plan 扩 multi-character 时 gate 助手卡 skip(ROADMAP backlog 已记)。
+    # 回填:cid=100 active variant → '助手'(is_active=1 锚定避免误伤其他 variant)。
+    # 幂等:PRAGMA 检查 + UPDATE 用 WHERE card_type != '助手' 兜底。
+    await migrate_v4_persona_segment3_card_type()
+
     # ── 1b31. V4.0.0 ship-call: Mai (cid=1) 回退纯中文 ──────────────────────
     # v4.0.0 产品决策:Mai 放弃 ja pipeline,改用 cosyvoice 内置中文音色
     # longyumi_v3 + tts_language=zh。**必须在 v4_seg2_mai_ja 之后跑** ——
@@ -556,6 +569,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # cron (5 0 * * *) + startup backfill 写,daily_activity_ticker 5min
     # interval 查表写 current_activity。CREATE TABLE IF NOT EXISTS,幂等。
     await migrate_dailyagent_chunk1_character_daily_plan()
+
+    # ── A2. characters.response_language 列(LLM 输出语种) ────────────────
+    await migrate_v4_a2_response_language()
     _boot.mark("db_migrations_all")
 
     # ── 2. Default user ──────────────────────────────────────────────────────
@@ -569,9 +585,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("Created default user: %s (%s)", default_uid, default_name)
         else:
             logger.info("Default user already exists: %s", default_uid)
-
-    # ── A2. characters.response_language 列(LLM 输出语种) ────────────────
-    await migrate_v4_a2_response_language()
     _boot.mark("default_user")
 
     # ── 3. Restore short-term memory from chat_history ───────────────────────

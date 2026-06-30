@@ -39,10 +39,15 @@ class LoadedPersona:
     relationship_to_user: Dict[str, Any]
 
     # Tier-2 可选(json.loads or None)
-    taboo_topics: Optional[List[str]] = None
+    # 注:实际 schema = {"hard_no": [{topic, her_reaction}], "soft_no": [...]} dict,
+    # 旧注解 List[str] 类型漂移已修(Persona v2 D)· 模板 layer_c_stable.j2:75-90
+    # 按 dict 读 .hard_no / .soft_no(loose typing 实测一直 work)。
+    taboo_topics: Optional[Dict[str, Any]] = None
     lore: Optional[Dict[str, Any]] = None
     capability_overrides: Optional[Dict[str, Any]] = None
     style_preset: str = "anime_classic"
+    # Persona v2 Slice 1:'社交' | '助手' · gate 元数据,不进 prompt
+    card_type: str = "社交"
 
 
 @dataclass
@@ -130,6 +135,7 @@ async def load_active_persona(character_id: int) -> LoadedPersona:
             lore=_safe_json_loads(row.lore, None),
             capability_overrides=_safe_json_loads(row.capability_overrides, None),
             style_preset=row.style_preset or "anime_classic",
+            card_type=row.card_type or "社交",
         )
 
 

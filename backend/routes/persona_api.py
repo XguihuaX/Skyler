@@ -69,8 +69,12 @@ def _to_dict(p: CharacterPersona) -> dict:
         "relationship_to_user": _safe_json_loads(p.relationship_to_user, {}),
         "taboo_topics":          _safe_json_loads(p.taboo_topics, None),
         "lore":                  _safe_json_loads(p.lore, None),
+        # @deprecated v4.2 (slated for DROP COLUMN) · 0 模板引用 · UI 不暴露编辑
         "capability_overrides":  _safe_json_loads(p.capability_overrides, None),
+        # @deprecated v4.2 (slated for DROP COLUMN) · 同上 · CharacterDetailModal 仅只读展示
         "style_preset": p.style_preset or "anime_classic",
+        # Persona v2 Slice 1:'社交' | '助手' · 前端编辑器分表单
+        "card_type": p.card_type or "社交",
         "created_at": p.created_at.strftime("%Y-%m-%d %H:%M:%S") if p.created_at else None,
         "updated_at": p.updated_at.strftime("%Y-%m-%d %H:%M:%S") if p.updated_at else None,
     }
@@ -88,8 +92,11 @@ _WRITABLE_FIELDS = {
     # 标量字段:直接写 ORM 列
     "variant_name":  ("variant_name", False),
     "description":   ("description", False),
+    # @deprecated v4.2 (slated for removal) · 编辑器不再暴露
     "style_preset":  ("style_preset", False),
     "display_order": ("display_order", False),
+    # Persona v2 Slice 1:'社交' | '助手' · 前端编辑器分表单
+    "card_type":     ("card_type", False),
     # JSON-in-TEXT 字段:dict / list → json.dumps 再写
     "identity":             ("identity", True),
     "personality_core":     ("personality_core", True),
@@ -100,6 +107,7 @@ _WRITABLE_FIELDS = {
     "relationship_to_user": ("relationship_to_user", True),
     "taboo_topics":         ("taboo_topics", True),
     "lore":                 ("lore", True),
+    # @deprecated v4.2 (slated for removal) · 0 模板引用 · 编辑器不暴露
     "capability_overrides": ("capability_overrides", True),
 }
 
@@ -127,8 +135,9 @@ def _apply_writable_fields(p: CharacterPersona, body: dict) -> None:
 class CreatePersonaBody(BaseModel):
     variant_name: str = Field(..., min_length=1, max_length=128)
     description: Optional[str] = None
-    style_preset: Optional[str] = None
+    style_preset: Optional[str] = None  # @deprecated v4.2
     display_order: int = 0
+    card_type: Optional[str] = None  # Persona v2:'社交' | '助手' · 缺省 '社交'
     identity: Dict[str, Any]
     personality_core: Dict[str, Any]
     speech_style: Dict[str, Any]
@@ -138,15 +147,16 @@ class CreatePersonaBody(BaseModel):
     relationship_to_user: Dict[str, Any]
     taboo_topics: Optional[Any] = None
     lore: Optional[Any] = None
-    capability_overrides: Optional[Any] = None
+    capability_overrides: Optional[Any] = None  # @deprecated v4.2
 
 
 class PatchPersonaBody(BaseModel):
     """全字段可选;只更新出现的 key。pydantic 直接接 dict-like JSON。"""
     variant_name: Optional[str] = None
     description: Optional[str] = None
-    style_preset: Optional[str] = None
+    style_preset: Optional[str] = None  # @deprecated v4.2
     display_order: Optional[int] = None
+    card_type: Optional[str] = None  # Persona v2:'社交' | '助手'
     identity: Optional[Dict[str, Any]] = None
     personality_core: Optional[Dict[str, Any]] = None
     speech_style: Optional[Dict[str, Any]] = None
@@ -156,7 +166,7 @@ class PatchPersonaBody(BaseModel):
     relationship_to_user: Optional[Dict[str, Any]] = None
     taboo_topics: Optional[Any] = None
     lore: Optional[Any] = None
-    capability_overrides: Optional[Any] = None
+    capability_overrides: Optional[Any] = None  # @deprecated v4.2
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +260,7 @@ async def create_persona(
         display_order=body.display_order,
         description=body.description,
         style_preset=body.style_preset or "anime_classic",
+        card_type=body.card_type or "社交",
         identity=             json.dumps(body.identity,             ensure_ascii=False),
         personality_core=     json.dumps(body.personality_core,     ensure_ascii=False),
         speech_style=         json.dumps(body.speech_style,         ensure_ascii=False),

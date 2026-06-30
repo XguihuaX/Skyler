@@ -82,9 +82,6 @@
 - ⚪ Cubism5
 
 ### 桌面感知 / 控制(UIA)
-
-> 完整设计 + Phase 1-3 路线 → [docs/design/desktop-control.md](docs/design/desktop-control.md)。
-
 - 🟢 文本级屏幕感知(active app + 浏览器 URL + 页面正文,19 条隐私黑名单)
 - 🟢 只读 AX 读屏(`read_current_screen`,macos-use,06-21 真机验)
   - 🔴 self_frontmost 大小写 bug(Skyler 前台会读自己的树;一行修待 build)
@@ -125,7 +122,7 @@
 
 > 项目最核心的差异化方向 —— 把现在"弱 / 花架子"的角色状态,做成一套真正驱动反应的**判断管线**:
 > 感知 / 输入(UIA · 活动 · 用户消息)→ 状态(persona + FSM + DailyAgent)→ **上下文仲裁(判断)** → 反应。
-> 完整管线设计 → [docs/design/character-mechanism.md](docs/design/character-mechanism.md)(设计种子,本节只列"做什么 + 什么时候")。
+> 完整管线设计 → `docs/design/character-mechanism.md`(本节只列"做什么 + 什么时候")。
 
 分四步走,emergent 不 big-bang(每块基于已有砖):
 
@@ -147,12 +144,10 @@
 - **桌面写控件确认门未验(安全)** —— 8 写工具当前 enabled,但"LLM 主动调写工具时确认 modal 是否弹"从未验证。定姿态前建议默认关。
 - **`screen.py` self_frontmost 大小写 bug** —— Skyler 前台问"看屏幕"会读自己的树;一行修待 build + 验。
 - **Persona schema 死字段** —— `relationship_to_user`(必填)/ `capability_overrides` / `style_preset` load 了但 0 模板引用;skill 文档与真实列漂移。归 Persona Schema v2,详 [研究报告](docs/research/persona-schema-comparison.md)。
-- **daily_plan 扩 multi-character 时必须 gate `card_type='助手'`** —— Persona v2 Slice 1 引入 `card_type` 列(`'社交' \| '助手'`)。当前 `daily_plan_generate()` 只跑 `DEFAULT_CHARACTER_ID=1`(Stage 1 MVP)。Stage 2 扩 multi-character 那次 commit **必须**在 `_generate_for_character` 开头加 `if persona.card_type == '助手': return ("skip_card_type_assistant", None)` —— 否则助手卡会被生成"她的一天",违反"助手卡无 DailyAgent"设计。锚 `backend/services/daily_plan.py:409`、`:522`。
-- **通用 prompt 层加跨角色总纲(代入感 / 长度 / 卡型边界)** —— Persona v2 真机后发现 3 类问题跨角色出现,该统一在通用层做(不该让每个 persona 自带):① **代入角色总纲** —— "你就是这个角色本人,不是在'执行规则'。下面的设定是描述你这个人是什么样,不是任务清单。" 防 LLM 把 persona 当 checklist 念。② **回复长度自然** —— 管"一回合总量",别铺满 max_tokens(不是每条句子都加限制 · 是整体节奏)。③ **act-don't-report 分卡型边界** —— 社交卡严守(不播报"看了屏幕 30 分钟" "今天聊了 5 次")· 助手卡放宽(可以说"刚整理完会议纪要")但仍不监控身体行为统计。挂在 Layer B universal_constraints 段(`backend/agents/prompt/templates/layer_b.j2:20-44`)· 用 `{% if persona.card_type == '助手' %}` gate 第 ③ 条放宽支线。
-- **时间戳 bug:LLM 报的时间和真实时间对不上** —— 用户 09:05 发消息 · 芙芙回"现在十点多" · 错 1 小时。注入源链:`backend/agents/prompt/renderer.py:186 now_str=format_now_prompt()` → `backend/utils/chat_time.py:61 format_now_prompt()` → `now_local(tz_name)` → `scheduler_tz` (config.yaml)。可能 root cause:(a) `tz_name` 取的不是预期(UTC vs +08:00),(b) system clock 不对,(c) renderer 用了 stale now_str 缓存值。诊断:dump 真实 prompt 看 `[当前时间]\n现在 X` 那行的 X 是否对、对照 system clock `date` 和 config.yaml `scheduler.timezone`。锚 `backend/agents/prompt/templates/layer_c_runtime.j2:2-3`。
 - **图片无持久化** —— 重启后历史只剩"[图片]"占位。
 - **VAD 手动模式"麦还在听"间歇 bug** —— 表层根因已修两个,仍偶发;诊断仪器已就绪待复现。
 - **长期记忆陪伴质量未验** —— 代码核验完成,待真机回归 + friend-test。
+- **GSV 中文音色跨语种漂(🔴 未决)** —— 本地链路 ship,但中文文本喂 ja-训练的 `mai_v4`,音色仍飘(跨语种音素漂移);新角色走 Fish 部分规避。
 - **GSV ops 坑** —— server 重启重置 `tts_infer.yaml` 到 CPU(需 SSH 修);失败 latch `FAILED_KEYS` 需双重启恢复。
 
 ---

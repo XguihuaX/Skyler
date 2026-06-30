@@ -141,9 +141,15 @@ class CharacterPersona(Base):
     # Tier-2 可选（NULL 表示走默认）
     taboo_topics = Column(Text, nullable=True)
     lore = Column(Text, nullable=True)
+    # @deprecated v4.2 → DROP COLUMN(load 了但 0 模板引用 · UI 不暴露编辑)
     capability_overrides = Column(Text, nullable=True)
+    # @deprecated v4.2 → DROP COLUMN(同上 · CharacterDetailModal 仅只读展示)
     style_preset = Column(Text, default="anime_classic",
                           server_default="anime_classic")
+
+    # Persona v2 Slice 1:卡型('社交' | '助手')· 现存消费 = 前端分表单;
+    # Stage 2 daily_plan 扩 multi-character 时 gate 助手卡 skip(ROADMAP backlog)。
+    card_type = Column(Text, default="社交", server_default="社交")
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())

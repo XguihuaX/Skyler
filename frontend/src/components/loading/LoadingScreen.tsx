@@ -50,7 +50,9 @@ const DEFAULT_THEME: Theme = {
 };
 
 const CHARACTER_THEME: Record<number, Theme> = {
-  1:   { ...DEFAULT_THEME, en: 'MOMO',            mur: '你回来了。' },
+  1:   { accent: '#b08a4a', soft: '#dcc18a', glow: 'rgba(220,193,138,.5)',
+         paper:  '#f1ebdd', paperDeep: '#e6dcc6', petal: '#e8d9af',
+         en: 'MOMO',             mur: '你回来了。' },
   2:   { ...DEFAULT_THEME, en: 'YAE MIKO',        mur: '来得正好,我等你有一会儿了。' },
   3:   { accent: '#d4b96e', soft: '#e9d29a', glow: 'rgba(233,210,154,.5)',
          paper:  '#f1ebdd', paperDeep: '#e6dcc6', petal: '#e8d9af',
@@ -64,9 +66,9 @@ const CHARACTER_THEME: Record<number, Theme> = {
   99:  { accent: '#d489a0', soft: '#ecb2c2', glow: 'rgba(236,178,194,.5)',
          paper:  '#f3e7ec', paperDeep: '#e6d2da', petal: '#f3c6d0',
          en: 'NEKO',             mur: '喵?' },
-  100: { accent: '#9b7bb5', soft: '#c1a4d3', glow: 'rgba(193,164,211,.5)',
-         paper:  '#ece5f1', paperDeep: '#dccfe6', petal: '#d9c6ec',
-         en: 'SHOKO TEST',       mur: 'test env · 主页位招租中。' },
+  100: { accent: '#f4a6c0', soft: '#f9c5d6', glow: 'rgba(249,197,214,.5)',
+         paper:  '#f7e9ef', paperDeep: '#ecd4de', petal: '#f3c6d0',
+         en: 'APHRODITE',        mur: '等你半天了。\n——这话就当我没说吧。' },
   101: { accent: '#b08a4a', soft: '#dcc18a', glow: 'rgba(220,193,138,.5)',
          paper:  '#f1ebdd', paperDeep: '#e6dcc6', petal: '#e8d9af',
          en: 'SAKURAJIMA MAI',   mur: '哦?今天倒是没迟到。' },

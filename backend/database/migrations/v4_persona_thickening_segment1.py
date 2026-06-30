@@ -203,10 +203,21 @@ async def run_migration() -> None:
         seeded = 0
         skipped = 0
         for char_id, char_name in rows:
+            # 存在性检查:看该角色是否已有任意 active variant(语义与 Seg-2
+            # ensure_defaults 对齐 · 都用 is_active=1 锚)。
+            #
+            # 修复历史:原来检查 variant_name='default' · 假设"只有 Seg-1 自己 seed
+            # 'default' variant,用户不会自建 active variant"。Persona v2(card_type
+            # 上线)+ PersonaEditorModal "新建 variant" 允许用户自定义名字并激活
+            # → 假设被打破:若用户给某 cid 建了 variant_name='X'(X != 'default')
+            # 且激活,Seg-1 老逻辑视为"无 default"会强插新 'default' is_active=1 行
+            # → 撞 partial UNIQUE INDEX idx_persona_active_per_char(WHERE is_active=1)
+            # → IntegrityError: UNIQUE constraint failed: character_personas.character_id
+            # → backend 启动崩。本次改 SELECT 锚定 is_active=1 与语义对齐 + 兜住该场景。
             exists = (await conn.execute(
                 text(
                     "SELECT 1 FROM character_personas "
-                    "WHERE character_id = :cid AND variant_name = 'default'"
+                    "WHERE character_id = :cid AND is_active = 1"
                 ),
                 {"cid": char_id},
             )).first()

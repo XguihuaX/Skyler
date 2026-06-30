@@ -17,6 +17,7 @@ import {
   CharacterPersonaRow,
   CreatePersonaBody,
   PatchPersonaBody,
+  PersonaCardType,
   VoiceSample,
   createPersona,
   getPersona,
@@ -42,7 +43,8 @@ export interface PersonaEditorModalProps {
 interface FormState {
   variant_name: string;
   description: string;
-  style_preset: string;
+  // Persona v2:卡型(社交/助手)· 控制下方 3 段「助手专属」字段显隐
+  card_type: PersonaCardType;
   // Tier-1 7 字段(对外是 dict / list,内部 form 保持同形)
   identity_name: string;
   identity_aliases_csv: string;
@@ -57,12 +59,20 @@ interface FormState {
   pc_energy_level: 'low' | 'medium' | 'high';
   pc_default_emotion: string;
   pc_anger_style: string;
+  /** Persona v2 助手卡专属 · UI 仅在 card_type==='助手' 显示 */
+  pc_deepest_want: string;
+  /** Persona v2 助手卡专属 */
+  pc_core_fear: string;
   ss_vocabulary: string;
   ss_sentence_rhythm: string;
   ss_user_address: string;
   ss_emoji_habit: string;
   ss_punctuation_quirk: string;
   ss_cliche_tolerance: number;   // 0~1 滑块
+  /** Persona v2 助手卡专属 · 多行 textarea */
+  ss_behavior: string;
+  /** Persona v2 助手卡专属 · 多行(一行一条 voice rule) */
+  ss_voice_rules: string;
   signature_phrases_csv: string;
   voice_samples: VoiceSample[];
   fp_global_csv: string;
@@ -72,12 +82,16 @@ interface FormState {
   rel_type: string;
   rel_intimacy_progression: string;
   rel_initial_intimacy: number;
+  /** Persona v2 助手卡专属 */
+  rel_positioning: string;
+  /** Persona v2 助手卡专属 */
+  rel_boundary: string;
 }
 
 const EMPTY_FORM: FormState = {
   variant_name: '',
   description: '',
-  style_preset: 'anime_classic',
+  card_type: '社交',
   identity_name: '',
   identity_aliases_csv: '',
   identity_self_reference: '我',
@@ -91,12 +105,16 @@ const EMPTY_FORM: FormState = {
   pc_energy_level: 'medium',
   pc_default_emotion: 'calm',
   pc_anger_style: '',
+  pc_deepest_want: '',
+  pc_core_fear: '',
   ss_vocabulary: 'neutral',
   ss_sentence_rhythm: 'medium',
   ss_user_address: '你',
   ss_emoji_habit: 'rare',
   ss_punctuation_quirk: 'standard',
   ss_cliche_tolerance: 0.5,
+  ss_behavior: '',
+  ss_voice_rules: '',
   signature_phrases_csv: '',
   voice_samples: [],
   fp_global_csv: '作为AI,作为一个助手',
@@ -106,6 +124,8 @@ const EMPTY_FORM: FormState = {
   rel_type: 'companion',
   rel_intimacy_progression: 'linear',
   rel_initial_intimacy: 50,
+  rel_positioning: '',
+  rel_boundary: '',
 };
 
 // CSV 工具:逗号 / 中文逗号 / 换行均算分隔。
@@ -137,10 +157,13 @@ export function _existingToForm(p: CharacterPersonaRow): FormState {
     ?? ({} as Partial<typeof p.forbidden_phrases>);
   const relationship_to_user = p.relationship_to_user
     ?? ({} as Partial<typeof p.relationship_to_user>);
+  // Persona v2:card_type 默认 '社交',API 返 '助手'(或将来其他枚举)透传
+  const card_type: PersonaCardType =
+    (p.card_type === '助手' ? '助手' : '社交');
   return {
     variant_name: p.variant_name,
     description: p.description ?? '',
-    style_preset: p.style_preset ?? 'anime_classic',
+    card_type,
     identity_name: identity.name ?? '',
     identity_aliases_csv: arrToCsv(identity.aliases),
     identity_self_reference: identity.self_reference ?? '我',
@@ -155,12 +178,16 @@ export function _existingToForm(p: CharacterPersonaRow): FormState {
       'low' | 'medium' | 'high',
     pc_default_emotion: personality_core.default_emotion ?? 'calm',
     pc_anger_style: personality_core.anger_style ?? '',
+    pc_deepest_want: personality_core.deepest_want ?? '',
+    pc_core_fear: personality_core.core_fear ?? '',
     ss_vocabulary: speech_style.vocabulary ?? 'neutral',
     ss_sentence_rhythm: speech_style.sentence_rhythm ?? 'medium',
     ss_user_address: speech_style.user_address ?? '你',
     ss_emoji_habit: speech_style.emoji_habit ?? 'rare',
     ss_punctuation_quirk: speech_style.punctuation_quirk ?? 'standard',
     ss_cliche_tolerance: speech_style.cliche_tolerance ?? 0.5,
+    ss_behavior: speech_style.behavior ?? '',
+    ss_voice_rules: (speech_style.voice_rules ?? []).join('\n'),
     signature_phrases_csv: arrToCsv(p.signature_phrases),
     voice_samples: p.voice_samples ?? [],
     fp_global_csv: arrToCsv(forbidden_phrases._global),
@@ -170,6 +197,8 @@ export function _existingToForm(p: CharacterPersonaRow): FormState {
     rel_type: relationship_to_user.type ?? 'companion',
     rel_intimacy_progression: relationship_to_user.intimacy_progression ?? 'linear',
     rel_initial_intimacy: relationship_to_user.initial_intimacy ?? 50,
+    rel_positioning: relationship_to_user.positioning ?? '',
+    rel_boundary: relationship_to_user.boundary ?? '',
   };
 }
 
@@ -181,11 +210,17 @@ function _formToCreateBody(f: FormState): CreatePersonaBody {
   const ageStr = f.identity_age.trim();
   const age = ageStr ? parseInt(ageStr, 10) : null;
 
+  // Persona v2:助手专属字段按 card_type gate · 社交卡写 null/[] 清掉,避免脏数据
+  const isAssistant = f.card_type === '助手';
+  const voiceRules = isAssistant
+    ? f.ss_voice_rules.split('\n').map((s) => s.trim()).filter(Boolean)
+    : [];
+
   return {
     variant_name: f.variant_name.trim(),
     description: f.description.trim() || null,
-    style_preset: f.style_preset || 'anime_classic',
     display_order: 0,
+    card_type: f.card_type,
     identity: {
       name: f.identity_name.trim(),
       aliases: csvToArr(f.identity_aliases_csv),
@@ -201,6 +236,8 @@ function _formToCreateBody(f: FormState): CreatePersonaBody {
       energy_level: f.pc_energy_level,
       default_emotion: f.pc_default_emotion.trim() || 'calm',
       anger_style: f.pc_anger_style.trim() || null,
+      deepest_want: isAssistant ? (f.pc_deepest_want.trim() || null) : null,
+      core_fear: isAssistant ? (f.pc_core_fear.trim() || null) : null,
     },
     speech_style: {
       vocabulary: f.ss_vocabulary.trim() || 'neutral',
@@ -209,6 +246,8 @@ function _formToCreateBody(f: FormState): CreatePersonaBody {
       emoji_habit: f.ss_emoji_habit.trim() || 'rare',
       punctuation_quirk: f.ss_punctuation_quirk.trim() || 'standard',
       cliche_tolerance: Math.max(0, Math.min(1, f.ss_cliche_tolerance)),
+      behavior: isAssistant ? (f.ss_behavior.trim() || null) : null,
+      voice_rules: voiceRules,
     },
     signature_phrases: csvToArr(f.signature_phrases_csv),
     voice_samples: f.voice_samples,
@@ -222,6 +261,8 @@ function _formToCreateBody(f: FormState): CreatePersonaBody {
       type: f.rel_type.trim() || 'companion',
       intimacy_progression: f.rel_intimacy_progression.trim() || 'linear',
       initial_intimacy: Math.max(0, Math.min(100, f.rel_initial_intimacy)),
+      positioning: isAssistant ? (f.rel_positioning.trim() || null) : null,
+      boundary: isAssistant ? (f.rel_boundary.trim() || null) : null,
     },
   };
 }
@@ -476,6 +517,8 @@ export default function PersonaEditorModal({
 
         <div className="space-y-3">
           {/* —— 基本 —— */}
+          {/* Persona v2:style_preset select 已删(@deprecated v4.2 · 0 模板引用)。
+              新增 card_type select(社交 / 助手)· 控制下方 3 段助手专属字段显隐。 */}
           <section className="rounded-md p-3 space-y-2" style={sectionStyle}>
             <h3
               className="text-xs font-medium"
@@ -494,14 +537,15 @@ export default function PersonaEditorModal({
                 style={inputStyle}
               />
               <select
-                value={form.style_preset}
-                onChange={(e) => setForm({ ...form, style_preset: e.target.value })}
+                value={form.card_type}
+                onChange={(e) =>
+                  setForm({ ...form, card_type: e.target.value as PersonaCardType })}
                 className="rounded px-2 py-1 text-xs focus:outline-none"
                 style={inputStyle}
+                title="社交卡:有 DailyAgent + 主动陪伴。助手卡:无独立日程,用户驱动。"
               >
-                <option value="anime_classic">anime_classic</option>
-                <option value="realistic_grounded">realistic_grounded</option>
-                <option value="mixed">mixed</option>
+                <option value="社交">卡型:社交</option>
+                <option value="助手">卡型:助手</option>
               </select>
             </div>
             <input
@@ -512,6 +556,14 @@ export default function PersonaEditorModal({
               className="w-full rounded px-2 py-1 text-xs focus:outline-none"
               style={inputStyle}
             />
+            {form.card_type === '助手' && (
+              <p
+                className="text-[10px]"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                ⓘ 助手卡:不会生成「她的一天」日程;下面 3 个段会多出助手专属字段(渴望与恐惧 / 反应模式 / 与用户的位置)。
+              </p>
+            )}
           </section>
 
           {/* —— 身份卡 (identity) —— */}
@@ -615,6 +667,32 @@ export default function PersonaEditorModal({
               placeholder="anger_style(愤怒时的表现,可空)"
               className="w-full rounded px-2 py-1 text-xs focus:outline-none" style={inputStyle}
             />
+            {form.card_type === '助手' && (
+              <>
+                <div
+                  className="text-[10px] pt-1"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  ── 助手卡专属(C2b 渴望与恐惧)──
+                </div>
+                <textarea
+                  value={form.pc_deepest_want}
+                  onChange={(e) => setForm({ ...form, pc_deepest_want: e.target.value })}
+                  placeholder="deepest_want — 她真正想要的(渲染进 C2b · 一两句话)"
+                  rows={2}
+                  className="w-full rounded px-2 py-1 text-xs focus:outline-none resize-y"
+                  style={inputStyle}
+                />
+                <textarea
+                  value={form.pc_core_fear}
+                  onChange={(e) => setForm({ ...form, pc_core_fear: e.target.value })}
+                  placeholder="core_fear — 她最怕的(渲染进 C2b · 一两句话)"
+                  rows={2}
+                  className="w-full rounded px-2 py-1 text-xs focus:outline-none resize-y"
+                  style={inputStyle}
+                />
+              </>
+            )}
           </section>
 
           {/* —— 说话风格 (speech_style) + cliche_tolerance 滑块 —— */}
@@ -675,6 +753,32 @@ export default function PersonaEditorModal({
                 越高 → 越接受甜糖句式;voice_samples 按 tolerance_range 自动过滤。
               </p>
             </div>
+            {form.card_type === '助手' && (
+              <>
+                <div
+                  className="text-[10px] pt-1"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  ── 助手卡专属(C3a 反应模式 + C3a-2 voice rules)──
+                </div>
+                <textarea
+                  value={form.ss_behavior}
+                  onChange={(e) => setForm({ ...form, ss_behavior: e.target.value })}
+                  placeholder="behavior — 怎么读他、怎么决定接话(渲染进 C3a · 多行)"
+                  rows={3}
+                  className="w-full rounded px-2 py-1 text-xs focus:outline-none resize-y"
+                  style={inputStyle}
+                />
+                <textarea
+                  value={form.ss_voice_rules}
+                  onChange={(e) => setForm({ ...form, ss_voice_rules: e.target.value })}
+                  placeholder="voice_rules — 一行一条铁律(渲染进 C3a-2)&#10;例:act-don't-report:不播报精确时间/统计&#10;例:不挑'真人 vs AI'对比"
+                  rows={3}
+                  className="w-full rounded px-2 py-1 text-xs focus:outline-none resize-y"
+                  style={inputStyle}
+                />
+              </>
+            )}
           </section>
 
           {/* —— signature_phrases —— */}
@@ -801,6 +905,32 @@ export default function PersonaEditorModal({
                 className="rounded px-2 py-1 text-xs focus:outline-none" style={inputStyle}
               />
             </div>
+            {form.card_type === '助手' && (
+              <>
+                <div
+                  className="text-[10px] pt-1"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  ── 助手卡专属(C1c 与用户的位置)──
+                </div>
+                <textarea
+                  value={form.rel_positioning}
+                  onChange={(e) => setForm({ ...form, rel_positioning: e.target.value })}
+                  placeholder="positioning — 你与用户的定位(渲染进 C1c · 如「桌面伙伴 + 半个秘书」)"
+                  rows={2}
+                  className="w-full rounded px-2 py-1 text-xs focus:outline-none resize-y"
+                  style={inputStyle}
+                />
+                <textarea
+                  value={form.rel_boundary}
+                  onChange={(e) => setForm({ ...form, rel_boundary: e.target.value })}
+                  placeholder="boundary — 与用户的边界声明(渲染进 C1c · 如「不演恋人、不演物理共处」)"
+                  rows={2}
+                  className="w-full rounded px-2 py-1 text-xs focus:outline-none resize-y"
+                  style={inputStyle}
+                />
+              </>
+            )}
           </section>
 
           {/* Tier-2 read-only 提示 */}
