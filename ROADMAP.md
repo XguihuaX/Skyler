@@ -1,168 +1,153 @@
-<!-- 给用户审阅的新 ROADMAP(对应 ROADMAP.md)。落库前:
-     ① CC 把所有状态 badge 回代码核;② 完整时间线已移出 → docs/EVOLUTION.md(版本×功能矩阵)+ IMPLEMENTATION_LOG.md;
-     ③ 深 chunk 历史 + 详细 Tech Debt 由 CC 迁到 IMPLEMENTATION_LOG,这里只留近期计划 + 当前状态 + 前瞻。 -->
+# Skyler · ROADMAP
 
-# 🗺️ Skyler · ROADMAP
-
-> 一眼看清:现在每块能力到哪一步、接下来做什么。
-> 项目怎么一步步长出来的(版本 × 功能)→ [EVOLUTION.md](docs/EVOLUTION.md)。
-> 完整 chunk / hotfix 级实施日志 → [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)。
+> 当前路线图以本地代码为准。更细的版本演进见 [docs/EVOLUTION.md](docs/EVOLUTION.md),历史实施日志见 [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)。
+>
+> 状态定义:已落地 = 本地代码链路已经接通;进行中 = 有基础实现或框架,但策略 / 端到端验证 / 多角色化还没完成;规划 = 设计方向明确但不应写成当前能力。
 
 ---
 
-## 近期计划
+## 项目定位
 
-**Now —— v4.0.0 收口**
-- 长期记忆链路真机回归 + friend-test(验收门,CC 不自证)
-- Stage3 Tauri 打包 / dmg / dogfood / tag
+Skyler 是一个**连续人格驱动的 Live2D 桌面 AI 陪伴角色系统**。
 
-**Next**
-- **demo 视频**(锁定里程碑,作品集核心交付)
-- **角色机制 Brick 1+2** —— 状态读回 + DailyAgent 切片(见下「核心专项」)
-- **新角色 TTS:Fish 挂载** —— Fish S2-Pro provider + 可插 provider 层**已通**(GSV / CosyVoice / Fish);Next = 给新角色真挂上 + per-character 选择验收
-- **第二个独立角色(`cid=100`)** —— 完整 persona + 立绘 + 音色(先挂 Live2D + 默认,全套后续)
-- **图片输入持久化** · **桌面写控件确认门验证** · **七角色真 persona** · **记忆架构 v2 + RAG 第 4 层**
+它不是给问答 AI 套角色外观,而是围绕 Persona、状态系统、四层记忆、活动时间线和多源上下文组装,让角色持续积累状态,逐渐形成自己的节奏和生活感。
 
-**Later**
-- **角色机制 Brick 3+4** —— 状态加规则 + 上下文仲裁(见下)
-- **Persona Schema v2** —— 修死字段(`relationship_to_user` 等 load 了不进 prompt)+ 文档漂移 + 借交换式 voice_samples;详 [docs/research/persona-schema-comparison.md](docs/research/persona-schema-comparison.md)
-- **persona-level learning** · **屏幕视觉 VLM** · **多模态图片输出(ComfyUI)**
-- **Live2D AI 导演 + 贴纸系统 + 公参表** · **Cubism5** · **整体 UI 升级**
-- **messaging gateway**(Telegram / Discord)· **凭证进系统钥匙串** · **DESIGN_LITE 更新**(单独 pass)
+Local-first 的边界:对话记录、角色状态、记忆、活动时间线等数据由本地 SQLite / 本地文件持有;LLM / TTS / ASR provider 可替换,可以接云端或自托管服务,不要表述为完全离线。
 
 ---
 
-## 当前能力状态
+## 已落地
 
-> 🟢 已验 · 🟡 在做 / 已建未验 · 🔴 有 bug · 🔵 想升级 · ⚪ 计划 / 未实现。状态回代码核。
+### UI / 桌面形态
 
-### 角色(= 核心「角色机制」)
-- 🟢 Persona 五层框架
-  - 🟢 Tier-1(身份 / 性格 / 语气)+ Tier-2(禁忌 / 设定 / 情绪触发 / voice samples)+ 多 variant
-  - 🟢 Mai(`cid=1`)完整 persona(参考实现)
-  - 🟡 第二个独立角色搭建中(`cid=100` 槽位,Live2D 挂上、默认;人格 · 音色 · 立绘后续)· `cid=101` = Mai 日语变体(独立)· ⚪ 其余空骨架
-- 🟡 角色状态层(FSM)—— **弱 / 花架子**
-  - 🟡 mood / intimacy / current_activity / current_thought 字段 + `<state_update>` 写入
-  - 🟢 intimacy 每日衰减 cron
-  - ⚪ 规则演化 · 🟡 状态部分读回(C4 段已注入 mood/intimacy/activity,影响力 / 范围待评)
-- 🟡 DailyAgent(连贯的一天)—— Stage1 + 立绘馆日程 viz 已建,HOLD 未验;设计 → [docs/design/dailyagent-plan.md](docs/design/dailyagent-plan.md)
-- ⚪ 上下文仲裁(状态 + 输入 → 反应)
-- ⚪ persona-level learning
-- 🟢 角色详情中心(立绘馆内看 persona / 心情 / 状态 + 编辑 persona)
-- 🟢 多角色 conversation 锚定(切角色不串台、回复不丢)
+- 双形态 UI:全屏主面板 + 桌宠小窗。
+- 主面板承载完整对话、聊天历史、角色管理、能力配置和设置浮层。
+- 小窗承载低打扰陪伴、Live2D 展示、ASR 预览、VAD 状态和快速控制。
+- Live2D 渲染、模型扫描 / 管理 / 上传、Cubism 4 路径、framing 缩放 / 位移控制。
+- 进入动画、立绘馆、角色详情中心、玻璃外观自定义和主题系统。
 
-### 记忆
-- 🟢 短期记忆(用户 / 角色 / 对话 三级隔离 + 滚动摘要)
-- 🟡 长期事实记忆(事实抽取 + 遗忘曲线 + 墓碑,代码核验;陪伴质量待真机回归)· ⚪ RAG 第 4 层
-- 🟢 用户画像(跨角色一份印象)· 🟢 活动时间线(30 天,可被角色引用)
-- ⚪ 记忆架构 v2(一角色一永久对话流)
+### 交互链路
 
-### 对话
-- 🟢 语音 / 文字皆可 · 🟢 逐句流式(文字 + 按句音频)
-- 🟢 tool 调用过渡话 + loading pill(不卡 30s 沉默)
-- 🟢 assistant 说话时自动静音 mic(防回声)
-- 🟢 深度思考 / 联网双开关(聊天框 + 设置双入口,默认关思考求快)
-- 🟢 聊天气泡本地时间戳
+- 文本输入。
+- 语音链路:VAD / 手动录音、ASR、LLM streaming、TTS、Live2D 表演。
+- TTS provider × model × voice 分层,支持 GSV / CosyVoice / Fish 等路径。
+- 图片和文件作为**当轮输入**进入模型上下文。
+- 文件输入会抽取文本后进入当前 prompt;图片输入以 image block 进入当前模型调用,理解能力取决于 active model。
 
-### 多模态(输入 / 输出)
-- 🟢 语音输入:VAD(silero,阈值可调)/ 手动录音 / 本地 whisper ASR + 实时回显
-  - 🔴 手动模式偶发"麦还在听"间歇 bug(诊断仪器已就绪)
-- 🟢 语音输出 TTS:多 provider(GSV / CosyVoice / Fish)+ per-character 选择;自训 `mai_v4`(本地,16 情绪,ja);文本 / 语音语言解耦
-  - 🔵 字幕恒中文 → 多语言
-- 🟢 文件输入 / 输出
-- 🟡 图片输入(传图 → 喂当前主模型;⚪ 持久化:现仅存"[图片]"占位,重启丢图)
-- ⚪ 图片输出(接 ComfyUI / anime)
+### Persona / 角色卡
 
-### Live2D
-- 🟢 表演层(待机微动 / 转头看你 ±15° / 眨眼呼吸 / 口型同步)
-- 🟢 模型管理(多模型可换 + 扫描接入,Cubism 4)· 🟢 取景层(构图缩放 / 移动)
-- 🟡 情绪 → 表情(`<emotion>` 驱动)
-- 🟡 角色台词气泡:🟢 桌宠(widget)已上 · 🟡 大窗(panel)暂关留复活
-- ⚪ 统一管理:动作库 + 选择策略 · AI 导演(一情绪同调 动作+表情+贴纸)· 原创贴纸通道 · 公参表
-- ⚪ Cubism5
+- 结构化 Persona 表与 API:`character_personas`、active variant、内置 seed 备份、恢复默认。
+- Persona 字段覆盖身份、性格、语气、样例、禁忌、关系、lore 等。
+- 前端角色详情页和 Persona 编辑器已接入。
+- `card_type` 基础链路已接入:社交型 / 助手型。
+- 社交型偏日常交流、关系和情绪表达;助手型偏任务、工具能力和行为边界。
+- Prompt 模板已消费 Persona v2 多数字段。
 
-### 桌面感知 / 控制(UIA)
+### 状态与记忆
 
-> 完整设计 + Phase 1-3 路线 → [docs/design/desktop-control.md](docs/design/desktop-control.md)。
+- 状态层:`mood`、`intimacy`、`current_thought`、`current_activity`。
+- `<state_update />` 写回协议。
+- `character.get_state` capability。
+- intimacy 每日衰减。
+- 短期窗口:按 user / character / conversation 隔离。
+- 对话摘要:长对话滚动 fold。
+- 长期语义记忆:embedding 检索、遗忘曲线、tombstone 抑制删除事实回流。
+- 用户画像:`users.profile_data` 结构化 JSON。
+- 活动上下文:`activity_sessions` 与今日活动格式化注入。
 
-- 🟢 文本级屏幕感知(active app + 浏览器 URL + 页面正文,19 条隐私黑名单)
-- 🟢 只读 AX 读屏(`read_current_screen`,macos-use,06-21 真机验)
-  - 🔴 self_frontmost 大小写 bug(Skyler 前台会读自己的树;一行修待 build)
-- 🟡 桌面写控件(macos-use 8 工具:click / type / open / scroll / ...)
-  - 🟢 已建 + DB enabled + ChatAgent 可调
-  - 🟡 确认门 model-driven 触发**未验**(安全门)
-- ⚪ 屏幕视觉 VLM(AX 盲区 fallback)
+> “四层记忆”在当前代码里应按真实来源理解为:短期窗口 / 对话摘要 / 长期语义记忆 / 用户画像与活动状态上下文,不要写成另一个不存在的独立架构。
 
-### 主动陪伴
-- 🟢 到点问候(早 / 午 / 晚 / 睡前,trigger pack)
-- 🟢 活动触发(快路径分类 + 慢路径 LLM judge)
-- 🟢 防滥用(多重 throttle + daily cap + idle 闸)
-- 🟡 据角色状态搭话(待角色机制深化)
+### Activity / 主动陪伴
 
-### 工具 / MCP
-- 🟢 MCP 双向(client 消费外部 server + server 暴露自身能力)
-- 🟢 服务器搜索 + 别名 · 🟢 per-tool 开关 + dangerous_tools gating(框架)
-- 🟢 内建集成:日历(Apple + Google)/ 网易云 / B站 / 文档读写 / 剪贴板 / 小红书(只读)/ Notion
-- 🟢 web 搜索(模型内置,可开关)
-- 🟢 危险操作二次确认门(框架在;model-driven 写触发未验)
-- 🟡 凭证明文 → ⚪ 进系统钥匙串
-- ⚪ 图片生成(ComfyUI)· ⚪ skill 系统
+- 活动时间线记录 active app、browser、document、URL content 等上下文。
+- 活动 session 持久化,支持跨 session 查看与清理。
+- 今日活动可被格式化后注入 ChatAgent prompt。
+- 主动触发雏形已接入:IDE、音乐、技术文档、长时间专注等触发。
+- idle gate / throttle / daily cap / active conversation guard 已接入,避免过度打扰。
 
-### UI / 界面
-- 🟢 双模式(大窗 Panel / 透明桌宠 Widget)· 🟢 进入动画(4 路健康 gate)
-- 🟢 立绘馆(发牌入场 + 角色详情)· 🟢 浮玻璃陪伴态(玻璃外观自定义,对比度可调)
-- 🟢 8 套主题 · 🟢 全局壁纸(跟角色解耦)· 🟢 系统状态浮层
-- 🟢 各管理面板(MCP / Live2D / 角色 / 音色)· 🔵 整体视觉升级
+### DailyAgent Stage 1
 
-### 可观测 / 启动
-- 🟢 用量 / 资源 / 启动耗时监控 + 异常高亮 · ⚪ 成本面板 + 缓存命中率
-- 🟢 启动健康检查(embedding / whisper / ws / live2d 四路 gate)· 🟢 持久"上次角色"· 🟢 Tauri 框架
-- ⚪ dmg 打包 / 自动更新 / CI release
+- 日计划表 `character_daily_plans`。
+- 日计划生成服务。
+- 当前活动 ticker 根据当天计划写回 `current_activity`。
+- 今日计划 API 和角色详情页可视化。
+
+### 桌面感知 / Perception
+
+- 只读 AX / UI Tree 桌面感知已落地。
+- 能读取前台 app、窗口标题、可见 UI 文本、浏览器 URL / 内容等结构化上下文。
+- `screen.read_current_screen` 读取当前非 Skyler 前台 app 的 AX 树。
+- 当前能力是只读;适合 demo 展示“基于证据理解当前桌面上下文”。
+
+### Capability / MCP / Provider
+
+- CapabilityRegistry 作为统一能力注册层。
+- `@register_capability` 自动导出 schema 并注入 ToolRegistry。
+- MCP client 可消费外部 server tools,注册为 `ext.<server>.<tool>` capability。
+- MCP server 可暴露 Skyler 自身 capability。
+- per-tool 开关。
+- confirm gate 框架。
+- LLM provider 走 LiteLLM + DB active provider / yaml fallback。
+- TTS provider registry 支持 provider / model / voice 分层。
 
 ---
 
-## 核心专项:角色机制(角色判断状态机)
+## 进行中
 
-> 项目最核心的差异化方向 —— 把现在"弱 / 花架子"的角色状态,做成一套真正驱动反应的**判断管线**:
-> 感知 / 输入(UIA · 活动 · 用户消息)→ 状态(persona + FSM + DailyAgent)→ **上下文仲裁(判断)** → 反应。
-> 完整管线设计 → [docs/design/character-mechanism.md](docs/design/character-mechanism.md)(设计种子,本节只列"做什么 + 什么时候")。
-
-分四步走,emergent 不 big-bang(每块基于已有砖):
-
-| Brick | 内容 | 阶段 |
-|---|---|---|
-| **1 · 状态真读回** | mood / current_activity 进 prompt、真影响生成(最便宜的第一步) | Next |
-| **2 · DailyAgent 最小切片** | 每天生成连贯日程 → ticker 驱动 current_activity(Stage1+viz 已建,HOLD;设计 [dailyagent-plan.md](docs/design/dailyagent-plan.md)) | Next |
-| **3 · 状态加规则** | mood / energy 衰减 / 转移,成真 FSM | Later |
-| **4 · 上下文仲裁** | 状态 + 输入 → 判断当下该有的反应(判断管线的"判断点")| Later |
-
-> 前置:CC 先只读 dump `character_states` 现状(状态是否读回生成),定 Brick 1 是"补"还是"从头"。
-
----
-
-## 已知问题 / 技术债(摘要)
-
-> 完整列表 + 历史债 → [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)。本节只列当前活跃大项。
-
-- **桌面写控件确认门未验(安全)** —— 8 写工具当前 enabled,但"LLM 主动调写工具时确认 modal 是否弹"从未验证。定姿态前建议默认关。
-- **`screen.py` self_frontmost 大小写 bug** —— Skyler 前台问"看屏幕"会读自己的树;一行修待 build + 验。
-- **Persona schema 死字段** —— `relationship_to_user`(必填)/ `capability_overrides` / `style_preset` load 了但 0 模板引用;skill 文档与真实列漂移。归 Persona Schema v2,详 [研究报告](docs/research/persona-schema-comparison.md)。
-- **daily_plan 扩 multi-character 时必须 gate `card_type='助手'`** —— Persona v2 Slice 1 引入 `card_type` 列(`'社交' \| '助手'`)。当前 `daily_plan_generate()` 只跑 `DEFAULT_CHARACTER_ID=1`(Stage 1 MVP)。Stage 2 扩 multi-character 那次 commit **必须**在 `_generate_for_character` 开头加 `if persona.card_type == '助手': return ("skip_card_type_assistant", None)` —— 否则助手卡会被生成"她的一天",违反"助手卡无 DailyAgent"设计。锚 `backend/services/daily_plan.py:409`、`:522`。
-- **通用 prompt 层加跨角色总纲(代入感 / 长度 / 卡型边界)** —— Persona v2 真机后发现 3 类问题跨角色出现,该统一在通用层做(不该让每个 persona 自带):① **代入角色总纲** —— "你就是这个角色本人,不是在'执行规则'。下面的设定是描述你这个人是什么样,不是任务清单。" 防 LLM 把 persona 当 checklist 念。② **回复长度自然** —— 管"一回合总量",别铺满 max_tokens(不是每条句子都加限制 · 是整体节奏)。③ **act-don't-report 分卡型边界** —— 社交卡严守(不播报"看了屏幕 30 分钟" "今天聊了 5 次")· 助手卡放宽(可以说"刚整理完会议纪要")但仍不监控身体行为统计。挂在 Layer B universal_constraints 段(`backend/agents/prompt/templates/layer_b.j2:20-44`)· 用 `{% if persona.card_type == '助手' %}` gate 第 ③ 条放宽支线。
-- **时间戳 bug:LLM 报的时间和真实时间对不上** —— 用户 09:05 发消息 · 芙芙回"现在十点多" · 错 1 小时。注入源链:`backend/agents/prompt/renderer.py:186 now_str=format_now_prompt()` → `backend/utils/chat_time.py:61 format_now_prompt()` → `now_local(tz_name)` → `scheduler_tz` (config.yaml)。可能 root cause:(a) `tz_name` 取的不是预期(UTC vs +08:00),(b) system clock 不对,(c) renderer 用了 stale now_str 缓存值。诊断:dump 真实 prompt 看 `[当前时间]\n现在 X` 那行的 X 是否对、对照 system clock `date` 和 config.yaml `scheduler.timezone`。锚 `backend/agents/prompt/templates/layer_c_runtime.j2:2-3`。
-- **图片无持久化** —— 重启后历史只剩"[图片]"占位。
-- **VAD 手动模式"麦还在听"间歇 bug** —— 表层根因已修两个,仍偶发;诊断仪器已就绪待复现。
-- **长期记忆陪伴质量未验** —— 代码核验完成,待真机回归 + friend-test。
-- **GSV ops 坑** —— server 重启重置 `tts_infer.yaml` 到 CPU(需 SSH 修);失败 latch `FAILED_KEYS` 需双重启恢复。
+- DailyAgent 完整 FSM / 多角色调度。
+- 社交型 / 助手型运行时策略进一步分流。
+- 上下文仲裁策略增强:从当前 prompt 组装顺序和 gate,演进为更明确的优先级 / 证据 / 状态仲裁。
+- 写操作确认门端到端验证:确认门框架已在,但危险写操作不能宣传为已完整安全可用。
+- 主动视觉感知:
+  - 小模型常驻监视变化。
+  - 判断是否需要进一步视觉理解。
+  - 截取当前窗口或局部屏幕。
+  - 调用 Qwen Plus / Flash 等支持图片输入的模型理解当前画面。
+- 图片/文件持久化和记忆沉淀。
+- 凭证治理和危险工具安全策略。
+- 多角色 Persona 内容完善。
+- 长期记忆陪伴质量真机回归。
+- Live2D emotion → expression map 的角色级补全。
 
 ---
 
-## 端点迁移
+## 规划
 
-回国后从国际 DashScope 迁到国内百炼端点(`dashscope.aliyuncs.com`),账号 / Key 不通用。
+- AX + 视觉模型融合。
+- 更完整多角色协作。
+- 长期自治。
+- Persona-level learning。
+- Live2D AI director / 更完整 expression map / 动作与表情选择策略。
+- 原创贴纸 / 多模态表达通道。
+- 图片生成能力。
+- 记忆架构 v2 / 更强 RAG。
+- 打包发布 / dmg / 自动更新。
+- CI release 与 dogfood 更新链路。
 
 ---
 
-## 历史
+## Demo 口径
 
-版本 × 功能演进 → [EVOLUTION.md](docs/EVOLUTION.md)。完整实施日志(每个 chunk / hotfix)→ [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md)。
+可展示:
+
+- 全屏主面板 + 桌宠小窗。
+- Live2D、语音链路、Persona 角色系统、活动时间线、只读 AX / UI Tree、MCP 能力扩展。
+- DailyAgent Stage 1 可标为“建设中 / 已接入基础链路”,不要说完整 FSM。
+- 感知页应写成 Perception / 桌面感知,明确区分已落地 AX / UI Tree 和建设中的主动视觉感知。
+
+不要夸大:
+
+- 不要说完整 VLM 屏幕视觉系统已完成。
+- 不要把用户上传图片/文件与主动截屏视觉感知混为一谈。
+- 不要说写操作安全可用已经端到端验证。
+- 不要说完整多角色生态、长期自治或多角色协作已完成。
+
+---
+
+## 近期建议顺序
+
+1. Demo 视频与投递材料:先把已落地能力讲清楚,并诚实标注进行中能力。
+2. DailyAgent:补齐完整 FSM、多角色调度和 card_type gate。
+3. Perception:在 AX / UI Tree 之外,逐步接入主动视觉感知的截图判断链路。
+4. Safety:验证写操作确认门、完善危险工具策略和凭证治理。
+5. Persona:完善社交型 / 助手型运行时分流和多角色内容。

@@ -5,7 +5,7 @@
 
 # 🌸 Skyler
 
-> A sculptable desktop AI character container — bring your own LLM, your own Live2D model, your own MCP tools. The agent core gives you a foundation; what it becomes is yours to shape.
+> A continuity-driven Live2D desktop AI companion system.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange) ![React](https://img.shields.io/badge/React-18-61DAFB) ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
@@ -15,9 +15,19 @@
 
 ## What is Skyler?
 
-Skyler is a Live2D AI companion that lives on your desktop. What sets her apart from packaged VTuber apps is that she **isn't a stateless chat box** — she has a persona, a mood, recent thoughts, and an intimacy level with you that persist across sessions; she'll reach out on her own at the right moments, notice what you're doing on screen and bring it into conversation, and the avatar moves with what she says. The direction of the whole project is to make her **an actual character with her own inner state, living her own day** — not a tool that starts from zero on every turn.
+Skyler is a continuity-driven Live2D desktop AI companion system.
 
-The base layer is **a container built for you to modify**: the core, capability registry, and proactive companion layer are the foundation; every capability, every external integration, every character asset can be swapped — no layer is locked. Models, voice, conversation history all stay on your machine (local SQLite + local embeddings, no cloud dependency), nothing goes off-box.
+It is not a Q&A chatbot with a character skin. Skyler is built around structured Persona, persistent character state, four memory/context layers, an activity timeline, and multi-source context assembly so a character can accumulate state over time and develop a rhythm and a sense of life.
+
+Skyler has two desktop forms: a full panel for conversations, character management, and capability configuration, and a transparent desktop-pet window for low-friction companionship, proactive check-ins, and desktop context awareness. Live2D rendering, model management, and framing controls are already wired in; appearance, voice, persona, and capabilities can be configured separately.
+
+The current local code supports text, voice, image, and file input. The voice path covers VAD, ASR, LLM streaming, TTS, and Live2D performance. Images and files can enter the current model turn as context, but long-term persistence and memory consolidation for attachments are still in progress.
+
+Desktop perception is currently based on read-only macOS AX / UI Tree: Skyler can read structured context such as the foreground app, window title, visible UI text, and browser content. Active visual perception is still under construction; the planned direction is a small resident model that watches for changes and, when needed, sends the current window or a local crop to an image-capable model.
+
+DailyAgent is also still being built. Stage 1 is connected today: daily plan generation, a current-activity ticker, and state write-back. The next step is turning that into a fuller daily rhythm system for characters.
+
+Skyler is local-first, not a promise of being fully offline. Conversation history, character state, memory, and activity data are held locally in SQLite/files, while LLM / TTS / ASR providers can be swapped between cloud and self-hosted services.
 
 *(Honest note: this is a one-person project, currently validated primarily on macOS Apple Silicon.)*
 
@@ -52,18 +62,19 @@ The base layer is **a container built for you to modify**: the core, capability 
 
 ## What makes it different
 
-### 1. Character mechanism: a persistent "self" for the character (core)
+### 1. Continuity first: a persistent "self" for the character (core)
 
-This is where Skyler actually puts effort — and the part hardest to copy. Most companion chatbots re-invent their mood, current activity, and how today's going on every turn — they drift, contradict themselves. Skyler treats the character as **an entity with persistent inner state**, in four layers:
+This is where Skyler actually puts effort — and the part hardest to copy. Most companion chatbots re-invent their mood, current activity, and how today's going on every turn. Skyler treats the character as **an entity with persistent inner state**:
 
-- **Persona (who she is)** — five-layer prompt framework + multi-variant schema (Tier-1 identity / personality / voice + Tier-2 taboo / lore / emotion triggers), not a wall of free text.
-- **Persistent state (how she is now)** — mood / intimacy / current activity, maintained in a state layer that the model reads as **input**, not improvised each turn.
-- **DailyAgent (what kind of day she's having)** — gives the character a coherent daily routine, so "what she's doing" has continuity instead of being fabricated on the fly.
-- **Context arbitration (turning state into reaction)** — composes inner state + your input into the response she should have right now.
+- **Persona (who she is)** — structured character cards and variants: identity, personality, speech style, boundaries, examples, and lore instead of one large prompt blob.
+- **card_type (what kind of card she is)** — social cards emphasize daily conversation, relationship, and emotional expression; assistant cards emphasize tasks, tools, and behavioral boundaries. The base chain is wired; runtime policy separation is still evolving.
+- **Persistent state (how she is now)** — mood / intimacy / current_thought / current_activity are maintained in the state layer and read as input, not invented on every turn.
+- **Four memory/context layers** — short-term window, conversation summary, long-term semantic memory, and user-profile / activity / state context are assembled into the prompt.
+- **DailyAgent Stage 1** — daily plan generation, current-activity ticker, and state write-back are connected; full FSM behavior, multi-character scheduling, and richer daily rhythm are in progress.
 
-In a line: take "tracking who I am, what kind of day I'm having" off the LLM's unreliable improvisation and put it on a persistent, rule-governed state layer.
+In a line: take "who I am and what kind of day I'm having" out of the LLM's unreliable improvisation and put it into persistent state and context.
 
-> *Current status: persona system (Mai complete, second persona slot in progress) + persistent state fields + `<state_update>` + state-aware proactive engine already running. **In progress**: actually feeding state back into generation + DailyAgent + context arbitration — upgrading the layer from "log-only" to "state-driven." This character-mechanism track is the core direction of the project.*
+> *Current status: structured Persona, base card_type wiring, state fields, `<state_update>`, activity timeline, and DailyAgent Stage 1 are present in local code. **In progress**: full FSM behavior, multi-character DailyAgent, stronger context arbitration, attachment memory consolidation, and stricter safety boundaries.*
 
 ### 2. A composable capability registry
 
@@ -92,15 +103,15 @@ Skyler aims at the space neither occupies: **desktop, character-driven, hackable
 
 > Which items are 🟢 verified / 🟡 in progress / ⚪ planned — see [ROADMAP § Current Capability Status](ROADMAP.md). This is just the broad strokes.
 
-- **Conversation** — voice (VAD auto / manual) + text, sentence-by-sentence streaming; multi-character conversation anchoring, switching characters doesn't cross wires or drop replies; deep-thinking / web-search dual toggle.
-- **Voice (TTS)** — self-trained voice (GPT-SoVITS `mai_v4` + 16 emotions) + multi-provider (CosyVoice / Fish); voice can be Chinese / Japanese, text and voice languages decoupled; local Whisper ASR.
-- **Memory** — short-term (user / character / conversation) three-level isolation + rolling summary + long-term fact extraction (forgetting curve + tombstones) + cross-character user profile + activity timeline.
-- **Proactive companion** — scheduled greetings + screen-aware conversation starters; multi-layer throttle + idle gate, shuts up when you walk away.
-- **Desktop awareness** — reads the foreground window's UI tree (macOS AX, read-only) and answers from what's actually on screen.
-- **Live2D** — performance layer (idle micro-motion / head-follow / blink-breathe / lipsync) + multi-model swap + composable framing.
-- **Tools / MCP** — built-in calendar (Apple + Google) / NetEase Music / Bilibili / docs / clipboard / Xiaohongshu (read-only) / Notion + connect any external MCP server; dangerous operations confirm-gated.
-- **Multi-modal** — file input / output; image input (read depends on the active model's multi-modal capability, no persistence yet).
-- **Interface** — main window / transparent desktop pet, two modes + 8 themes + floating-glass companion mode (contrast customizable) + boot animation + character gallery.
+- **Two desktop forms** — full panel + transparent desktop-pet window; the panel is for deep interaction and configuration, the widget is for low-friction companionship and context awareness.
+- **Interaction chain** — text, voice, image, and file input for the current turn; voice covers VAD / ASR / LLM streaming / TTS / Live2D performance.
+- **Persona / character cards** — structured Persona, variants, and base card_type wiring; social / assistant cards have a foundation, but not a finished character ecosystem yet.
+- **State and memory** — mood / intimacy / current_thought / current_activity; short-term window, conversation summary, long-term semantic memory, user profile, and activity context.
+- **Activity / proactive companion** — activity timeline + prompt injection; early proactive triggers with idle gate / throttle / daily cap / active-conversation guard.
+- **DailyAgent** — Stage 1 connects daily plan generation, current-activity ticker, and state write-back; full FSM / multi-character scheduling is in progress.
+- **Desktop perception** — read-only AX / UI Tree for foreground app, window title, visible UI text, and browser content; screenshot-style visual understanding is still under construction.
+- **Live2D** — rendering, idle motion, head-follow, blink/breathe, lipsync, multi-model management, and framing.
+- **Tools / MCP** — CapabilityRegistry, MCP client/server, per-tool switches, provider replacement, and a confirm-gate framework; dangerous-tool end-to-end validation and credential governance are still being hardened.
 - **Observability** — usage / resource / boot-time monitoring + anomaly highlight.
 
 > Only Mai has a complete persona today; a second independent character is being built (Live2D model in place; persona / voice / portrait to follow). The rest are skeletons (filling in one at a time).
@@ -157,9 +168,9 @@ Three foundations: **capability registry** (decorator → singleton, schema auto
 
 Full → [ROADMAP.md](ROADMAP.md). In a line:
 
-- **Now** — v4.0.0 wrap-up (long-term memory on-device regression → packaging release)
-- **Next** — demo video · character mechanism (state read-back + DailyAgent) · image-input persistence · desktop write-action confirm gate · seven-character real personas · memory architecture v2 + RAG
-- **Later** — context arbitration · persona-level learning · screen VLM · Live2D AI director · Cubism5
+- **Now** — demo video, documentation refresh, and local capability positioning.
+- **Next** — full DailyAgent FSM / multi-character scheduling, stronger context arbitration, attachment memory consolidation, active visual perception, and end-to-end validation of desktop write-action confirmation.
+- **Later** — AX + vision-model fusion, richer multi-character collaboration, long-term autonomy, Live2D AI director, packaging / dmg / auto-update.
 
 ---
 

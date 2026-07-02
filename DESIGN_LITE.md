@@ -19,28 +19,68 @@
 
 ---
 
+## §0 当前设计主线(本地代码口径)
+
+Skyler 的设计主线是**连续人格优先**,不是工具调用优先。
+
+项目目标不是给问答 AI 套角色外观,而是围绕 Persona、角色状态、四层记忆、活动时间线和多源上下文组装,让 Live2D 角色持续积累状态,逐渐形成自己的节奏和生活感。
+
+当前设计可以拆成 6 条主线:
+
+1. **连续人格**:结构化 Persona + `card_type` + `character_states` + `<state_update>`。角色状态不是每轮 prompt 即兴生成,而是持久化后再读回。
+2. **多源记忆 / 上下文**:短期窗口、对话摘要、长期语义记忆、用户画像、活动上下文共同参与 prompt 组装。这里的“四层记忆”指这些真实数据源,不是另一个虚构独立系统。
+3. **双形态 UI**:主面板负责深交互、聊天历史、角色管理和能力配置;桌宠小窗负责低打扰陪伴、主动搭话和桌面上下文感知。
+4. **感知层分层**:
+   - 已落地:只读 AX / UI Tree,读取前台 app、窗口标题、可见 UI 文本、浏览器内容等结构化上下文。
+   - 建设中:主动视觉感知,由小模型常驻监视变化,判断是否需要截图式视觉理解,再把当前窗口或局部屏幕交给支持图片输入的模型。
+5. **能力扩展层**:CapabilityRegistry 是内建能力和 MCP tools 的统一注册层;MCP client 消费外部工具,MCP server 暴露 Skyler 自身能力。
+6. **安全治理**:危险能力必须由确认门治理。confirm gate 框架已接入,但写操作端到端验证和凭证治理仍在进行中,不能宣传成绝对安全。
+
+---
+
 ## §1 项目定位
 
-**可改造的 AI 角色容器**(hackable AI companion framework)— 桌面端、角色驱动、能拆到 agent 内核、所有权归用户。
+**连续人格驱动的 Live2D 桌面 AI 陪伴角色系统**。
 
-不是 VTuber 应用(看 Open-LLM-VTuber);不是无状态 agent 平台(看 Hermes)。在二者中间。
+Skyler 是桌面端、角色驱动、local-first、可改造的 AI companion framework。它不是 VTuber 应用(看 Open-LLM-VTuber),也不是无状态 agent 平台(看 Hermes),而是在二者中间:角色长期待在桌面上,既有形象、语音和状态,又能通过能力注册表和 MCP 扩展工具能力。
 
-**目标用户**:hacker — 会写 Python,在意数据所有权,想要属于自己的 AI 角色,愿意改框架。
+**目标用户**:hacker / builder — 会写 Python,在意数据所有权,想要属于自己的 AI 角色,愿意改框架。
+
+**local-first 边界**:对话记录、角色状态、记忆、活动时间线等数据本地持有;LLM / TTS / ASR provider 可以替换,可以接云端或自托管服务,不要写成完全离线。
 
 ---
 
 ## §2 为什么是这些架构选择
 
-### 2.1 为什么 Capability Registry(`@register_capability`)
+### 2.1 为什么连续人格优先
 
-定位"扩展是核心" → 扩展机制必须低摩擦。
+定位"陪伴角色" → 核心不是工具多,而是角色连续。
+
+- ❌ 无状态聊天框:每轮重新定义自己,心情 / 关系 / 最近活动全靠即兴。
+- ❌ 单 prompt 角色扮演:角色卡很快变成一大段不可调文本,状态难以长期维护。
+- ❌ 纯工具 agent:能执行任务,但没有“她今天在过什么样的一天”。
+
+→ **Persona + 状态 + 记忆 + 活动上下文** 是 Skyler 的主轴。工具能力服务于角色,不是反过来。
+
+### 2.2 为什么双形态 UI
+
+定位"桌面陪伴" → 同时需要深交互和低打扰常驻。
+
+- **主面板(Panel)**:完整聊天历史、角色管理、Persona 编辑、Live2D 管理、MCP / provider / 设置。
+- **桌宠小窗(Widget)**:透明常驻、Live2D 表演、ASR preview、VAD 状态、低打扰主动搭话。
+
+主面板像驾驶舱,小窗像陪伴体。两者共享角色状态和 Live2D 角色,但承担不同使用场景。
+
+### 2.3 为什么 Capability Registry(`@register_capability`)
+
+定位"扩展是核心,但不能压过角色主线" → 扩展机制必须低摩擦。
 - ❌ 写死 tool 列表 + if/else:每加一个 skill 改一处
 - ❌ Plugin manifest + 加载器(LangChain 风格):学习成本高
 - ❌ 完全靠 MCP server:启动慢、跨进程 overhead
 
 → **`@register_capability` 装饰器 + JSON schema** 是唯一契约。一个 Python 函数装饰一行就是 LLM 可调的 tool。`Consumer` enum(CHAT_AGENT / SCHEDULER / WEBHOOK)允许多 subsystem 复用同一 capability。
 
-### 2.2 为什么双向 MCP(client + server)
+### 2.4 为什么双向 MCP(client + server)
 
 定位"所有权归你 + 生态参与"。
 
@@ -49,7 +89,7 @@
 
 → **双向**:Skyler 既消费外部 server(filesystem/brave-search/Notion),又把 capability 暴露给 Claude Desktop/Cursor。
 
-### 2.3 为什么 persona 级 `character_states`
+### 2.5 为什么 persona 级 `character_states`
 
 定位"角色化 + 长期使用"。
 
@@ -60,7 +100,7 @@
 
 这是长期 vision *persona-level learning* 的基础设施。
 
-### 2.4 为什么活动时间线(chunk 14)是顶层 first-class
+### 2.6 为什么活动时间线(chunk 14)是顶层 first-class
 
 定位"陪伴感"。陪伴的关键不是回应快,是**记住**。
 
@@ -68,7 +108,7 @@
 
 5 道隐私闸(黑名单/dedup/idle 过滤/显式删除/全本地)— 角色知道用户今天做了什么,但数据不离开本机。
 
-### 2.5 为什么主动陪伴 = trigger pack + activity 双路径
+### 2.7 为什么主动陪伴 = trigger pack + activity 双路径
 
 定位"角色化主动性"但有边界 — 不该每个 poll 都说话(那叫 spam)。
 
@@ -77,17 +117,26 @@
 
 共用 throttle / cooldown / 静默时段闸,daily cap 跨 source 全局有效。
 
-### 2.6 为什么 5 层 prompt 框架(v4-beta)
+### 2.8 为什么 5 层 prompt 框架(v4-beta)
 
 v3 时代 persona 9 段自由拼装 → 字段语义混乱、跨字段冲突、prompt 失控。
 
 → **5 层分离**:格式契约(A)/ 模式行为(B)/ persona(C)/ 上下文(D)/ 对话(E)。每层职责单一,跨层冲突 meta_rules 仲裁。
 
-→ **typed JSON schema**:Tier-1 7 字段必填(identity / personality_core / speech_style / signature_phrases / voice_samples / forbidden_phrases / relationship_to_user),Tier-2 灵活槽(taboo / lore / capability_overrides)。
+→ **typed JSON schema**:Tier-1 7 字段必填(identity / personality_core / speech_style / signature_phrases / voice_samples / forbidden_phrases / relationship_to_user),Tier-2 灵活槽(taboo / lore / capability_overrides),并通过 `card_type` 做社交型 / 助手型角色卡基础分流。
 
 详见 §6 Persona Engineering。
 
-### 2.7 为什么 conversation 锚定绑定语义(v4-beta 收口)
+### 2.9 为什么 Perception 分 AX 与视觉两层
+
+定位"可控桌面感知" → 先读结构化证据,再补视觉盲区。
+
+- **已落地:AX / UI Tree**。读前台 app、窗口标题、可见 UI 文本、浏览器内容等结构化上下文;默认只读,适合安全地回答“我现在在做什么”。
+- **建设中:主动视觉感知**。小模型常驻监视变化,判断是否需要更重的视觉理解;需要时截取当前窗口或局部屏幕,交给支持图片输入的模型。
+
+用户上传图片 / 文件是“当轮输入”;主动截屏视觉理解是“桌面感知”。两者必须分开写。
+
+### 2.10 为什么 conversation 锚定绑定语义(v4-beta 收口)
 
 多 session 反复出现"切到八重却自报麻衣""删了对话重启还记得旧上下文""切走后回复被吃 / 冒到错的角色"。根因有三层,定位"陪伴 = 一个角色一段连续关系",绑定必须确定性,不能靠时序运气。
 
@@ -165,11 +214,14 @@ created_at, updated_at
 ```
 id, character_id (FK), variant_name, description, style_preset,
 is_active(UNIQUE INDEX where is_active=1), is_builtin,
+card_type('社交' | '助手', default '社交'),
 identity, personality_core, speech_style, signature_phrases,
 voice_samples, forbidden_phrases, relationship_to_user,  ← Tier-1 7 字段(JSON)
 taboo_topics, lore, capability_overrides,                ← Tier-2 槽
 created_at, updated_at
 ```
+
+`card_type` 是角色卡基础分流:社交型偏日常交流、关系和情绪表达;助手型偏任务、工具能力和行为边界。当前 schema / migration / API / 前端编辑链路已接入;运行时策略分流仍在推进,不要写成完整多角色卡生态已完成。
 
 ### character_personas_builtin_seed(v4-beta 备份)
 ```
