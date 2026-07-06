@@ -11,14 +11,16 @@ Language: **English** / [简体中文](README_zh-CN.md)
 
 ## Demo
 
-> Demo video will be attached in GitHub Releases.
+Final demo video:
 
-Final render details:
+[Watch the Skyler Demo v0.1](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1)
 
-- 1920x1080
-- about 6:29
+Video details:
+
+- 1920×1080
+- ~6:29
 - Character system section before voice interaction
-- stereo audio
+- Stereo audio
 
 ## What is currently built
 

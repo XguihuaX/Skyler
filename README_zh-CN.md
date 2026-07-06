@@ -8,11 +8,13 @@ Skyler 不是给问答 AI 套一个角色外观。这个项目主要在探索一
 
 ## Demo
 
-> 完整 demo 视频会上传到 GitHub Releases。
+最终 demo 视频：
+
+[观看 Skyler Demo v0.1](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1)
 
 视频信息：
 
-- 1920x1080
+- 1920×1080
 - 约 6:29
 - 角色系统章节在语音交互章节之前
 - stereo 音频
