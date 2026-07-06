@@ -11,13 +11,14 @@ Language: **English** / [简体中文](README_zh-CN.md)
 
 ## Demo
 
-> Full demo video will be added here after the final render.
+> Demo video will be attached in GitHub Releases.
 
-Recommended later:
+Final render details:
 
-```md
-[![Skyler Demo](docs/assets/demo-placeholder.png)](https://github.com/XguihuaX/Skyler/releases)
-```
+- 1920x1080
+- about 6:29
+- Character system section before voice interaction
+- stereo audio
 
 ## What is currently built
 
@@ -110,6 +111,18 @@ Do not commit private config or credentials.
 - [docs/demo-positioning.md](docs/demo-positioning.md): demo narration and
   capability boundaries.
 - [docs/EVOLUTION.md](docs/EVOLUTION.md): older version / feature evolution notes.
+
+## Notes and boundaries
+
+- Tier-2 means Persona extension fields such as `taboo_topics`, `lore`, and
+  `capability_overrides`.
+- `lore` means long-term background setting. It is not LoRA.
+- LoRA is a model fine-tuning technique and is not a Persona field.
+- AX / UI Tree is on-demand structured screen reading, not continuous visual
+  monitoring.
+- DailyAgent is at Stage 1, not a complete FSM.
+- Motion planning, action libraries, ComfyUI, and Anime asset generation are
+  future work.
 
 ## Current caveats
 
