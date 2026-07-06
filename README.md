@@ -11,9 +11,9 @@ Language: **English** / [简体中文](README_zh-CN.md)
 
 ## Demo
 
-[![Skyler Demo v0.1](docs/assets/demo-cover.png)](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1)
+[Watch the Skyler Demo v0.1](https://xguihuax.github.io/Skyler/demo/)
 
-Final demo video: [Skyler Demo v0.1](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1)
+If the browser does not stream the video, use the [GitHub Release](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1).
 
 Video details:
 
