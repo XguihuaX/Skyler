@@ -28,6 +28,7 @@ scratch/
 .env
 .DS_Store
 *.log
+*.mp4
 .vscode/
 .idea/
 
@@ -97,4 +98,3 @@ logs/
 test1111.py
 voice_clone_local.py
 frontend/src/assets/
-
