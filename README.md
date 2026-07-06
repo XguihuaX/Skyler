@@ -11,11 +11,9 @@ Language: **English** / [简体中文](README_zh-CN.md)
 
 ## Demo
 
-Final demo video:
+[![Skyler Demo v0.1](docs/assets/demo-cover.png)](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1)
 
-[![Skyler Demo v0.1](docs/demo-cover.png)](https://github.com/XguihuaX/Skyler/releases/download/demo-v0.1/skyler-demo-final-review-hq-stereo-bgm.mp4)
-
-[Watch the Skyler Demo v0.1](https://github.com/XguihuaX/Skyler/releases/download/demo-v0.1/skyler-demo-final-review-hq-stereo-bgm.mp4)
+Final demo video: [Skyler Demo v0.1](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1)
 
 Video details:
 

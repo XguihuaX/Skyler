@@ -6,11 +6,11 @@ Skyler 不是给问答 AI 套一个角色外观。这个项目主要在探索一
 
 语言： [English](README.md) / **简体中文**
 
-## Demo
+## Demo 演示
 
-最终 demo 视频：
+[![Skyler Demo v0.1](docs/assets/demo-cover.png)](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1)
 
-[观看 Skyler Demo v0.1](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1)
+最终 demo 视频：[Skyler Demo v0.1](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1)
 
 视频信息：
 
