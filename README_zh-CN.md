@@ -8,7 +8,9 @@ Skyler 不是给问答 AI 套一个角色外观。这个项目主要在探索一
 
 ## Demo 演示
 
-[观看 Skyler Demo v0.1](https://xguihuax.github.io/Skyler/demo/)
+[![Skyler Demo v0.1](docs/assets/demo-cover.png)](https://xguihuax.github.io/Skyler/demo/)
+
+观看 demo：[Skyler Demo v0.1](https://xguihuax.github.io/Skyler/demo/)
 
 如果浏览器不能在线播放，请使用 [GitHub Release](https://github.com/XguihuaX/Skyler/releases/tag/demo-v0.1)。
 
