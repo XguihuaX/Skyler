@@ -1,11 +1,23 @@
 # Skyler
 
-A Live2D desktop AI companion system with structured persona, character state,
-activity context, voice interaction, and tool extension.
+A Live2D desktop AI companion system built around continuous persona, character
+state, activity context, desktop perception, and extensible tools.
 
-Skyler is not just a chatbot with a character skin. The project explores how a
-desktop character can keep persona structure, runtime state, recent activity
-context, voice expression, and external capabilities in one system.
+Skyler is not a chatbot with a character skin. It keeps structured Persona,
+`CharacterState`, activity timeline, DailyAgent, voice expression, read-only AX
+/ UI Tree context, and MCP / API capabilities in one desktop character system,
+while continuing to build FSM and contextual judgement so the character does not
+start from zero on every turn.
+
+The current code connects the foundations: full panel + desktop-pet UI, Live2D,
+voice, structured Persona, `CharacterState`, activity timeline, on-demand
+foreground-app perception, and a `CapabilityRegistry` for native tools, MCP, and
+provider APIs. DailyAgent Stage 1 is already connected for daily plan generation,
+current-activity ticker, and state write-back; the full FSM, context
+arbitration, multi-character scheduling, Window Roster / Watchlist, Skill
+extension, and safer write-action gates are still in progress. Longer-term work
+includes VLM-assisted perception, Live2D motion / action planning, Anime asset
+generation, and ComfyUI workflows.
 
 Language: **English** / [简体中文](README_zh-CN.md)
 

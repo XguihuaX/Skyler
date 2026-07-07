@@ -1,8 +1,10 @@
 # Skyler
 
-连续人格驱动的 Live2D 桌面 AI 陪伴角色系统。
+连续人格驱动的 Live2D 桌面 AI 陪伴角色系统，核心是 Persona、角色状态、活动上下文、桌面感知和可扩展工具能力。
 
-Skyler 不是给问答 AI 套一个角色外观。这个项目主要在探索一件事：桌面上的 Live2D 角色，能不能把 Persona、运行时状态、近期活动、语音表达和工具能力放进同一套系统里，而不是每轮对话都从零开始。
+Skyler 不是给问答 AI 套一个角色外观。它把结构化 Persona、`CharacterState`、活动时间线、DailyAgent、语音表达、只读 AX / UI Tree 上下文和 MCP / API 能力扩展放进同一套桌面角色系统里，并继续建设 FSM 与 contextual judgement，让角色不再每轮对话都从零开始。
+
+当前代码已经接起了基础链路：全屏主面板 + 桌宠小窗、Live2D、语音、结构化 Persona、`CharacterState`、活动时间线、按需读取前台 app 的桌面感知，以及用于内建工具、MCP 和 provider API 的 `CapabilityRegistry`。DailyAgent Stage 1 已接入日计划生成、当前活动 ticker 和状态写回；完整 FSM、上下文仲裁、多角色调度、Window Roster / Watchlist、Skill 扩展和更安全的写操作确认门仍在建设中。更后面的方向包括 VLM 辅助感知、Live2D motion / 动作库、Anime 资产生成和 ComfyUI 工作流。
 
 语言： [English](README.md) / **简体中文**
 
